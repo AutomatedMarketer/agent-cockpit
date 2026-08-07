@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Your agent team</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa;
+    --panel: #ffffff;
+    --ink: #17171a;
+    --muted: #6b6b75;
+    --line: #e6e6e2;
+    --accent: #2f5bd0;
+    --ok: #1f7a4d;
+    --warn: #8a5a00;
+    --bad: #a03028;
+    --chip: #f1f1ee;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121214;
+      --panel: #1a1a1e;
+      --ink: #ecece9;
+      --muted: #9a9aa4;
+      --line: #2b2b31;
+      --accent: #7fa2ff;
+      --ok: #57c98c;
+      --warn: #e0aa4a;
+      --bad: #f0857a;
+      --chip: #26262c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
+  header { display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: baseline; margin-bottom: .25rem; }
+  h1 { font-size: 1.5rem; margin: 0; letter-spacing: -.01em; }
+  h2 { font-size: 1.05rem; margin: 2rem 0 .75rem; letter-spacing: -.005em; }
+  a { color: var(--accent); }
+  .sub { color: var(--muted); font-size: .875rem; margin: 0 0 1.5rem; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+  .grid { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
+  .agent { padding: .9rem 1rem; }
+  .agent h3 { margin: 0 0 .2rem; font-size: 1rem; }
+  .agent p { margin: .35rem 0 .6rem; color: var(--muted); font-size: .8125rem; }
+  .row { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+  .chip {
+    font-size: .6875rem; letter-spacing: .04em; text-transform: uppercase;
+    background: var(--chip); border-radius: 999px; padding: .15rem .5rem; white-space: nowrap;
+  }
+  .dot { width: .5rem; height: .5rem; border-radius: 50%; display: inline-block; flex: none; }
+  .working .dot { background: var(--ok); }
+  .stale .dot, .attention .dot { background: var(--warn); }
+  .never-run .dot { background: var(--bad); }
+  .state { font-size: .75rem; font-weight: 600; }
+  .working .state { color: var(--ok); }
+  .stale .state, .attention .state { color: var(--warn); }
+  .never-run .state { color: var(--bad); }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: .875rem; }
+  th, td { text-align: left; padding: .55rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: 0; }
+  .run-summary { color: var(--muted); }
+  .empty { padding: 1.25rem; color: var(--muted); }
+  .gap { padding: .9rem 1rem; border-bottom: 1px solid var(--line); }
+  .gap:last-child { border-bottom: 0; }
+  .gap b { font-weight: 600; }
+  .error { border-color: var(--bad); }
+  .error h2 { margin-top: 0; color: var(--bad); }
+  code { background: var(--chip); padding: .1rem .3rem; border-radius: 4px; font-size: .85em; }
+  footer { margin-top: 2.5rem; color: var(--muted); font-size: .8125rem; }
+  .skeleton { color: var(--muted); padding: 1.25rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Your agent team</h1>
+    <span id="repo-link"></span>
+  </header>
+  <p class="sub" id="strap">Reading your repo…</p>
+  <div id="app"><div class="panel skeleton">Loading.</div></div>
+  <footer id="foot"></footer>
+</div>
+
+<script>
+const app = document.getElementById('app')
+const strap = document.getElementById('strap')
+const repoLink = document.getElementById('repo-link')
+const foot = document.getElementById('foot')
+
+const escapeHtml = (value) =>
+  String(value ?? '').replace(/[&<>"']/g, (character) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
+
+function ago(iso) {
+  if (!iso) return 'never'
+  const seconds = (Date.now() - new Date(iso).getTime()) / 1000
+  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))} min ago`
+  if (seconds < 86400) return `${Math.round(seconds / 3600)} hr ago`
+  const days = Math.round(seconds / 86400)
+  return days === 1 ? 'yesterday' : `${days} days ago`
+}
+
+const STATE_LABEL = {
+  working: 'Working',
+  stale: 'Stale',
+  'never-run': 'Never run',
+  attention: 'Needs a look'
+}
+
+function agentsSection(agents) {
+  if (!agents.length) {
+    return `<h2>Agents</h2><div class="panel empty">No agent files in <code>.claude/agents/</code> yet.</div>`
+  }
+  const cards = agents.map((agent) => `
+    <div class="panel agent ${agent.state}">
+      <div class="row"><span class="dot"></span><h3>${escapeHtml(agent.slug)}</h3></div>
+      <p>${escapeHtml(agent.description)}</p>
+      <div class="row">
+        <span class="chip">${escapeHtml(agent.model)}</span>
+        <span class="chip">${agent.runsThisWeek} this week</span>
+        <span class="state">${STATE_LABEL[agent.state] ?? agent.state}</span>
+      </div>
+      <p style="margin-bottom:0">Last run ${escapeHtml(ago(agent.lastRun))}</p>
+    </div>`).join('')
+  return `<h2>Agents</h2><div class="grid">${cards}</div>`
+}
+
+function activitySection(runs) {
+  if (!runs.length) {
+    return `<h2>Activity</h2><div class="panel empty">Nothing has run yet. Once an agent commits a run log to <code>runs/</code>, it appears here.</div>`
+  }
+  const rows = runs.map((run) => {
+    const artifact = (run.artifacts || [])[0]
+    return `<tr>
+      <td>${escapeHtml(ago(run.started_at))}</td>
+      <td>${escapeHtml(run.agent)}</td>
+      <td><span class="chip">${escapeHtml(run.trigger)}</span></td>
+      <td>${escapeHtml(run.status)}</td>
+      <td class="run-summary">${escapeHtml(run.summary)}</td>
+      <td>${run.session_url ? `<a href="${escapeHtml(run.session_url)}" rel="noreferrer noopener">transcript</a>` : '&mdash;'}${
+        artifact ? ` · <a href="${escapeHtml(artifactUrl(artifact))}" rel="noreferrer noopener">output</a>` : ''}</td>
+    </tr>`
+  }).join('')
+  return `<h2>Activity</h2>
+    <div class="panel scroll">
+      <table>
+        <thead><tr><th>When</th><th>Agent</th><th>Trigger</th><th>Status</th><th>What happened</th><th>Links</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`
+}
+
+let repoBase = ''
+let repoBranch = 'main'
+const artifactUrl = (path) => `${repoBase}/blob/${repoBranch}/${path}`
+
+function gapsSection(agents, brain) {
+  const gaps = []
+  for (const agent of agents) {
+    if (agent.state === 'never-run') {
+      gaps.push(`<b>${escapeHtml(agent.slug)}</b> has never run. It is defined but nothing has triggered it.`)
+    } else if (agent.state === 'stale') {
+      gaps.push(`<b>${escapeHtml(agent.slug)}</b> last ran ${escapeHtml(ago(agent.lastRun))}. Check its schedule.`)
+    } else if (agent.state === 'attention') {
+      gaps.push(`<b>${escapeHtml(agent.slug)}</b> finished with status <code>${escapeHtml(agent.lastStatus)}</code> on its last run.`)
+    }
+  }
+  for (const file of brain) {
+    if (!file.present) {
+      gaps.push(`<b>${escapeHtml(file.path)}</b> is missing.`)
+    } else if (file.missing.length) {
+      gaps.push(`<b>${escapeHtml(file.path)}</b> still has ${file.missing.length} empty field${file.missing.length > 1 ? 's' : ''}: <code>${escapeHtml(file.missing.join(', '))}</code>`)
+    }
+  }
+  if (!gaps.length) {
+    return `<h2>Gaps</h2><div class="panel empty">Nothing stale, nothing missing. Every agent has run in the last week and your business brain is filled in.</div>`
+  }
+  return `<h2>Gaps</h2><div class="panel">${gaps.map((gap) => `<div class="gap">${gap}</div>`).join('')}</div>`
+}
+
+function render(data) {
+  repoBase = data.repo.url
+  repoBranch = data.repo.branch || 'main'
+  repoLink.innerHTML = `<a href="${escapeHtml(data.repo.url)}" rel="noreferrer noopener">${escapeHtml(data.repo.owner)}/${escapeHtml(data.repo.repo)}</a>`
+  const working = data.agents.filter((agent) => agent.state === 'working').length
+  strap.textContent = `${working} of ${data.agents.length} agents working. ${data.runs.length} recent run${data.runs.length === 1 ? '' : 's'}.`
+  app.innerHTML = agentsSection(data.agents) + activitySection(data.runs) + gapsSection(data.agents, data.brain)
+  foot.innerHTML = `Read from your repo at ${escapeHtml(new Date(data.generatedAt).toLocaleString())}. Nothing on this page comes from anywhere else.`
+}
+
+function renderError(message) {
+  strap.textContent = ''
+  app.innerHTML = `<div class="panel error" style="padding:1rem 1.25rem">
+    <h2>This cockpit cannot read your repo yet</h2>
+    <p>${escapeHtml(message)}</p>
+    <p>Set <code>GITHUB_OWNER</code> and <code>GITHUB_REPO</code> in your hosting environment
+    and redeploy. If your team repo is private, add <code>GITHUB_TOKEN</code> as well — it stays
+    on the server and never reaches this page.</p>
+  </div>`
+}
+
+fetch('/api/state')
+  .then(async (response) => {
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || `Request failed with ${response.status}`)
+    return data
+  })
+  .then(render)
+  .catch((error) => renderError(error.message))
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "agent-cockpit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A dashboard for your AI agent team. Reads your team repo, renders your agents, their runs, and your gaps. No database, no API key, no build step.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
