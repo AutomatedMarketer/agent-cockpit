@@ -108,6 +108,25 @@
   #task-form textarea { resize: vertical; min-height: 4.4rem; }
   #task-form .row { flex-wrap: nowrap; }
   #task-form select { flex: 1; min-width: 0; }
+  .add-task .fire + .fire { margin-left: .4rem; }
+  #wf-form { display: grid; gap: .5rem; margin-top: .6rem; }
+  #wf-form[hidden] { display: none; }
+  #wf-form label { font-size: .75rem; font-weight: 600; color: var(--muted); }
+  #wf-form textarea {
+    width: 100%; font: inherit; font-size: .875rem; color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: .55rem .65rem; resize: vertical; min-height: 4.4rem;
+  }
+
+  /* Week calendar - the Schedule strip with dates and outcomes. A pill is done when a run
+     for that workflow landed that day, missed when the day has passed without one. */
+  .day.today .dayname { color: var(--ink); font-weight: 700; }
+  .daydate { font-size: .68rem; color: var(--muted); font-weight: 400; }
+  .pill .mark { font-size: .72rem; margin-left: .3rem; }
+  .pill.done .mark { color: var(--ok, #3fb950); }
+  .pill.missed { opacity: .55; }
+  .pill.missed .mark { color: var(--bad, #d29922); }
+  .cal-key { display: flex; gap: .9rem; flex-wrap: wrap; margin-top: .5rem; font-size: .72rem; color: var(--muted); }
 
   /* Board — four columns stack on a phone (one-handed rule), pair up on medium screens,
      and sit side by side only when there is genuinely room for four. */
@@ -442,6 +461,7 @@ function addTaskHtml() {
   ).join('')
   return `<div class="add-task">
     <button class="fire" type="button" id="task-open">+ Add task</button>
+    <button class="fire" type="button" id="wf-open">+ New workflow</button>
     <form id="task-form" hidden>
       <label for="task-text">What do you want done?</label>
       <textarea id="task-text" rows="3" maxlength="2200"
@@ -454,6 +474,15 @@ function addTaskHtml() {
         <button class="fire" type="submit" id="task-send">Add</button>
       </div>
       <span class="fire-note" id="task-note"></span>
+    </form>
+    <form id="wf-form" hidden>
+      <label for="wf-text">What job should run on its own?</label>
+      <textarea id="wf-text" rows="3" maxlength="2200"
+        placeholder="e.g. Every Monday at 7, check which clients went quiet and draft a message to each"></textarea>
+      <span class="small muted">Say what it does and when. Your team writes the workflow and
+        asks you anything it still needs.</span>
+      <button class="fire" type="submit" id="wf-send">Request it</button>
+      <span class="fire-note" id="wf-note"></span>
     </form>
   </div>`
 }
@@ -528,6 +557,8 @@ function renderToday() {
     `<h2>Board</h2>` + boardHtml(board) +
     `<h2>Due next</h2>` + dueHtml +
     `<h2>Gone quiet</h2>` + quietHtml +
+    // The week, last: what is scheduled, what already ran, what was due and did not.
+    scheduleStripHtml(data.workflows, { dates: true, runs: data.runs, heading: 'This week' }) +
     // Spec B.2: remaining routine runs are linked, never scraped — there is no API for them.
     `<h2>Usage</h2><div class="panel"><p class="small">Remaining routine runs live on your
       <a href="https://claude.ai/settings/usage" rel="noreferrer noopener">claude.ai usage page</a> —
@@ -573,36 +604,93 @@ function renderTeam() {
 // The Schedule strip: a Mon..Sun week computed client-side from the parsed schedule
 // strings via scheduleWeekView. Monthly and interval schedules get a footnote row —
 // they have no fixed weekday — and the legend maps each owner agent to its color.
-function scheduleStripHtml(workflows) {
+// --- the week calendar -------------------------------------------------------------------
+// Mirrored verbatim in public/index.html. Monday-first, local time: the calendar answers
+// "did today's job run", and a UTC week would answer it for the wrong day either side of
+// midnight.
+
+function weekDates(now = new Date()) {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7))
+  return Array.from({ length: 7 }, (unused, index) => {
+    const date = new Date(start)
+    date.setDate(start.getDate() + index)
+    return date
+  })
+}
+
+const dateKey = (date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+
+// Which local days a workflow actually ran on, from the run logs. Runs match a workflow by
+// its slug - the same field the Workflows board matches on - so a run log missing
+// `workflow` counts for nothing rather than for everything.
+function ranOnDays(runs, slug) {
+  const days = new Set()
+  if (!slug) return days
+  for (const run of runs ?? []) {
+    if (run.workflow !== slug) continue
+    const at = Date.parse(run.started_at)
+    if (!Number.isFinite(at)) continue
+    days.add(dateKey(new Date(at)))
+  }
+  return days
+}
+function scheduleStripHtml(workflows, options = {}) {
   const scheduled = workflows.filter((workflow) => workflow.schedule)
   if (!scheduled.length) return ''
+  const { dates = false, runs = [], heading = 'Schedule' } = options
   const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
   const dayPills = DAY_NAMES.map(() => [])
   const footnotes = []
+  const week = weekDates()
+  const todayKey = dateKey(new Date())
+  const nowMs = Date.now()
   for (const workflow of scheduled) {
     const view = scheduleWeekView(workflow.schedule)
     if (!view) continue
     const hex = agentColor(workflow.owner) ?? 'var(--muted)'
-    const pill = (label) =>
-      `<span class="pill" style="border-left-color:${hex}"><b>${escapeHtml(workflow.name)}</b> <span class="t">${escapeHtml(label)}</span></span>`
+    const ran = dates ? ranOnDays(runs, workflow.slug) : new Set()
+    // Outcome is only claimed for days that have finished. A pill for later today is
+    // still pending, not missed - calling it missed at 09:00 for an 18:00 job is a lie.
+    const outcome = (dayIndex, time) => {
+      if (!dates) return { klass: '', mark: '' }
+      const key = dateKey(week[dayIndex])
+      if (ran.has(key)) return { klass: ' done', mark: '<span class="mark">&#10003;</span>' }
+      const due = new Date(week[dayIndex])
+      const [hours, minutes] = String(time ?? '23:59').split(':').map(Number)
+      due.setHours(hours || 0, minutes || 0, 0, 0)
+      if (due.getTime() > nowMs) return { klass: '', mark: '' }
+      return { klass: ' missed', mark: '<span class="mark">&#9679;</span>' }
+    }
+    const pill = (label, extra = { klass: '', mark: '' }) =>
+      `<span class="pill${extra.klass}" style="border-left-color:${hex}"><b>${escapeHtml(workflow.name)}</b> <span class="t">${escapeHtml(label)}</span>${extra.mark}</span>`
     if (view.type === 'days') {
-      for (const day of view.days) dayPills[day].push(pill(view.time))
+      for (const day of view.days) dayPills[day].push(pill(view.time, outcome(day, view.time)))
     } else if (view.type === 'monthly') {
       footnotes.push(`<span class="small muted">monthly:</span> ${pill(`day ${view.day} ${view.time}`)}`)
     } else {
       footnotes.push(pill(view.label))
     }
   }
-  const columns = DAY_NAMES.map((name, index) =>
-    `<div class="day"><div class="dayname">${name}</div>${dayPills[index].join('')}</div>`
-  ).join('')
+  const columns = DAY_NAMES.map((name, index) => {
+    const isToday = dates && dateKey(week[index]) === todayKey
+    const dayLabel = dates
+      ? `${name} <span class="daydate">${week[index].getDate()}</span>`
+      : name
+    return `<div class="day${isToday ? ' today' : ''}"><div class="dayname">${dayLabel}</div>${dayPills[index].join('')}</div>`
+  }).join('')
   const owners = [...new Set(scheduled.map((workflow) => workflow.owner).filter(Boolean))].sort()
   const legend = owners.map((owner) =>
     `<span><span class="swatch" style="background:${agentColor(owner)}"></span>${escapeHtml(owner)}</span>`
   ).join('')
-  return `<h2>Schedule</h2><div class="panel">
+  const key = dates
+    ? `<div class="cal-key"><span>&#10003; ran</span><span>&#9679; was due, no run logged</span><span>no mark: still to come</span></div>`
+    : ''
+  return `<h2>${escapeHtml(heading)}</h2><div class="panel">
     <div class="schedule-scroll"><div class="week">${columns}</div></div>
     ${footnotes.length ? `<div class="sched-foot">${footnotes.join(' ')}</div>` : ''}
+    ${key}
     ${legend ? `<div class="legend">${legend}</div>` : ''}
   </div>`
 }
@@ -740,7 +828,18 @@ document.addEventListener('click', (event) => {
   if (event.target.closest('#task-open')) {
     const form = el('task-form')
     form.hidden = !form.hidden
-    if (!form.hidden) el('task-text').focus()
+    if (!form.hidden) {
+      el('wf-form').hidden = true
+      el('task-text').focus()
+    }
+  }
+  if (event.target.closest('#wf-open')) {
+    const form = el('wf-form')
+    form.hidden = !form.hidden
+    if (!form.hidden) {
+      el('task-form').hidden = true
+      el('wf-text').focus()
+    }
   }
 })
 // The Add-task form is re-rendered with the board, so its submit is delegated too.
@@ -748,6 +847,10 @@ document.addEventListener('submit', (event) => {
   if (event.target.id === 'task-form') {
     event.preventDefault()
     submitTask()
+  }
+  if (event.target.id === 'wf-form') {
+    event.preventDefault()
+    submitWorkflowRequest()
   }
 })
 el('viewer-close').addEventListener('click', () => el('viewer').classList.remove('open'))
@@ -878,6 +981,45 @@ async function submitTask() {
   }
   send.disabled = false
   send.textContent = 'Add'
+}
+
+// A new workflow is a repo change, and this page never writes the repo. So the request
+// becomes a task card for the orchestrator, which runs /new-workflow in a session, asks
+// whatever it still needs, and commits the file. Same one-way street as everything else.
+async function submitWorkflowRequest() {
+  const note = el('wf-note')
+  const send = el('wf-send')
+  note.className = 'fire-note'
+  note.textContent = ''
+  const asked = String(el('wf-text').value ?? '').trim()
+  if (!asked) {
+    note.className = 'fire-note bad'
+    note.textContent = 'Say what the job does and when it should run.'
+    return
+  }
+  send.disabled = true
+  send.textContent = 'Sending…'
+  try {
+    const result = await postFire({
+      action: 'task',
+      title: `New workflow: ${splitTaskText(asked).title.slice(0, 180)}`,
+      details: `Run /new-workflow for this job. Asked for: ${asked.slice(0, 1800)}`,
+      for: 'orchestrator'
+    })
+    if (result.ok) {
+      note.className = 'fire-note ok'
+      note.textContent = 'Requested — your team picks it up on the next sweep and will ask if it needs more.'
+      el('wf-text').value = ''
+    } else {
+      note.className = 'fire-note bad'
+      note.textContent = result.payload.error || `Dispatch failed (${result.status}).`
+    }
+  } catch (error) {
+    note.className = 'fire-note bad'
+    note.textContent = 'Could not reach the fire endpoint.'
+  }
+  send.disabled = false
+  send.textContent = 'Request it'
 }
 
 /* ---------- Connections ---------- */

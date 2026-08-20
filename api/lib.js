@@ -135,6 +135,39 @@ export function scheduleWeekView(schedule) {
 // the palette helpers above). The Add-task form is one textarea: the first line becomes
 // the card's title (clipped to the endpoint's 200-char cap), and when there is more than
 // the title — extra lines, or a clipped first line — the full text rides as details.
+// --- the week calendar -------------------------------------------------------------------
+// Mirrored verbatim in public/index.html. Monday-first, local time: the calendar answers
+// "did today's job run", and a UTC week would answer it for the wrong day either side of
+// midnight.
+
+export function weekDates(now = new Date()) {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7))
+  return Array.from({ length: 7 }, (unused, index) => {
+    const date = new Date(start)
+    date.setDate(start.getDate() + index)
+    return date
+  })
+}
+
+export const dateKey = (date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+
+// Which local days a workflow actually ran on, from the run logs. Runs match a workflow by
+// its slug - the same field the Workflows board matches on - so a run log missing
+// `workflow` counts for nothing rather than for everything.
+export function ranOnDays(runs, slug) {
+  const days = new Set()
+  if (!slug) return days
+  for (const run of runs ?? []) {
+    if (run.workflow !== slug) continue
+    const at = Date.parse(run.started_at)
+    if (!Number.isFinite(at)) continue
+    days.add(dateKey(new Date(at)))
+  }
+  return days
+}
+
 export function splitTaskText(text) {
   const trimmed = String(text ?? '').trim()
   if (!trimmed) return null
