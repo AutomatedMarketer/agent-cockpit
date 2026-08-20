@@ -1,6 +1,8 @@
 // Pure helpers, kept out of the handler so they can be tested without a network.
 
 export const STALE_AFTER_DAYS = 7
+export const HEARTBEAT_STALE_AFTER_MINUTES = 30
+export const OVERNIGHT_HOURS = 24
 
 // Flat `key: value` frontmatter is all an agent file uses.
 export function parseFrontmatter(source) {
@@ -21,11 +23,20 @@ export function daysSince(iso, now = Date.now()) {
   return Math.floor((now - parsed) / 86400000)
 }
 
-// runs must be newest first.
+export function minutesSince(iso, now = Date.now()) {
+  if (!iso) return null
+  const parsed = new Date(iso).getTime()
+  if (Number.isNaN(parsed)) return null
+  return (now - parsed) / 60000
+}
+
+// runs must be newest first. States match the Team screen: working / attention / quiet /
+// never-run. "Quiet" is the one that matters — an agent that silently stopped is worse
+// than no agent, because you were counting on it.
 export function stateFor(runs, now = Date.now()) {
   if (!runs.length) return 'never-run'
   const age = daysSince(runs[0].started_at, now)
-  if (age !== null && age > STALE_AFTER_DAYS) return 'stale'
+  if (age !== null && age > STALE_AFTER_DAYS) return 'quiet'
   if (runs[0].status === 'failed' || runs[0].status === 'blocked') return 'attention'
   return 'working'
 }
@@ -38,4 +49,28 @@ export function fillMarkers(source) {
 
 export function sortRunsNewestFirst(runs) {
   return [...runs].sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))
+}
+
+// "What ran overnight" — everything inside the last day, so the morning glance always has
+// yesterday evening and last night in it whatever timezone the reader woke up in.
+export function runsSince(runs, hours = OVERNIGHT_HOURS, now = Date.now()) {
+  return runs.filter((run) => {
+    const started = new Date(run.started_at).getTime()
+    return !Number.isNaN(started) && now - started <= hours * 3600000 && started <= now
+  })
+}
+
+// A heartbeat file is `{ "runtime": "hermes", "at": "…" }`, written by the runtime's own
+// cron. Fresh means the light is on. Stale or absent means it is not, and the rail says so
+// rather than pretending everything is fine.
+export function heartbeatStatus(beat, now = Date.now()) {
+  if (!beat || typeof beat !== 'object' || !beat.at) {
+    return { status: 'no-heartbeat', lastBeat: null }
+  }
+  const age = minutesSince(beat.at, now)
+  if (age === null) return { status: 'no-heartbeat', lastBeat: null }
+  return {
+    status: age <= HEARTBEAT_STALE_AFTER_MINUTES ? 'live' : 'silent',
+    lastBeat: beat.at
+  }
 }

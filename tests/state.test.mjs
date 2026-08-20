@@ -1,8 +1,15 @@
-// End-to-end over a stubbed GitHub. Proves the page can render a team repo without a
-// network, a token, or a live account.
+// End-to-end over a stubbed GitHub. Proves all five screens can render a team repo without
+// a network, a token, or a live account.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import handler from '../api/state.js'
+
+// Relative, so the fixture stays correct whatever day the suite runs on.
+const isoAgo = (ms) => new Date(Date.now() - ms).toISOString().replace(/\.\d+Z$/, 'Z')
+const recent = isoAgo(3600_000)
+const older = isoAgo(20 * 86400_000)
+const freshBeat = isoAgo(5 * 60_000)
+const staleBeat = isoAgo(3 * 3600_000)
 
 const TREE = {
   tree: [
@@ -11,18 +18,25 @@ const TREE = {
     { type: 'blob', path: 'runs/2026-08/2026-08-07T0600Z-research.json' },
     { type: 'blob', path: 'runs/2026-08/2026-08-07T0700Z-research.json' },
     { type: 'blob', path: 'runs/2026-08/broken.json' },
+    { type: 'blob', path: 'runs/heartbeat/hermes.json' },
+    { type: 'blob', path: 'runs/heartbeat/openclaw.json' },
     { type: 'blob', path: 'shared/about-me.md' },
     { type: 'blob', path: 'shared/business-brain.md' },
     { type: 'blob', path: 'shared/writing-rules.md' },
+    { type: 'blob', path: 'workflows/monday-brief.yml' },
+    { type: 'blob', path: 'workflows/broken.yml' },
+    { type: 'blob', path: 'skills/pull-calendar/SKILL.md' },
+    { type: 'blob', path: 'skills/write-brief/SKILL.md' },
+    { type: 'blob', path: 'skills/scan-inbox/SKILL.md' },
+    { type: 'blob', path: 'runtimes.yml' },
+    { type: 'blob', path: 'tiles.yml' },
+    { type: 'blob', path: 'wiki/INDEX.md', size: 2048 },
+    { type: 'blob', path: 'wiki/offers.md', size: 512 },
+    { type: 'blob', path: 'inbox/2026-08-07/monday-brief.md', size: 300 },
     { type: 'tree', path: 'agents' },
     { type: 'blob', path: 'README.md' }
   ]
 }
-
-// Relative, so the fixture stays correct whatever day the suite runs on.
-const isoAgo = (ms) => new Date(Date.now() - ms).toISOString().replace(/\.\d+Z$/, 'Z')
-const recent = isoAgo(3600_000)
-const older = isoAgo(20 * 86400_000)
 
 const FILES = {
   '.claude/agents/research.md':
@@ -45,6 +59,7 @@ const FILES = {
     schema: 'run-log/v1',
     run_id: '2026-08-07T0700Z-research',
     agent: 'research',
+    workflow: 'monday-brief',
     model: 'sonnet',
     trigger: 'schedule',
     started_at: recent,
@@ -54,9 +69,17 @@ const FILES = {
     session_url: 'https://claude.ai/code/session_new'
   }),
   'runs/2026-08/broken.json': '{ not json',
+  'runs/heartbeat/hermes.json': JSON.stringify({ runtime: 'hermes', at: freshBeat }),
+  'runs/heartbeat/openclaw.json': JSON.stringify({ runtime: 'openclaw', at: staleBeat }),
   'shared/about-me.md': '# About me\n<!-- fill: full-name -->\n',
   'shared/business-brain.md': '# Business brain\n\nAll filled in.\n',
-  'shared/writing-rules.md': '# Writing rules\n<!-- fill: voice-samples -->\n<!-- fill: default-cta -->\n'
+  'shared/writing-rules.md': '# Writing rules\n<!-- fill: voice-samples -->\n<!-- fill: default-cta -->\n',
+  'workflows/monday-brief.yml':
+    'name: Monday Brief\nowner: research\nsteps: [pull-calendar, scan-inbox, write-brief]\ntrigger:\n  schedule: "weekly mon 06:00"\n  fire: true\noutput: inbox/{date}/monday-brief.md\n',
+  'workflows/broken.yml': 'name: Broken\nsteps: []\n',
+  'runtimes.yml':
+    'runtimes:\n  - name: Hermes\n    kind: agent-runtime\n    url: http://hermes.tail.ts.net:8080\n    heartbeat: runs/heartbeat/hermes.json\n  - name: OpenClaw\n    kind: gateway\n    url: http://openclaw.tail.ts.net:3000\n    heartbeat: runs/heartbeat/openclaw.json\n',
+  'tiles.yml': 'hero: pipeline-value\nchosen: [inbox, calendar]\n'
 }
 
 function stubGitHub() {
@@ -157,6 +180,79 @@ test('empty business-brain fields come back by name', async () => {
   assert.deepEqual(byPath['shared/about-me.md'].missing, ['full-name'])
   assert.deepEqual(byPath['shared/business-brain.md'].missing, [])
   assert.deepEqual(byPath['shared/writing-rules.md'].missing, ['voice-samples', 'default-cta'])
+})
+
+test('the overnight feed holds only the last day of runs', async () => {
+  const { body } = await run()
+  assert.deepEqual(
+    body.overnight.map((run) => run.run_id),
+    ['2026-08-07T0700Z-research']
+  )
+})
+
+test('workflows render from their files: chain, trigger, last result, next run', async () => {
+  const { body } = await run()
+  const brief = body.workflows.find((workflow) => workflow.slug === 'monday-brief')
+  assert.equal(brief.name, 'Monday Brief')
+  assert.equal(brief.owner, 'research')
+  assert.deepEqual(brief.steps, ['pull-calendar', 'scan-inbox', 'write-brief'])
+  assert.equal(brief.schedule, 'weekly mon 06:00')
+  assert.equal(brief.fire, true)
+  assert.deepEqual(brief.problems, [])
+  assert.equal(brief.lastRun.session_url, 'https://claude.ai/code/session_new')
+  assert.equal(brief.state, 'working')
+  // The next run is a real future Monday 06:00 UTC.
+  const next = new Date(brief.nextRun)
+  assert.ok(next.getTime() > Date.now())
+  assert.equal(next.getUTCDay(), 1)
+  assert.equal(next.getUTCHours(), 6)
+})
+
+test('a broken workflow file is flagged with the template validation words', async () => {
+  const { body } = await run()
+  const broken = body.workflows.find((workflow) => workflow.slug === 'broken')
+  assert.equal(broken.state, 'attention')
+  assert.ok(broken.problems.some((problem) => problem.includes('owner is required')))
+  assert.ok(broken.problems.some((problem) => problem.includes('steps is required')))
+  assert.ok(broken.problems.some((problem) => problem.includes('trigger is required')))
+})
+
+test('the connections rail reads runtimes.yml and judges each heartbeat', async () => {
+  const { body } = await run()
+  assert.equal(body.runtimes.length, 2)
+  const hermes = body.runtimes.find((runtime) => runtime.name === 'Hermes')
+  assert.equal(hermes.status, 'live')
+  assert.equal(hermes.url, 'http://hermes.tail.ts.net:8080')
+  const openclaw = body.runtimes.find((runtime) => runtime.name === 'OpenClaw')
+  assert.equal(openclaw.status, 'silent', 'a three-hour-old heartbeat is silent')
+})
+
+test('the memory browser gets every markdown page and knows its index files', async () => {
+  const { body } = await run()
+  const paths = body.memory.files.map((file) => file.path)
+  assert.ok(paths.includes('wiki/INDEX.md'))
+  assert.ok(paths.includes('wiki/offers.md'))
+  assert.ok(paths.includes('inbox/2026-08-07/monday-brief.md'))
+  assert.ok(!paths.some((path) => path.startsWith('.claude/')), 'dotfolders are not vault pages')
+  assert.ok(body.memory.indexes.includes('wiki/INDEX.md'))
+  const index = body.memory.files.find((file) => file.path === 'wiki/INDEX.md')
+  assert.equal(index.size, 2048)
+})
+
+test('the setup ladder judges all five rungs from the repo', async () => {
+  const { body } = await run()
+  const byRung = Object.fromEntries(body.setup.map((rung) => [rung.rung, rung]))
+  assert.equal(body.setup.length, 5)
+  assert.equal(byRung.brief.pass, false, 'fill markers remain, so Brief fails')
+  assert.equal(byRung.access.pass, true, 'runtimes and tiles are registered')
+  assert.equal(byRung.training.pass, true, 'three skills exist')
+  assert.equal(byRung.shift.pass, true, 'a scheduled workflow ran this week')
+  assert.equal(byRung.oversight.pass, true, 'a fire button is registered')
+})
+
+test('gone-quiet lists agents and workflows that stopped, and nothing that is fine', async () => {
+  const { body } = await run()
+  assert.deepEqual(body.goneQuiet, [], 'this fixture has nothing quiet')
 })
 
 test('the payload never contains the token', async () => {

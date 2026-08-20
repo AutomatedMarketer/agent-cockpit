@@ -2,103 +2,205 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Your agent team</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0d0f13" />
+<title>Agent OS</title>
 <style>
   :root {
-    color-scheme: light dark;
-    --bg: #fbfbfa;
-    --panel: #ffffff;
-    --ink: #17171a;
-    --muted: #6b6b75;
-    --line: #e6e6e2;
-    --accent: #2f5bd0;
-    --ok: #1f7a4d;
-    --warn: #8a5a00;
-    --bad: #a03028;
-    --chip: #f1f1ee;
-    --radius: 10px;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #121214;
-      --panel: #1a1a1e;
-      --ink: #ecece9;
-      --muted: #9a9aa4;
-      --line: #2b2b31;
-      --accent: #7fa2ff;
-      --ok: #57c98c;
-      --warn: #e0aa4a;
-      --bad: #f0857a;
-      --chip: #26262c;
-    }
+    color-scheme: dark;
+    --bg: #0d0f13;
+    --panel: #151920;
+    --panel-2: #1a1f28;
+    --ink: #e8eaee;
+    --muted: #8b93a1;
+    --line: #262b35;
+    --accent: #6ea8ff;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --chip: #202632;
+    --radius: 12px;
+    --nav-h: 3.6rem;
   }
   * { box-sizing: border-box; }
+  html { background: var(--bg); }
   body {
     margin: 0;
     background: var(--bg);
     color: var(--ink);
-    font: 16px/1.55 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font: 16px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-text-size-adjust: 100%;
+    padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 1rem);
   }
-  .wrap { max-width: 62rem; margin: 0 auto; padding: 1.5rem 1rem 4rem; }
-  header { display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: baseline; margin-bottom: .25rem; }
-  h1 { font-size: 1.5rem; margin: 0; letter-spacing: -.01em; }
-  h2 { font-size: 1.05rem; margin: 2rem 0 .75rem; letter-spacing: -.005em; }
-  a { color: var(--accent); }
-  .sub { color: var(--muted); font-size: .875rem; margin: 0 0 1.5rem; }
+  .wrap { max-width: 44rem; margin: 0 auto; padding: 1rem 1rem 0; }
+  header { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; margin-bottom: .15rem; }
+  h1 { font-size: 1.25rem; margin: 0; letter-spacing: -.01em; }
+  h2 { font-size: .8rem; margin: 1.4rem 0 .5rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .sub { color: var(--muted); font-size: .8125rem; margin: 0 0 .75rem; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
-  .grid { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
-  .agent { padding: .9rem 1rem; }
-  .agent h3 { margin: 0 0 .2rem; font-size: 1rem; }
-  .agent p { margin: .35rem 0 .6rem; color: var(--muted); font-size: .8125rem; }
-  .row { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+  .card { padding: .8rem .9rem; }
+  .stack > .panel { margin-bottom: .6rem; }
+  .row { display: flex; flex-wrap: wrap; gap: .35rem .5rem; align-items: center; }
+  .between { justify-content: space-between; }
   .chip {
     font-size: .6875rem; letter-spacing: .04em; text-transform: uppercase;
-    background: var(--chip); border-radius: 999px; padding: .15rem .5rem; white-space: nowrap;
+    background: var(--chip); border-radius: 999px; padding: .18rem .55rem; white-space: nowrap;
+    color: var(--muted);
   }
-  .dot { width: .5rem; height: .5rem; border-radius: 50%; display: inline-block; flex: none; }
-  .working .dot { background: var(--ok); }
-  .stale .dot, .attention .dot { background: var(--warn); }
-  .never-run .dot { background: var(--bad); }
-  .state { font-size: .75rem; font-weight: 600; }
-  .working .state { color: var(--ok); }
-  .stale .state, .attention .state { color: var(--warn); }
-  .never-run .state { color: var(--bad); }
-  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: .875rem; }
-  th, td { text-align: left; padding: .55rem .75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
-  tr:last-child td { border-bottom: 0; }
-  .run-summary { color: var(--muted); }
-  .empty { padding: 1.25rem; color: var(--muted); }
-  .gap { padding: .9rem 1rem; border-bottom: 1px solid var(--line); }
-  .gap:last-child { border-bottom: 0; }
-  .gap b { font-weight: 600; }
-  .error { border-color: var(--bad); }
-  .error h2 { margin-top: 0; color: var(--bad); }
+  .chip.on { color: var(--ink); }
+  .dot { width: .55rem; height: .55rem; border-radius: 50%; display: inline-block; flex: none; background: var(--muted); }
+  .working .dot, .live .dot { background: var(--ok); }
+  .quiet .dot, .attention .dot, .silent .dot { background: var(--warn); }
+  .never-run .dot, .no-heartbeat .dot { background: var(--bad); }
+  .state { font-size: .75rem; font-weight: 600; color: var(--muted); }
+  .working .state, .live .state { color: var(--ok); }
+  .quiet .state, .attention .state, .silent .state { color: var(--warn); }
+  .never-run .state, .no-heartbeat .state { color: var(--bad); }
+  .muted { color: var(--muted); }
+  .small { font-size: .8125rem; }
+  .empty { padding: 1rem; color: var(--muted); font-size: .875rem; }
   code { background: var(--chip); padding: .1rem .3rem; border-radius: 4px; font-size: .85em; }
-  footer { margin-top: 2.5rem; color: var(--muted); font-size: .8125rem; }
-  .skeleton { color: var(--muted); padding: 1.25rem; }
+  .title { font-size: .975rem; font-weight: 600; margin: 0; }
+  .steps { color: var(--muted); font-size: .8125rem; margin: .3rem 0 .1rem; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+  .steps b { color: var(--ink); font-weight: 500; }
+
+  /* Screens */
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  /* Setup ladder */
+  .ladder { display: grid; grid-template-columns: repeat(5, 1fr); gap: .35rem; padding: .7rem .8rem .8rem; }
+  .rung { text-align: center; font-size: .6875rem; color: var(--muted); }
+  .rung .bar { height: .3rem; border-radius: 999px; background: var(--chip); margin-bottom: .35rem; }
+  .rung.pass .bar { background: var(--ok); }
+  .rung.pass { color: var(--ink); }
+
+  /* Fire buttons */
+  .fires { display: flex; flex-wrap: wrap; gap: .5rem; }
+  button.fire {
+    font: inherit; font-size: .875rem; font-weight: 600;
+    color: var(--ink); background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: .7rem 1rem; min-height: 2.9rem;
+    display: inline-flex; align-items: center; gap: .5rem;
+  }
+  button.fire[disabled] { opacity: .55; }
+  .soon { font-size: .625rem; letter-spacing: .05em; text-transform: uppercase; color: var(--warn); border: 1px solid var(--warn); border-radius: 999px; padding: .05rem .4rem; }
+
+  /* Run list */
+  .run { padding: .7rem .9rem; border-bottom: 1px solid var(--line); }
+  .run:last-child { border-bottom: 0; }
+  .run .summary { margin: .2rem 0 0; font-size: .875rem; color: var(--muted); }
+
+  /* Team */
+  .agent { padding: .85rem .9rem; border-bottom: 1px solid var(--line); }
+  .agent:last-child { border-bottom: 0; }
+  .agent p.desc { margin: .3rem 0 .45rem; color: var(--muted); font-size: .8125rem; }
+  details.agent > summary { list-style: none; cursor: pointer; }
+  details.agent > summary::-webkit-details-marker { display: none; }
+  .agent-runs { margin-top: .6rem; border-top: 1px solid var(--line); }
+
+  /* Memory */
+  input[type=search] {
+    width: 100%; font: inherit; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius); padding: .65rem .8rem;
+  }
+  .filters { display: flex; gap: .4rem; overflow-x: auto; padding: .6rem 0; -webkit-overflow-scrolling: touch; }
+  .filters .chip { cursor: pointer; border: 1px solid transparent; }
+  .filters .chip.on { border-color: var(--accent); color: var(--accent); }
+  details.folder { border-bottom: 1px solid var(--line); }
+  details.folder:last-child { border-bottom: 0; }
+  details.folder > summary { padding: .65rem .9rem; cursor: pointer; font-weight: 600; font-size: .9rem; list-style: none; display: flex; justify-content: space-between; gap: .5rem; }
+  details.folder > summary::-webkit-details-marker { display: none; }
+  .file { display: flex; justify-content: space-between; gap: .5rem; padding: .5rem .9rem .5rem 1.5rem; font-size: .875rem; border-top: 1px solid var(--line); cursor: pointer; }
+  .file:hover { background: var(--panel-2); }
+  .file .idx { color: var(--accent); font-size: .6875rem; }
+
+  /* Viewer overlay */
+  #viewer { position: fixed; inset: 0; background: var(--bg); z-index: 20; display: none; flex-direction: column; }
+  #viewer.open { display: flex; }
+  #viewer .bar { display: flex; align-items: center; gap: .75rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
+  #viewer .bar .path { font-size: .8125rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  #viewer pre { flex: 1; overflow: auto; margin: 0; padding: 1rem; font-size: .8125rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+  #viewer button { font: inherit; color: var(--ink); background: var(--chip); border: 0; border-radius: 8px; padding: .4rem .8rem; }
+
+  /* Connections */
+  .conn { padding: .85rem .9rem; border-bottom: 1px solid var(--line); }
+  .conn:last-child { border-bottom: 0; }
+
+  .gap { padding: .7rem .9rem; border-bottom: 1px solid var(--line); font-size: .875rem; }
+  .gap:last-child { border-bottom: 0; }
+  .error { border-color: var(--bad); padding: 1rem 1.1rem; }
+  .error h3 { margin-top: 0; color: var(--bad); }
+  .problems { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--warn); font-size: .8125rem; }
+  footer { margin-top: 2rem; color: var(--muted); font-size: .75rem; }
+
+  /* Bottom nav — one-handed, thumb-reach */
+  nav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+    background: rgba(13, 15, 19, .92); backdrop-filter: blur(10px);
+    border-top: 1px solid var(--line);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  nav .tabs { display: grid; grid-template-columns: repeat(5, 1fr); max-width: 44rem; margin: 0 auto; }
+  nav a {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .1rem;
+    height: var(--nav-h); color: var(--muted); font-size: .6875rem; font-weight: 600;
+    letter-spacing: .02em; text-decoration: none;
+  }
+  nav a:hover { text-decoration: none; }
+  nav a .glyph { font-size: 1.05rem; line-height: 1; font-weight: 400; }
+  nav a.active { color: var(--accent); }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>Your agent team</h1>
-    <span id="repo-link"></span>
+    <h1 id="screen-title">Today</h1>
+    <span id="repo-link" class="small"></span>
   </header>
   <p class="sub" id="strap">Reading your repo…</p>
-  <div id="app"><div class="panel skeleton">Loading.</div></div>
+
+  <div id="today" class="screen active"><div class="panel empty">Loading.</div></div>
+  <div id="team" class="screen"></div>
+  <div id="workflows" class="screen"></div>
+  <div id="memory" class="screen"></div>
+  <div id="connections" class="screen"></div>
+
   <footer id="foot"></footer>
 </div>
 
-<script>
-const app = document.getElementById('app')
-const strap = document.getElementById('strap')
-const repoLink = document.getElementById('repo-link')
-const foot = document.getElementById('foot')
+<div id="viewer">
+  <div class="bar">
+    <button id="viewer-close" type="button">Back</button>
+    <span class="path" id="viewer-path"></span>
+    <a id="viewer-github" rel="noreferrer noopener" class="small">GitHub</a>
+  </div>
+  <pre id="viewer-body">Loading…</pre>
+</div>
 
+<nav>
+  <div class="tabs">
+    <a href="#today" data-screen="today"><span class="glyph">&#9679;</span>Today</a>
+    <a href="#team" data-screen="team"><span class="glyph">&#9670;</span>Team</a>
+    <a href="#workflows" data-screen="workflows"><span class="glyph">&#9654;</span>Workflows</a>
+    <a href="#memory" data-screen="memory"><span class="glyph">&#9632;</span>Memory</a>
+    <a href="#connections" data-screen="connections"><span class="glyph">&#9673;</span>Connections</a>
+  </div>
+</nav>
+
+<script>
+'use strict'
+
+const SCREENS = ['today', 'team', 'workflows', 'memory', 'connections']
+const TITLES = { today: 'Today', team: 'Team', workflows: 'Workflows', memory: 'Memory', connections: 'Connections' }
+const STATE_LABEL = {
+  working: 'Working', quiet: 'Gone quiet', 'never-run': 'Never run', attention: 'Needs a look',
+  live: 'Live', silent: 'Silent', 'no-heartbeat': 'No heartbeat'
+}
+
+const el = (id) => document.getElementById(id)
 const escapeHtml = (value) =>
   String(value ?? '').replace(/[&<>"']/g, (character) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
@@ -106,106 +208,318 @@ const escapeHtml = (value) =>
 function ago(iso) {
   if (!iso) return 'never'
   const seconds = (Date.now() - new Date(iso).getTime()) / 1000
+  if (Number.isNaN(seconds)) return 'unknown'
   if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))} min ago`
   if (seconds < 86400) return `${Math.round(seconds / 3600)} hr ago`
   const days = Math.round(seconds / 86400)
   return days === 1 ? 'yesterday' : `${days} days ago`
 }
 
-const STATE_LABEL = {
-  working: 'Working',
-  stale: 'Stale',
-  'never-run': 'Never run',
-  attention: 'Needs a look'
+function until(iso) {
+  if (!iso) return null
+  const seconds = (new Date(iso).getTime() - Date.now()) / 1000
+  if (Number.isNaN(seconds)) return null
+  if (seconds <= 0) return 'now'
+  if (seconds < 3600) return `in ${Math.max(1, Math.round(seconds / 60))} min`
+  if (seconds < 86400) return `in ${Math.round(seconds / 3600)} hr`
+  return `in ${Math.round(seconds / 86400)} days`
 }
 
-function agentsSection(agents) {
-  if (!agents.length) {
-    return `<h2>Agents</h2><div class="panel empty">No agent files in <code>.claude/agents/</code> yet.</div>`
-  }
-  const cards = agents.map((agent) => `
-    <div class="panel agent ${agent.state}">
-      <div class="row"><span class="dot"></span><h3>${escapeHtml(agent.slug)}</h3></div>
-      <p>${escapeHtml(agent.description)}</p>
-      <div class="row">
-        <span class="chip">${escapeHtml(agent.model)}</span>
-        <span class="chip">${agent.runsThisWeek} this week</span>
-        <span class="state">${STATE_LABEL[agent.state] ?? agent.state}</span>
-      </div>
-      <p style="margin-bottom:0">Last run ${escapeHtml(ago(agent.lastRun))}</p>
-    </div>`).join('')
-  return `<h2>Agents</h2><div class="grid">${cards}</div>`
-}
-
-function activitySection(runs) {
-  if (!runs.length) {
-    return `<h2>Activity</h2><div class="panel empty">Nothing has run yet. Once an agent commits a run log to <code>runs/</code>, it appears here.</div>`
-  }
-  const rows = runs.map((run) => {
-    const artifact = (run.artifacts || [])[0]
-    return `<tr>
-      <td>${escapeHtml(ago(run.started_at))}</td>
-      <td>${escapeHtml(run.agent)}</td>
-      <td><span class="chip">${escapeHtml(run.trigger)}</span></td>
-      <td>${escapeHtml(run.status)}</td>
-      <td class="run-summary">${escapeHtml(run.summary)}</td>
-      <td>${run.session_url ? `<a href="${escapeHtml(run.session_url)}" rel="noreferrer noopener">transcript</a>` : '&mdash;'}${
-        artifact ? ` · <a href="${escapeHtml(artifactUrl(artifact))}" rel="noreferrer noopener">output</a>` : ''}</td>
-    </tr>`
-  }).join('')
-  return `<h2>Activity</h2>
-    <div class="panel scroll">
-      <table>
-        <thead><tr><th>When</th><th>Agent</th><th>Trigger</th><th>Status</th><th>What happened</th><th>Links</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`
-}
-
+let data = null
 let repoBase = ''
 let repoBranch = 'main'
-const artifactUrl = (path) => `${repoBase}/blob/${repoBranch}/${path}`
+const blobUrl = (path) => `${repoBase}/blob/${repoBranch}/${encodeURI(path)}`
 
-function gapsSection(agents, brain) {
-  const gaps = []
-  for (const agent of agents) {
-    if (agent.state === 'never-run') {
-      gaps.push(`<b>${escapeHtml(agent.slug)}</b> has never run. It is defined but nothing has triggered it.`)
-    } else if (agent.state === 'stale') {
-      gaps.push(`<b>${escapeHtml(agent.slug)}</b> last ran ${escapeHtml(ago(agent.lastRun))}. Check its schedule.`)
-    } else if (agent.state === 'attention') {
-      gaps.push(`<b>${escapeHtml(agent.slug)}</b> finished with status <code>${escapeHtml(agent.lastStatus)}</code> on its last run.`)
-    }
-  }
-  for (const file of brain) {
-    if (!file.present) {
-      gaps.push(`<b>${escapeHtml(file.path)}</b> is missing.`)
-    } else if (file.missing.length) {
-      gaps.push(`<b>${escapeHtml(file.path)}</b> still has ${file.missing.length} empty field${file.missing.length > 1 ? 's' : ''}: <code>${escapeHtml(file.missing.join(', '))}</code>`)
-    }
-  }
-  if (!gaps.length) {
-    return `<h2>Gaps</h2><div class="panel empty">Nothing stale, nothing missing. Every agent has run in the last week and your business brain is filled in.</div>`
-  }
-  return `<h2>Gaps</h2><div class="panel">${gaps.map((gap) => `<div class="gap">${gap}</div>`).join('')}</div>`
+/* ---------- Today ---------- */
+
+function ladderHtml(setup) {
+  const passed = setup.filter((rung) => rung.pass).length
+  const rungs = setup.map((rung) =>
+    `<div class="rung ${rung.pass ? 'pass' : ''}" title="${escapeHtml(rung.detail)}"><div class="bar"></div>${escapeHtml(rung.label)}</div>`
+  ).join('')
+  return `<h2>Setup &middot; ${passed} of ${setup.length} rungs</h2><div class="panel"><div class="ladder">${rungs}</div></div>`
 }
 
-function render(data) {
+function fireButtonsHtml(workflows) {
+  const firing = workflows.filter((workflow) => workflow.fire)
+  if (!firing.length) return ''
+  // TODO(step-4): wire these to POST /api/fire { workflow: slug }. api/fire.js is the next
+  // build step; until it lands the buttons render disabled so nothing pretends to work.
+  const buttons = firing.map((workflow) =>
+    `<button class="fire" type="button" disabled data-workflow="${escapeHtml(workflow.slug)}"
+       title="Run buttons arrive with the fire endpoint (build step 4)">
+       &#9654; ${escapeHtml(workflow.name)} <span class="soon">soon</span></button>`
+  ).join('')
+  return `<h2>Run a job</h2><div class="fires">${buttons}</div>`
+}
+
+function runsListHtml(runs, emptyText) {
+  if (!runs.length) return `<div class="panel empty">${escapeHtml(emptyText)}</div>`
+  const rows = runs.map((run) => {
+    const artifact = (run.artifacts || [])[0]
+    const links = [
+      run.session_url ? `<a href="${escapeHtml(run.session_url)}" rel="noreferrer noopener">transcript</a>` : '',
+      artifact ? `<a href="${escapeHtml(blobUrl(artifact))}" rel="noreferrer noopener">output</a>` : ''
+    ].filter(Boolean).join(' &middot; ')
+    return `<div class="run">
+      <div class="row between">
+        <span><b>${escapeHtml(run.agent)}</b> <span class="chip">${escapeHtml(run.trigger ?? '')}</span></span>
+        <span class="small muted">${escapeHtml(ago(run.started_at))} &middot; ${escapeHtml(run.status ?? '')}</span>
+      </div>
+      <p class="summary">${escapeHtml(run.summary ?? '')}${links ? ` &middot; ${links}` : ''}</p>
+    </div>`
+  }).join('')
+  return `<div class="panel">${rows}</div>`
+}
+
+function renderToday() {
+  const due = data.workflows
+    .filter((workflow) => workflow.nextRun && new Date(workflow.nextRun).getTime() - Date.now() <= 86400000)
+    .sort((a, b) => String(a.nextRun).localeCompare(String(b.nextRun)))
+  const dueHtml = due.length
+    ? `<div class="panel">${due.map((workflow) =>
+        `<div class="gap row between"><span><b>${escapeHtml(workflow.name)}</b> <span class="small muted">${escapeHtml(workflow.schedule ?? '')}</span></span><span class="small">${escapeHtml(until(workflow.nextRun) ?? '')}</span></div>`
+      ).join('')}</div>`
+    : `<div class="panel empty">Nothing scheduled in the next 24 hours.</div>`
+
+  const quietHtml = data.goneQuiet.length
+    ? `<div class="panel">${data.goneQuiet.map((item) =>
+        `<div class="gap"><b>${escapeHtml(item.name)}</b> <span class="chip">${escapeHtml(item.kind)}</span> <span class="small muted">last ran ${escapeHtml(ago(item.lastRun))}</span></div>`
+      ).join('')}</div>`
+    : `<div class="panel empty">Nothing has gone quiet. Everything scheduled is running.</div>`
+
+  el('today').innerHTML =
+    ladderHtml(data.setup) +
+    fireButtonsHtml(data.workflows) +
+    `<h2>Overnight</h2>` + runsListHtml(data.overnight, 'Nothing ran in the last 24 hours.') +
+    `<h2>Due next</h2>` + dueHtml +
+    `<h2>Gone quiet</h2>` + quietHtml +
+    // Spec B.2: remaining routine runs are linked, never scraped — there is no API for them.
+    `<h2>Usage</h2><div class="panel"><p class="small">Remaining routine runs live on your
+      <a href="https://claude.ai/settings/usage" rel="noreferrer noopener">claude.ai usage page</a> —
+      the dashboard links there rather than guessing.</p></div>`
+}
+
+/* ---------- Team ---------- */
+
+function renderTeam() {
+  if (!data.agents.length) {
+    el('team').innerHTML = `<div class="panel empty">No agent files in <code>.claude/agents/</code> yet.</div>`
+    return
+  }
+  const cards = data.agents.map((agent) => {
+    const mine = data.runs.filter((run) => run.agent === agent.slug).slice(0, 5)
+    const runRows = mine.map((run) =>
+      `<div class="run"><div class="row between">
+        <span class="small">${escapeHtml(run.summary ?? '')}</span>
+        <span class="small muted">${escapeHtml(ago(run.started_at))}${run.session_url ? ` &middot; <a href="${escapeHtml(run.session_url)}" rel="noreferrer noopener">watch</a>` : ''}</span>
+      </div></div>`
+    ).join('')
+    return `<details class="agent ${agent.state}">
+      <summary>
+        <div class="row between">
+          <span class="row"><span class="dot"></span><span class="title">${escapeHtml(agent.slug)}</span></span>
+          <span class="state">${escapeHtml(STATE_LABEL[agent.state] ?? agent.state)}</span>
+        </div>
+        <p class="desc">${escapeHtml(agent.description)}</p>
+        <div class="row">
+          <span class="chip">${escapeHtml(agent.model)}</span>
+          <span class="chip">${agent.runsThisWeek} this week</span>
+          <span class="small muted">last run ${escapeHtml(ago(agent.lastRun))}</span>
+        </div>
+      </summary>
+      <div class="agent-runs">${runRows || '<div class="empty">No runs logged yet.</div>'}</div>
+    </details>`
+  }).join('')
+  el('team').innerHTML = `<div class="panel">${cards}</div>`
+}
+
+/* ---------- Workflows ---------- */
+
+function renderWorkflows() {
+  if (!data.workflows.length) {
+    el('workflows').innerHTML = `<div class="panel empty">No workflow files in <code>workflows/</code> yet. Ask for one — <code>/new-workflow</code> — and it appears here.</div>`
+    return
+  }
+  const cards = data.workflows.map((workflow) => {
+    const chain = workflow.steps.map((step) => `<b>${escapeHtml(step)}</b>`).join(' &rarr; ')
+    const triggers = [
+      workflow.schedule ? `<span class="chip on">${escapeHtml(workflow.schedule)}</span>` : '',
+      workflow.fire ? `<span class="chip on">button</span>` : '',
+      workflow.webhook ? `<span class="chip on">webhook</span>` : ''
+    ].filter(Boolean).join('')
+    const last = workflow.lastRun
+      ? `Last: ${escapeHtml(workflow.lastRun.status)} ${escapeHtml(ago(workflow.lastRun.started_at))}${workflow.lastRun.session_url ? ` &middot; <a href="${escapeHtml(workflow.lastRun.session_url)}" rel="noreferrer noopener">watch</a>` : ''}`
+      : 'Never run'
+    const next = workflow.nextRun ? ` &middot; next ${escapeHtml(until(workflow.nextRun) ?? '')}` : ''
+    const problems = workflow.problems.length
+      ? `<ul class="problems">${workflow.problems.map((problem) => `<li>${escapeHtml(problem)}</li>`).join('')}</ul>`
+      : ''
+    // TODO(step-4): run posts to /api/fire, pause posts to /api/fire {action:"pause"} —
+    // pausing is a dispatch too (the dashboard itself never writes to the repo, spec B.2).
+    const runButton = workflow.fire
+      ? `<button class="fire" type="button" disabled title="Run buttons arrive with the fire endpoint (build step 4)">&#9654; Run <span class="soon">soon</span></button>`
+      : ''
+    const pauseButton = workflow.schedule
+      ? `<button class="fire" type="button" disabled title="Pause arrives with the fire endpoint (build step 4)">&#10074;&#10074; Pause <span class="soon">soon</span></button>`
+      : ''
+    return `<div class="panel card ${workflow.state}">
+      <div class="row between">
+        <span class="row"><span class="dot"></span><span class="title">${escapeHtml(workflow.name)}</span></span>
+        <span class="state">${escapeHtml(STATE_LABEL[workflow.state] ?? workflow.state)}</span>
+      </div>
+      <div class="steps">${chain || '<span class="muted">no steps</span>'}</div>
+      <div class="row" style="margin:.35rem 0">
+        ${workflow.owner ? `<span class="chip">owner: ${escapeHtml(workflow.owner)}</span>` : ''}${triggers}
+        <span class="chip">${escapeHtml(workflow.runner)}</span>
+      </div>
+      <div class="row between">
+        <span class="small muted">${last}${next}</span>
+        <span class="row">${runButton}${pauseButton}</span>
+      </div>
+      ${problems}
+    </div>`
+  }).join('')
+  el('workflows').innerHTML = `<div class="stack">${cards}</div>`
+}
+
+/* ---------- Memory ---------- */
+
+let memoryQuery = ''
+let memorySource = ''
+
+function memoryTreeHtml() {
+  const files = data.memory.files.filter((file) => {
+    if (memorySource) {
+      const top = file.path.includes('/') ? file.path.slice(0, file.path.indexOf('/')) : '(root)'
+      if (top !== memorySource) return false
+    }
+    if (memoryQuery && !file.path.toLowerCase().includes(memoryQuery)) return false
+    return true
+  })
+  if (!files.length) return `<div class="panel empty">No pages match.</div>`
+  const folders = new Map()
+  for (const file of files) {
+    const top = file.path.includes('/') ? file.path.slice(0, file.path.indexOf('/')) : '(root)'
+    if (!folders.has(top)) folders.set(top, [])
+    folders.get(top).push(file)
+  }
+  const isIndex = new Set(data.memory.indexes)
+  const open = memoryQuery || memorySource ? ' open' : ''
+  const sections = [...folders.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([folder, entries]) => {
+    const rows = entries.map((file) =>
+      `<div class="file" data-path="${escapeHtml(file.path)}" role="button" tabindex="0">
+        <span>${escapeHtml(file.path.includes('/') ? file.path.slice(file.path.indexOf('/') + 1) : file.path)}${isIndex.has(file.path) ? ' <span class="idx">INDEX</span>' : ''}</span>
+        <span class="small muted">${file.size ? Math.round(file.size / 1024) + ' kb' : ''}</span>
+      </div>`
+    ).join('')
+    return `<details class="folder"${open}><summary><span>${escapeHtml(folder)}/</span><span class="small muted">${entries.length}</span></summary>${rows}</details>`
+  }).join('')
+  return `<div class="panel">${sections}</div>`
+}
+
+function renderMemory() {
+  const tops = [...new Set(data.memory.files.map((file) =>
+    file.path.includes('/') ? file.path.slice(0, file.path.indexOf('/')) : '(root)'
+  ))].sort()
+  const chips = ['', ...tops].map((top) =>
+    `<span class="chip ${memorySource === top ? 'on' : ''}" data-source="${escapeHtml(top)}">${escapeHtml(top || 'all')}</span>`
+  ).join('')
+  el('memory').innerHTML = `
+    <input type="search" id="memory-search" placeholder="Search ${data.memory.files.length} pages&hellip;" value="${escapeHtml(memoryQuery)}" />
+    <div class="filters" id="memory-filters">${chips}</div>
+    <div id="memory-tree">${memoryTreeHtml()}</div>
+    ${data.memory.truncated ? '<p class="small muted">Showing the first pages only — this vault is very large.</p>' : ''}`
+
+  el('memory-search').addEventListener('input', (event) => {
+    memoryQuery = event.target.value.trim().toLowerCase()
+    el('memory-tree').innerHTML = memoryTreeHtml()
+  })
+  el('memory-filters').addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-source]')
+    if (!chip) return
+    memorySource = chip.dataset.source === memorySource ? '' : chip.dataset.source
+    renderMemory()
+  })
+}
+
+async function openFile(path) {
+  el('viewer-path').textContent = path
+  el('viewer-github').href = blobUrl(path)
+  el('viewer-body').textContent = 'Loading…'
+  el('viewer').classList.add('open')
+  try {
+    const response = await fetch(`/api/file?path=${encodeURIComponent(path)}`)
+    const payload = await response.json()
+    el('viewer-body').textContent = response.ok ? payload.content : (payload.error || 'Could not load this file.')
+  } catch (error) {
+    el('viewer-body').textContent = 'Could not load this file.'
+  }
+}
+
+document.addEventListener('click', (event) => {
+  const file = event.target.closest('.file[data-path]')
+  if (file) openFile(file.dataset.path)
+})
+el('viewer-close').addEventListener('click', () => el('viewer').classList.remove('open'))
+
+/* ---------- Connections ---------- */
+
+function renderConnections() {
+  if (!data.runtimes.length) {
+    el('connections').innerHTML = `<div class="panel empty">No runtimes registered. Add an entry to <code>runtimes.yml</code> in your team repo — Hermes, OpenClaw, anything with a URL — and it appears here.</div>`
+    return
+  }
+  const rows = data.runtimes.map((runtime) => `
+    <div class="conn ${runtime.status}">
+      <div class="row between">
+        <span class="row"><span class="dot"></span><span class="title">${escapeHtml(runtime.name)}</span><span class="chip">${escapeHtml(runtime.kind)}</span></span>
+        <span class="state">${escapeHtml(STATE_LABEL[runtime.status] ?? runtime.status)}</span>
+      </div>
+      <div class="row between" style="margin-top:.35rem">
+        <span class="small muted">${runtime.lastBeat ? `heartbeat ${escapeHtml(ago(runtime.lastBeat))}` : 'no heartbeat file yet'}</span>
+        ${runtime.url ? `<a href="${escapeHtml(runtime.url)}" rel="noreferrer noopener">Open &rarr;</a>` : ''}
+      </div>
+    </div>`).join('')
+  el('connections').innerHTML = `<div class="panel">${rows}</div>`
+}
+
+/* ---------- shell ---------- */
+
+function showScreen(name) {
+  const screen = SCREENS.includes(name) ? name : 'today'
+  for (const candidate of SCREENS) {
+    el(candidate).classList.toggle('active', candidate === screen)
+  }
+  document.querySelectorAll('nav a').forEach((link) =>
+    link.classList.toggle('active', link.dataset.screen === screen))
+  el('screen-title').textContent = TITLES[screen]
+  window.scrollTo(0, 0)
+}
+
+window.addEventListener('hashchange', () => showScreen(location.hash.slice(1)))
+
+function render() {
   repoBase = data.repo.url
   repoBranch = data.repo.branch || 'main'
-  repoLink.innerHTML = `<a href="${escapeHtml(data.repo.url)}" rel="noreferrer noopener">${escapeHtml(data.repo.owner)}/${escapeHtml(data.repo.repo)}</a>`
+  el('repo-link').innerHTML = `<a href="${escapeHtml(data.repo.url)}" rel="noreferrer noopener">${escapeHtml(data.repo.owner)}/${escapeHtml(data.repo.repo)}</a>`
   const working = data.agents.filter((agent) => agent.state === 'working').length
-  strap.textContent = `${working} of ${data.agents.length} agents working. ${data.runs.length} recent run${data.runs.length === 1 ? '' : 's'}.`
-  app.innerHTML = agentsSection(data.agents) + activitySection(data.runs) + gapsSection(data.agents, data.brain)
-  foot.innerHTML = `Read from your repo at ${escapeHtml(new Date(data.generatedAt).toLocaleString())}. Nothing on this page comes from anywhere else.`
+  el('strap').textContent = `${working} of ${data.agents.length} agents working · ${data.workflows.length} workflows · ${data.overnight.length} runs in the last day.`
+  renderToday()
+  renderTeam()
+  renderWorkflows()
+  renderMemory()
+  renderConnections()
+  el('foot').textContent = `Read from your repo at ${new Date(data.generatedAt).toLocaleString()}. Nothing on this page comes from anywhere else.`
+  showScreen(location.hash.slice(1))
 }
 
 function renderError(message) {
-  strap.textContent = ''
-  app.innerHTML = `<div class="panel error" style="padding:1rem 1.25rem">
-    <h2>This cockpit cannot read your repo yet</h2>
+  el('strap').textContent = ''
+  el('today').innerHTML = `<div class="panel error">
+    <h3>This cockpit cannot read your repo yet</h3>
     <p>${escapeHtml(message)}</p>
-    <p>Set <code>GITHUB_OWNER</code> and <code>GITHUB_REPO</code> in your hosting environment
+    <p class="small">Set <code>GITHUB_OWNER</code> and <code>GITHUB_REPO</code> in your hosting environment
     and redeploy. If your team repo is private, add <code>GITHUB_TOKEN</code> as well — it stays
     on the server and never reaches this page.</p>
   </div>`
@@ -213,11 +527,11 @@ function renderError(message) {
 
 fetch('/api/state')
   .then(async (response) => {
-    const data = await response.json()
-    if (!response.ok) throw new Error(data.error || `Request failed with ${response.status}`)
-    return data
+    const payload = await response.json()
+    if (!response.ok) throw new Error(payload.error || `Request failed with ${response.status}`)
+    return payload
   })
-  .then(render)
+  .then((payload) => { data = payload; render() })
   .catch((error) => renderError(error.message))
 </script>
 </body>

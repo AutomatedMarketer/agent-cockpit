@@ -1,18 +1,40 @@
-// One request from the browser, one JSON payload back.
+// One request from the browser, one JSON payload back — enough to draw all five screens:
+// Today, Team, Workflows, Memory, Connections.
 //
 // The cockpit reads the team repo and nothing else. There is no database, no Anthropic
 // API call, and no run-history endpoint to reverse-engineer — Routines does not publish
 // one. Everything on the page comes from files the agents committed.
 //
-// The GitHub token, when there is one, stays on the server. A private team repo works;
-// the token never reaches the browser.
+// One GitHub tree call gives every path in the repo; raw fetches fill in the handful of
+// files each screen needs. The GitHub token, when there is one, stays on the server. A
+// private team repo works; the token never reaches the browser.
+//
+// The dashboard READS git. It never writes. Dispatching work is api/fire.js's job, which
+// is a separate build step and is not here yet — the UI renders its buttons disabled.
 
-import { parseFrontmatter, daysSince, stateFor, fillMarkers, sortRunsNewestFirst } from './lib.js'
+import {
+  parseFrontmatter,
+  daysSince,
+  stateFor,
+  fillMarkers,
+  sortRunsNewestFirst,
+  runsSince,
+  heartbeatStatus
+} from './lib.js'
+import {
+  parseWorkflow,
+  normaliseSteps,
+  validateWorkflow,
+  nextRunAt,
+  isGoneQuiet
+} from './workflows.js'
+import { parseSimpleYaml } from './yaml-lite.js'
 
 const GITHUB = 'https://api.github.com'
 const AGENT_DIR = '.claude/agents'
 const BRAIN_FILES = ['shared/about-me.md', 'shared/business-brain.md', 'shared/writing-rules.md']
 const MAX_RUNS_RETURNED = 50
+const MAX_MEMORY_FILES = 2000
 
 function config() {
   const owner = process.env.GITHUB_OWNER
@@ -50,23 +72,169 @@ async function rawFile({ owner, repo, branch }, filePath) {
   return response.text()
 }
 
+// --- shaping, exported so the suite can hit them without a network -----------------------
+
+export function shapeWorkflows(workflowFiles, runs, known, now = Date.now()) {
+  return workflowFiles
+    .map(([path, body]) => {
+      const slug = path.split('/').pop().replace(/\.ya?ml$/, '')
+      const data = parseWorkflow(body ?? '')
+      const workflow = { ...data, steps: normaliseSteps(data.steps) }
+      const problems = validateWorkflow(workflow, known)
+      const mine = runs.filter((run) => run.workflow === slug || run.workflow === workflow.name)
+      const last = mine[0] ?? null
+      const schedule =
+        workflow.trigger && typeof workflow.trigger === 'object' && !Array.isArray(workflow.trigger)
+          ? workflow.trigger.schedule ?? null
+          : null
+      const quiet = schedule !== null && isGoneQuiet(schedule, last?.started_at ?? null, now)
+
+      let state = 'never-run'
+      if (problems.length) state = 'attention'
+      else if (last && (last.status === 'failed' || last.status === 'blocked')) state = 'attention'
+      else if (quiet) state = 'quiet'
+      else if (last) state = 'working'
+
+      return {
+        slug,
+        path,
+        name: typeof workflow.name === 'string' ? workflow.name : slug,
+        owner: typeof workflow.owner === 'string' ? workflow.owner : null,
+        steps: Array.isArray(workflow.steps) ? workflow.steps : [],
+        runner: workflow.runner ?? 'routine',
+        schedule,
+        fire: workflow.trigger?.fire === true,
+        webhook: workflow.trigger?.webhook === true,
+        output: typeof workflow.output === 'string' ? workflow.output : null,
+        problems,
+        lastRun: last
+          ? { started_at: last.started_at, status: last.status, summary: last.summary ?? '', session_url: last.session_url ?? null }
+          : null,
+        nextRun: schedule ? nextRunAt(schedule, { now, lastRun: last?.started_at ?? null }) : null,
+        state
+      }
+    })
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
+  const entries = Array.isArray(registry?.runtimes) ? registry.runtimes : []
+  return entries
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry) => {
+      const beat = entry.heartbeat ? heartbeats[entry.heartbeat] ?? null : null
+      const { status, lastBeat } = entry.heartbeat
+        ? heartbeatStatus(beat, now)
+        : { status: 'no-heartbeat', lastBeat: null }
+      return {
+        name: String(entry.name ?? 'unnamed'),
+        kind: String(entry.kind ?? 'runtime'),
+        url: typeof entry.url === 'string' ? entry.url : null,
+        heartbeat: entry.heartbeat ?? null,
+        status,
+        lastBeat
+      }
+    })
+}
+
+export function shapeMemory(paths, treeSizes = {}) {
+  const files = paths
+    .filter((path) => path.endsWith('.md'))
+    .filter((path) => !path.startsWith('.') && !path.includes('node_modules/'))
+    .slice(0, MAX_MEMORY_FILES)
+    .map((path) => ({ path, size: treeSizes[path] ?? null }))
+  const indexes = files
+    .map((file) => file.path)
+    .filter((path) => /(^|\/)(INDEX|index|README|readme)\.md$/.test(path))
+  return { files, indexes, truncated: files.length === MAX_MEMORY_FILES }
+}
+
+// The five rungs of the Hiring Ladder, each judged from what the repo actually contains.
+// These are approximations of the executable rung tests that live in the template — the
+// dashboard can only see git, so anything needing a live probe is judged by its footprint.
+export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, now = Date.now() }) {
+  const briefOk =
+    brain.length > 0 && brain.every((file) => file.present && file.missing.length === 0)
+
+  const chosenTiles = Array.isArray(tiles?.chosen) ? tiles.chosen : []
+  const accessOk = runtimes.length > 0 || chosenTiles.length > 0
+
+  const trainingOk = skills.length > 0
+
+  const shiftOk = workflows.some(
+    (workflow) =>
+      workflow.schedule !== null &&
+      workflow.lastRun &&
+      (daysSince(workflow.lastRun.started_at, now) ?? 99) <= 7
+  ) || runs.some((run) => run.trigger === 'schedule' && (daysSince(run.started_at, now) ?? 99) <= 7)
+
+  const oversightOk = workflows.some((workflow) => workflow.fire)
+
+  return [
+    { rung: 'brief', label: 'Brief', pass: briefOk, detail: briefOk ? 'Business brain filled in' : 'Business brain files missing or still have empty fields' },
+    { rung: 'access', label: 'Access', pass: accessOk, detail: accessOk ? 'Tools connected' : 'No connections or runtimes registered yet' },
+    { rung: 'training', label: 'Training', pass: trainingOk, detail: trainingOk ? `${skills.length} skill${skills.length === 1 ? '' : 's'} defined` : 'No skills in the repo yet' },
+    { rung: 'shift', label: 'Shift', pass: shiftOk, detail: shiftOk ? 'Something ran on a schedule this week' : 'Nothing has run on a schedule in the last 7 days' },
+    { rung: 'oversight', label: 'Oversight', pass: oversightOk, detail: oversightOk ? 'Fire buttons registered' : 'No workflow has fire: true yet' }
+  ]
+}
+
+export function shapeGoneQuiet(agents, workflows) {
+  const quiet = []
+  for (const agent of agents) {
+    if (agent.state === 'quiet') {
+      quiet.push({ kind: 'agent', slug: agent.slug, name: agent.slug, lastRun: agent.lastRun })
+    }
+  }
+  for (const workflow of workflows) {
+    if (workflow.state === 'quiet' || (workflow.schedule && workflow.state === 'never-run')) {
+      quiet.push({
+        kind: 'workflow',
+        slug: workflow.slug,
+        name: workflow.name,
+        lastRun: workflow.lastRun?.started_at ?? null
+      })
+    }
+  }
+  return quiet
+}
+
+// --- the handler --------------------------------------------------------------------------
+
 export default async function handler(request, response) {
   try {
     const settings = config()
     const { owner, repo, branch } = settings
+    const now = Date.now()
 
     // One tree call gives every path in the repo. Cheaper than walking directories.
     const tree = await gh(`/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`)
-    const paths = (tree.tree ?? []).filter((node) => node.type === 'blob').map((node) => node.path)
+    const blobs = (tree.tree ?? []).filter((node) => node.type === 'blob')
+    const paths = blobs.map((node) => node.path)
+    const sizes = Object.fromEntries(blobs.map((node) => [node.path, node.size ?? null]))
 
     const agentPaths = paths.filter((path) => path.startsWith(`${AGENT_DIR}/`) && path.endsWith('.md'))
     const runPaths = paths.filter((path) => /^runs\/\d{4}-\d{2}\/.+\.json$/.test(path))
+    const workflowPaths = paths.filter((path) => /^workflows\/[^/]+\.ya?ml$/.test(path))
+    const skillSlugs = [
+      ...new Set(
+        paths
+          .map((path) => /^(?:\.claude\/)?skills\/([^/]+)\/(?:SKILL|skill)\.md$/.exec(path)?.[1])
+          .filter(Boolean)
+      )
+    ]
+    const hasRuntimes = paths.includes('runtimes.yml')
+    const hasTiles = paths.includes('tiles.yml')
 
-    const [agentFiles, runFiles, brainFiles] = await Promise.all([
-      Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
-      Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
-      Promise.all(BRAIN_FILES.map(async (path) => [path, await rawFile(settings, path)]))
-    ])
+    const [agentFiles, runFiles, brainFiles, workflowFiles, runtimesSource, tilesSource] =
+      await Promise.all([
+        Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
+        Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
+        Promise.all(BRAIN_FILES.map(async (path) => [path, await rawFile(settings, path)])),
+        Promise.all(workflowPaths.map(async (path) => [path, await rawFile(settings, path)])),
+        hasRuntimes ? rawFile(settings, 'runtimes.yml') : null,
+        hasTiles ? rawFile(settings, 'tiles.yml') : null
+      ])
 
     const unparseable = []
     const parsedRuns = []
@@ -89,9 +257,9 @@ export default async function handler(request, response) {
         model: data.model ?? 'unknown',
         lastRun: mine[0]?.started_at ?? null,
         lastStatus: mine[0]?.status ?? null,
-        runsThisWeek: mine.filter((run) => (daysSince(run.started_at) ?? 99) <= 7).length,
+        runsThisWeek: mine.filter((run) => (daysSince(run.started_at, now) ?? 99) <= 7).length,
         totalRuns: mine.length,
-        state: stateFor(mine)
+        state: stateFor(mine, now)
       }
     })
 
@@ -101,6 +269,32 @@ export default async function handler(request, response) {
       missing: fillMarkers(body)
     }))
 
+    const known = {}
+    if (agents.length) known.agents = agents.map((agent) => agent.slug)
+    if (skillSlugs.length) known.skills = skillSlugs
+    const workflows = shapeWorkflows(workflowFiles, runs, known, now)
+
+    // Heartbeat files named by the registry, fetched only if the tree actually has them.
+    const registry = runtimesSource ? parseSimpleYaml(runtimesSource) : { runtimes: [] }
+    const beatPaths = (Array.isArray(registry.runtimes) ? registry.runtimes : [])
+      .map((entry) => entry?.heartbeat)
+      .filter((path) => typeof path === 'string' && paths.includes(path))
+    const heartbeats = {}
+    await Promise.all(
+      beatPaths.map(async (path) => {
+        try {
+          heartbeats[path] = JSON.parse(await rawFile(settings, path))
+        } catch {
+          heartbeats[path] = null
+        }
+      })
+    )
+    const runtimes = shapeRuntimes(registry, heartbeats, now)
+
+    const tiles = tilesSource ? parseSimpleYaml(tilesSource) : null
+    const memory = shapeMemory(paths, sizes)
+    const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, now })
+
     response.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
     response.status(200).json({
       repo: { owner, repo, branch, url: `https://github.com/${owner}/${repo}` },
@@ -108,8 +302,14 @@ export default async function handler(request, response) {
       runs: runs.slice(0, MAX_RUNS_RETURNED),
       totalRuns: runs.length,
       unparseableRuns: unparseable,
+      overnight: runsSince(runs, undefined, now).slice(0, MAX_RUNS_RETURNED),
+      goneQuiet: shapeGoneQuiet(agents, workflows),
       brain,
-      generatedAt: new Date().toISOString()
+      workflows,
+      runtimes,
+      memory,
+      setup,
+      generatedAt: new Date(now).toISOString()
     })
   } catch (error) {
     response.status(error.status === 404 ? 404 : 500).json({ error: error.message })
