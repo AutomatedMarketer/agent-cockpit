@@ -131,6 +131,10 @@ paste it into a chat, and do not give it write access — this page only ever re
 Open the deployed URL on your phone and add it to your home screen. The whole layout is
 built to be used one-handed — the navigation lives under your thumb.
 
+On a desktop-width window the same nav becomes a left sidebar, the Workflows screen gains a
+7-day Schedule strip with a legend, and every agent keeps one stable identity color across
+Team, Workflows, Board, and Schedule.
+
 ## No API key needed
 
 There is no chat box on this page, on purpose. A chat box would need an Anthropic API key,

@@ -278,6 +278,7 @@ export function shapeBoard(workflows, runs, now = Date.now()) {
     if (!Number.isFinite(at) || now - at > DONE_WINDOW_MS) continue
     done.push({
       name,
+      agent: run.agent ?? null,
       status: run.status ?? 'ok',
       summary: run.summary ?? '',
       started_at: run.started_at ?? null,

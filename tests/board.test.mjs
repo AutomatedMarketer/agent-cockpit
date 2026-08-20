@@ -77,6 +77,7 @@ test('done holds 14 days of finished runs, newest first, with summary and watch 
   assert.deepEqual(done.map((card) => card.name), ['monday-brief', 'email'])
   assert.deepEqual(done[0], {
     name: 'monday-brief',
+    agent: 'research',
     status: 'ok',
     summary: 'Brief written.',
     started_at: iso(-DAY),

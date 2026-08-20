@@ -21,6 +21,7 @@
     --chip: #202632;
     --radius: 12px;
     --nav-h: 3.6rem;
+    --sidenav-w: 11rem;
   }
   * { box-sizing: border-box; }
   html { background: var(--bg); }
@@ -169,6 +170,48 @@
   nav a:hover { text-decoration: none; }
   nav a .glyph { font-size: 1.05rem; line-height: 1; font-weight: 400; }
   nav a.active { color: var(--accent); }
+
+  /* Desktop: the same nav markup becomes a fixed LEFT sidebar; below 48rem nothing changes
+     and the bottom thumb bar stays exactly as it is. Pure CSS, no script involved. */
+  @media (min-width: 48rem) {
+    body { padding-bottom: 1.5rem; padding-left: var(--sidenav-w); }
+    nav {
+      top: 0; bottom: 0; right: auto; width: var(--sidenav-w);
+      border-top: 0; border-right: 1px solid var(--line);
+      padding-bottom: 0;
+    }
+    nav .tabs {
+      grid-template-columns: 1fr; align-content: start;
+      max-width: none; margin: 0; height: 100%; padding-top: 1rem;
+    }
+    nav a {
+      flex-direction: row; justify-content: flex-start; gap: .65rem;
+      height: 3rem; padding: 0 1.1rem; font-size: .8125rem;
+    }
+  }
+
+  /* Agent identity colors — set inline from AGENT_PALETTE. Identity (who owns this) is a
+     left border / swatch / chip tint; health (working/quiet/attention) stays on the status
+     dot and state label. The two never share an element. */
+  .agent-accent { border-left: 3px solid transparent; }
+  .swatch { width: .6rem; height: .6rem; border-radius: 3px; display: inline-block; flex: none; }
+
+  /* Schedule strip — 7-day week, horizontal scroll on a phone inside its own container */
+  .schedule-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .week { display: grid; grid-template-columns: repeat(7, minmax(6.5rem, 1fr)); min-width: 45.5rem; }
+  .week .day { border-left: 1px solid var(--line); padding: .45rem .45rem .6rem; min-height: 4.5rem; }
+  .week .day:first-child { border-left: 0; }
+  .week .day .dayname { font-size: .6875rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin-bottom: .3rem; }
+  .pill {
+    display: block; font-size: .6875rem; line-height: 1.3; border-radius: 6px;
+    padding: .25rem .4rem; margin: 0 0 .3rem; background: var(--panel-2);
+    border: 1px solid var(--line); border-left-width: 3px;
+  }
+  .pill .t { color: var(--muted); white-space: nowrap; }
+  .sched-foot { border-top: 1px solid var(--line); padding: .5rem .9rem; font-size: .8125rem; }
+  .sched-foot .pill { display: inline-block; margin: .15rem .35rem .15rem 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: .35rem .9rem; padding: .55rem .9rem; border-top: 1px solid var(--line); font-size: .75rem; color: var(--muted); align-items: center; }
+  .legend span { display: inline-flex; align-items: center; gap: .35rem; }
 </style>
 </head>
 <body>
@@ -221,6 +264,77 @@ const el = (id) => document.getElementById(id)
 const escapeHtml = (value) =>
   String(value ?? '').replace(/[&<>"']/g, (character) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
+
+/* ---------- Agent identity colors + schedule expansion ----------
+   KEEP IN SYNC: AGENT_PALETTE, agentColorIndex, and scheduleWeekView are mirrored verbatim
+   as exports in api/lib.js, where the test suite exercises them (this page has no module
+   loading). Change them here, change them there. */
+
+// Eight distinct dark-theme-friendly hues. Agent color is IDENTITY only — status colors
+// (ok/warn/bad) stay on dots and state labels, never on the same element as an agent color.
+const AGENT_PALETTE = [
+  { name: 'blue', hex: '#60a5fa' },
+  { name: 'violet', hex: '#a78bfa' },
+  { name: 'teal', hex: '#2dd4bf' },
+  { name: 'amber', hex: '#facc15' },
+  { name: 'rose', hex: '#fb7185' },
+  { name: 'green', hex: '#34d399' },
+  { name: 'cyan', hex: '#22d3ee' },
+  { name: 'orange', hex: '#fb923c' }
+]
+
+// Deterministic slug → palette index. Hash: FNV-1a 32-bit over the slug's UTF-16 code
+// units (offset basis 0x811c9dc5, prime 0x01000193, Math.imul for 32-bit wrap), then
+// unsigned mod 8 — the same slug maps to the same color forever, with no stored state.
+function agentColorIndex(slug) {
+  const text = String(slug ?? '')
+  let hash = 0x811c9dc5
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0) % AGENT_PALETTE.length
+}
+
+// Expands one schedule string into what the Schedule strip draws. Days are Monday-first:
+// 0 = Mon … 6 = Sun. Unrecognised forms → null. (Mirrored in api/lib.js — see above.)
+const WEEK_MON_FIRST = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+
+function scheduleWeekView(schedule) {
+  if (typeof schedule !== 'string') return null
+  const trimmed = schedule.trim()
+  let match
+  if (trimmed === 'hourly') return { type: 'interval', label: 'hourly' }
+  if ((match = /^every (\d+) (minutes|hours)$/.exec(trimmed))) {
+    return { type: 'interval', label: `every ${match[1]}${match[2] === 'hours' ? 'h' : 'm'}` }
+  }
+  if ((match = /^daily (\d{2}:\d{2})$/.exec(trimmed))) {
+    return { type: 'days', days: [0, 1, 2, 3, 4, 5, 6], time: match[1] }
+  }
+  if ((match = /^weekdays (\d{2}:\d{2})$/.exec(trimmed))) {
+    return { type: 'days', days: [0, 1, 2, 3, 4], time: match[1] }
+  }
+  if ((match = /^weekly (sun|mon|tue|wed|thu|fri|sat) (\d{2}:\d{2})$/.exec(trimmed))) {
+    return { type: 'days', days: [WEEK_MON_FIRST.indexOf(match[1])], time: match[2] }
+  }
+  if ((match = /^monthly (\d{1,2}) (\d{2}:\d{2})$/.exec(trimmed))) {
+    return { type: 'monthly', day: Number(match[1]), time: match[2] }
+  }
+  return null
+}
+
+/* Page-side helpers over the mirrored pure functions. The hex values are constants from
+   AGENT_PALETTE above, never data from the repo — slugs, which are, stay escaped. */
+const agentColor = (slug) => (slug ? AGENT_PALETTE[agentColorIndex(slug)].hex : null)
+const accentStyle = (slug) => {
+  const hex = agentColor(slug)
+  return hex ? ` style="border-left-color:${hex}"` : ''
+}
+const ownerChipHtml = (slug) => {
+  if (!slug) return ''
+  const hex = agentColor(slug)
+  return `<span class="chip" style="color:${hex};border:1px solid ${hex}">owner: ${escapeHtml(slug)}</span>`
+}
 
 function ago(iso) {
   if (!iso) return 'never'
@@ -287,15 +401,15 @@ function boardColumnHtml(title, cards, emptyText) {
 
 function boardHtml(board) {
   const upNext = board.upNext.map((card) =>
-    `<div class="kcard">
+    `<div class="kcard agent-accent"${accentStyle(card.owner)}>
       <div class="row between">
         <b>${escapeHtml(card.name)}</b>
         <span class="small muted">${escapeHtml(until(card.when) ?? '')}</span>
       </div>
-      ${card.owner ? `<span class="chip">owner: ${escapeHtml(card.owner)}</span>` : ''}
+      ${ownerChipHtml(card.owner)}
     </div>`)
   const running = board.running.map((card) =>
-    `<div class="kcard">
+    `<div class="kcard agent-accent"${accentStyle(card.agent)}>
       <div class="row between">
         <b>${escapeHtml(card.name)}</b>
         <span class="small muted">started ${escapeHtml(ago(card.started_at))}</span>
@@ -304,7 +418,7 @@ function boardHtml(board) {
     </div>`)
   const done = board.done.map((card) => {
     const glyph = STATUS_GLYPH[card.status] ?? '&#10003;'
-    return `<div class="kcard">
+    return `<div class="kcard agent-accent"${accentStyle(card.agent)}>
       <div class="row between">
         <span><span class="st st-${escapeHtml(card.status)}">${glyph}</span> <b>${escapeHtml(card.name)}</b></span>
         <span class="small muted">${escapeHtml(ago(card.started_at))}</span>
@@ -363,10 +477,10 @@ function renderTeam() {
         <span class="small muted">${escapeHtml(ago(run.started_at))}${run.session_url ? ` &middot; <a href="${escapeHtml(run.session_url)}" rel="noreferrer noopener">watch</a>` : ''}</span>
       </div></div>`
     ).join('')
-    return `<details class="agent ${agent.state}">
+    return `<details class="agent agent-accent ${agent.state}"${accentStyle(agent.slug)}>
       <summary>
         <div class="row between">
-          <span class="row"><span class="dot"></span><span class="title">${escapeHtml(agent.slug)}</span></span>
+          <span class="row"><span class="dot"></span><span class="swatch" style="background:${agentColor(agent.slug)}"></span><span class="title">${escapeHtml(agent.slug)}</span></span>
           <span class="state">${escapeHtml(STATE_LABEL[agent.state] ?? agent.state)}</span>
         </div>
         <p class="desc">${escapeHtml(agent.description)}</p>
@@ -383,6 +497,43 @@ function renderTeam() {
 }
 
 /* ---------- Workflows ---------- */
+
+// The Schedule strip: a Mon..Sun week computed client-side from the parsed schedule
+// strings via scheduleWeekView. Monthly and interval schedules get a footnote row —
+// they have no fixed weekday — and the legend maps each owner agent to its color.
+function scheduleStripHtml(workflows) {
+  const scheduled = workflows.filter((workflow) => workflow.schedule)
+  if (!scheduled.length) return ''
+  const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+  const dayPills = DAY_NAMES.map(() => [])
+  const footnotes = []
+  for (const workflow of scheduled) {
+    const view = scheduleWeekView(workflow.schedule)
+    if (!view) continue
+    const hex = agentColor(workflow.owner) ?? 'var(--muted)'
+    const pill = (label) =>
+      `<span class="pill" style="border-left-color:${hex}"><b>${escapeHtml(workflow.name)}</b> <span class="t">${escapeHtml(label)}</span></span>`
+    if (view.type === 'days') {
+      for (const day of view.days) dayPills[day].push(pill(view.time))
+    } else if (view.type === 'monthly') {
+      footnotes.push(`<span class="small muted">monthly:</span> ${pill(`day ${view.day} ${view.time}`)}`)
+    } else {
+      footnotes.push(pill(view.label))
+    }
+  }
+  const columns = DAY_NAMES.map((name, index) =>
+    `<div class="day"><div class="dayname">${name}</div>${dayPills[index].join('')}</div>`
+  ).join('')
+  const owners = [...new Set(scheduled.map((workflow) => workflow.owner).filter(Boolean))].sort()
+  const legend = owners.map((owner) =>
+    `<span><span class="swatch" style="background:${agentColor(owner)}"></span>${escapeHtml(owner)}</span>`
+  ).join('')
+  return `<h2>Schedule</h2><div class="panel">
+    <div class="schedule-scroll"><div class="week">${columns}</div></div>
+    ${footnotes.length ? `<div class="sched-foot">${footnotes.join(' ')}</div>` : ''}
+    ${legend ? `<div class="legend">${legend}</div>` : ''}
+  </div>`
+}
 
 function renderWorkflows() {
   if (!data.workflows.length) {
@@ -415,14 +566,14 @@ function renderWorkflows() {
         ? `<button class="fire" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="pause">&#10074;&#10074; Pause</button>`
         : `<button class="fire" type="button" disabled title="Pause dispatches through this workflow's trigger URL — add fire: true to its trigger block first">&#10074;&#10074; Pause</button>`)
       : ''
-    return `<div class="panel card ${workflow.state}">
+    return `<div class="panel card agent-accent ${workflow.state}"${accentStyle(workflow.owner)}>
       <div class="row between">
         <span class="row"><span class="dot"></span><span class="title">${escapeHtml(workflow.name)}</span></span>
         <span class="state">${escapeHtml(STATE_LABEL[workflow.state] ?? workflow.state)}</span>
       </div>
       <div class="steps">${chain || '<span class="muted">no steps</span>'}</div>
       <div class="row" style="margin:.35rem 0">
-        ${workflow.owner ? `<span class="chip">owner: ${escapeHtml(workflow.owner)}</span>` : ''}${triggers}
+        ${ownerChipHtml(workflow.owner)}${triggers}
         <span class="chip">${escapeHtml(workflow.runner)}</span>
       </div>
       <div class="row between">
@@ -432,7 +583,7 @@ function renderWorkflows() {
       ${problems}
     </div>`
   }).join('')
-  el('workflows').innerHTML = `<div class="stack">${cards}</div>`
+  el('workflows').innerHTML = scheduleStripHtml(data.workflows) + `<div class="stack">${cards}</div>`
 }
 
 /* ---------- Memory ---------- */

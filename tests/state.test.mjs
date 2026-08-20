@@ -275,6 +275,7 @@ test('the board ships in the payload with its three columns filled from the repo
   assert.deepEqual(body.board.done, [
     {
       name: 'monday-brief',
+      agent: 'research',
       status: 'ok',
       summary: 'The newest run, which should sort first and mark the agent as working.',
       started_at: recent,
