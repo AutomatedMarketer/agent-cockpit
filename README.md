@@ -26,7 +26,7 @@ endpoint to reverse-engineer.
 | `.claude/agents/*.md` | Team rail |
 | `workflows/*.yml` | Workflow board, job buttons, due-next, setup |
 | `runs/YYYY-MM/*.json` | Board (Running/Done columns), last-run columns, gone-quiet |
-| `tasks/*.md` | Board (To do column) — frontmatter `status: todo\|doing\|done`, optional `for: <agent-slug>`; first heading (or filename) is the title. Read-only: this page never creates or moves a task. A `done` task earns its Done card through its run log, never twice |
+| `tasks/*.md` | Board (To do column) — frontmatter `status: todo\|doing\|done`, optional `for: <agent-slug>`; first heading (or filename) is the title. This page never writes a task file itself — "+ Add task" dispatches to the `task-intake` routine, whose session commits the card. A `done` task earns its Done card through its run log, never twice |
 | `runs/heartbeat/*.json` | Live/silent lights on the Connections rail |
 | `runtimes.yml` | Connections rail entries |
 | `tiles.yml`, `shared/*.md`, `skills/` | Setup ladder |
@@ -55,13 +55,37 @@ It answers `{ ok, sessionUrl }` when the trigger returns a session link, else
 `{ ok, accepted: true }`. Trigger timeouts and non-2xx answers come back as a plain 502 —
 never the trigger's URL or body.
 
+### Filing a task from the dashboard
+
+`POST /api/fire` with `{ "action": "task", "title": "…", "details": "…?", "for": "<agent>?" }`
+is the third action, behind the "+ Add task" button at the top of the Board's To do column.
+Same auth, same content-type rules; the constraints are:
+
+- `title` — required, 3–200 characters after trimming, one plain line (no control characters),
+- `details` — optional, up to 2000 characters,
+- `for` — optional kebab-case slug that must be an agent in the team repo
+  (`.claude/agents/<slug>.md`), else a plain 400.
+
+The dispatch target is one dedicated routine, registered in `FIRE_TRIGGERS` under the
+reserved slug **`task-intake`** — its trigger URL goes in the map exactly like any
+workflow's:
+
+| Slug | What it is |
+|---|---|
+| `task-intake` | Not a workflow file — a Claude routine you create once, whose prompt is: *"act on dispatch payloads: create task cards as instructed, commit, push."* The payload's instruction spells out the card contract (`tasks/YYYY-MM-DD-<slug-from-title>.md`, `status: todo`, `for:` when given, body = details or title, per the team repo's `tasks/README.md`). |
+
+With no `task-intake` entry in `FIRE_TRIGGERS` the action answers 404 with the fix in the
+message. On success it echoes `{ ok, accepted, title }` — the title is the only user text
+that ever comes back, and the dashboard itself still never writes to the repo: the routine's
+agent session commits the card, which appears on the Board about a minute later.
+
 Two env vars make it live (with neither `FIRE_KEY` nor `PUBLIC_FIRE` set it answers `503` —
 closed, never open):
 
 | Name | Value |
 |---|---|
 | `FIRE_KEY` | A long random string, e.g. `openssl rand -hex 32`. Callers must send it in the `x-fire-key` header. |
-| `FIRE_TRIGGERS` | One JSON object mapping workflow slug → its Claude routine trigger URL: `{"monday-brief":"https://…"}`. Trigger URLs are secret-adjacent — env var only, never the repo. |
+| `FIRE_TRIGGERS` | One JSON object mapping workflow slug → its Claude routine trigger URL: `{"monday-brief":"https://…","task-intake":"https://…"}`. Trigger URLs are secret-adjacent — env var only, never the repo. |
 
 ### How the browser authenticates (two modes)
 
@@ -168,9 +192,10 @@ rules word for word), next-run computation for every schedule form, task parsing
 Board's four columns, gone-quiet and heartbeat
 staleness logic, the file endpoint's path safety, an end-to-end pass over a stubbed
 GitHub for every screen's data, and the fire endpoint end to end — auth (401/503, both
-modes), slug and action validation, repo + `trigger.fire` checks, run and pause dispatch,
-502 on trigger failure, and a no-secret-ever-leaks assertion on every path. No network,
-no keys, no install.
+modes), slug and action validation, repo + `trigger.fire` checks, run, pause, and task
+dispatch (title/details/`for` validation, the `task-intake` 404, the title-only success
+echo), 502 on trigger failure, and a no-secret-ever-leaks assertion on every path. No
+network, no keys, no install.
 
 ## What the states mean
 

@@ -129,6 +129,19 @@ export function scheduleWeekView(schedule) {
   return null
 }
 
+// --- task text → { title, details } -------------------------------------------------------
+//
+// KEEP IN SYNC: mirrored verbatim inside public/index.html's inline script (same rule as
+// the palette helpers above). The Add-task form is one textarea: the first line becomes
+// the card's title (clipped to the endpoint's 200-char cap), and when there is more than
+// the title — extra lines, or a clipped first line — the full text rides as details.
+export function splitTaskText(text) {
+  const trimmed = String(text ?? '').trim()
+  if (!trimmed) return null
+  const title = trimmed.split(/\r?\n/)[0].trim().slice(0, 200).trim()
+  return trimmed === title ? { title } : { title, details: trimmed.slice(0, 2000) }
+}
+
 // A heartbeat file is `{ "runtime": "hermes", "at": "…" }`, written by the runtime's own
 // cron. Fresh means the light is on. Stale or absent means it is not, and the rail says so
 // rather than pretending everything is fine.

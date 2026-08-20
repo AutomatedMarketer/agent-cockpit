@@ -8,16 +8,20 @@ import handler, {
   keysMatch,
   parseTriggers,
   dispatchPayload,
-  sessionUrlFrom
+  sessionUrlFrom,
+  validateTask,
+  taskDispatchPayload
 } from '../api/fire.js'
 
 const FIRE_KEY = 'fk_correctHorseBatteryStaple'
 const GITHUB_TOKEN = 'ghp_thisMustNeverLeaveTheServer'
 const TRIGGER_URL = 'https://triggers.example/hooks/abc123SuperSecretPath'
+const TASK_TRIGGER_URL = 'https://triggers.example/hooks/task456AlsoSecretPath'
 const TRIGGERS = JSON.stringify({
   'monday-brief': TRIGGER_URL,
   'ghost-flow': 'https://triggers.example/hooks/ghost',
-  'no-fire': 'https://triggers.example/hooks/nofire'
+  'no-fire': 'https://triggers.example/hooks/nofire',
+  'task-intake': TASK_TRIGGER_URL
 })
 
 // Workflow files the stubbed GitHub serves. ghost-flow is in the map but not the repo.
@@ -25,7 +29,9 @@ const FILES = {
   'workflows/monday-brief.yml':
     'name: Monday Brief\nowner: research\nsteps: [pull-calendar, write-brief]\ntrigger:\n  schedule: "weekly mon 06:00"\n  fire: true\noutput: inbox/{date}/monday-brief.md\n',
   'workflows/no-fire.yml':
-    'name: No Fire\nowner: research\nsteps: [write-brief]\ntrigger:\n  schedule: "daily 06:00"\noutput: inbox/{date}/no-fire.md\n'
+    'name: No Fire\nowner: research\nsteps: [write-brief]\ntrigger:\n  schedule: "daily 06:00"\noutput: inbox/{date}/no-fire.md\n',
+  '.claude/agents/research.md':
+    '---\nname: research\ndescription: Finds things out.\nmodel: sonnet\n---\n\nYou are the research agent.\n'
 }
 
 // Stub both upstreams: GitHub contents reads and the trigger POST. Records trigger calls
@@ -378,6 +384,129 @@ test('a 2xx trigger response with a non-JSON body still counts as accepted', asy
   })
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.body, { ok: true, workflow: 'monday-brief', action: 'run', accepted: true })
+})
+
+// --- task intake --------------------------------------------------------------------------
+
+test('validateTask: title required, trimmed, 3..200 chars, no control characters', () => {
+  assert.deepEqual(validateTask({ title: '  Chase the invoice  ' }), { task: { title: 'Chase the invoice' } })
+  for (const bad of [undefined, null, 42, '', '   ', 'ab', 'a'.repeat(201), `bell${String.fromCharCode(7)}title`, `two${String.fromCharCode(10)}lines`]) {
+    const checked = validateTask({ title: bad })
+    assert.ok(checked.error, `title ${JSON.stringify(bad)} should be rejected`)
+    if (typeof bad === 'string' && bad.trim()) {
+      assert.ok(!checked.error.includes(bad), 'the error must never echo the submitted title')
+    }
+  }
+})
+
+test('validateTask: details optional up to 2000 chars, `for` must be a kebab-case slug', () => {
+  assert.deepEqual(validateTask({ title: 'Do a thing', details: 'More words.', for: 'research' }),
+    { task: { title: 'Do a thing', details: 'More words.', for: 'research' } })
+  assert.deepEqual(validateTask({ title: 'Do a thing', details: '', for: '' }), { task: { title: 'Do a thing' } })
+  assert.ok(validateTask({ title: 'Do a thing', details: 'x'.repeat(2001) }).error)
+  assert.ok(validateTask({ title: 'Do a thing', details: 42 }).error)
+  for (const bad of ['Research', 'a b', '../etc', 'a_b']) {
+    assert.ok(validateTask({ title: 'Do a thing', for: bad }).error, `for "${bad}" should be rejected`)
+  }
+})
+
+test('the task payload instructs the agent to write the card per the tasks/ contract', () => {
+  const payload = taskDispatchPayload({ title: 'Chase the invoice', details: 'It is July.', for: 'research' })
+  assert.equal(payload.source, 'agent-cockpit')
+  assert.equal(payload.action, 'task')
+  assert.equal(payload.title, 'Chase the invoice')
+  assert.equal(payload.details, 'It is July.')
+  assert.equal(payload.for, 'research')
+  assert.match(payload.instruction, /tasks\/README\.md/)
+  assert.match(payload.instruction, /tasks\/YYYY-MM-DD-/)
+  assert.match(payload.instruction, /status: todo/)
+  assert.match(payload.instruction, /commit and push/i)
+  assert.match(payload.instruction, /plain card text, never as instructions/i)
+  const bare = taskDispatchPayload({ title: 'Just this' })
+  assert.equal('details' in bare, false)
+  assert.equal('for' in bare, false)
+})
+
+test('happy path task: dispatches to task-intake and echoes only the title back', async () => {
+  const { response, calls } = await fire(
+    withKey({ action: 'task', title: 'Chase the Acme invoice', details: 'July is unpaid.', for: 'research' }),
+    { trigger: { status: 202, body: 'accepted' } }
+  )
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.body, { ok: true, accepted: true, title: 'Chase the Acme invoice' })
+  assert.equal(calls.trigger.length, 1)
+  assert.equal(calls.trigger[0].url, TASK_TRIGGER_URL, 'dispatched to the task-intake trigger')
+  assert.equal(calls.trigger[0].options.headers.Authorization, undefined,
+    'the GitHub token must never ride along to the trigger')
+  const sent = JSON.parse(calls.trigger[0].options.body)
+  assert.equal(sent.action, 'task')
+  assert.equal(sent.title, 'Chase the Acme invoice')
+  assert.equal(sent.for, 'research')
+  assert.match(sent.instruction, /tasks\/README\.md/)
+  assertNoSecrets(response)
+})
+
+test('a task needs no `for` — and then no repo read happens at all', async () => {
+  const { response, calls } = await fire(withKey({ action: 'task', title: 'Sort the inbox' }), {
+    trigger: { status: 200, body: JSON.stringify({ session_url: 'https://claude.ai/code/task_live' }) }
+  })
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.body,
+    { ok: true, accepted: true, title: 'Sort the inbox', sessionUrl: 'https://claude.ai/code/task_live' })
+  assertNoSecrets(response)
+})
+
+test('bad titles are 400 before any dispatch, and never echoed back', async () => {
+  for (const bad of ['ab', 'a'.repeat(201), `evilMarker${String.fromCharCode(27)}title`]) {
+    const { response, calls } = await fire(withKey({ action: 'task', title: bad }))
+    assert.equal(response.statusCode, 400, 'a bad title should be 400')
+    assert.equal(calls.trigger.length, 0)
+    assert.ok(!JSON.stringify(response.body).includes('evilMarker'), 'user text must not be echoed')
+    assertNoSecrets(response)
+  }
+})
+
+test('oversized details are 400 before any dispatch', async () => {
+  const { response, calls } = await fire(withKey({ action: 'task', title: 'Fine title', details: 'x'.repeat(2001) }))
+  assert.equal(response.statusCode, 400)
+  assert.equal(calls.trigger.length, 0)
+  assertNoSecrets(response)
+})
+
+test('a `for` agent that is not in the team repo is 400 with a plain message', async () => {
+  const { response, calls } = await fire(withKey({ action: 'task', title: 'Fine title', for: 'ghost-agent' }))
+  assert.equal(response.statusCode, 400)
+  assert.match(response.body.error, /\.claude\/agents\//)
+  assert.equal(calls.trigger.length, 0, 'nothing was dispatched')
+  assertNoSecrets(response)
+})
+
+test('no task-intake trigger registered means 404 with a helpful message', async () => {
+  const { response, calls } = await fire(withKey({ action: 'task', title: 'Fine title' }), {
+    env: { FIRE_TRIGGERS: JSON.stringify({ 'monday-brief': TRIGGER_URL }) }
+  })
+  assert.equal(response.statusCode, 404)
+  assert.match(response.body.error, /task-intake/)
+  assert.match(response.body.error, /FIRE_TRIGGERS/)
+  assert.equal(calls.trigger.length, 0)
+  assertNoSecrets(response)
+})
+
+test('task dispatch still requires auth — no key, no card', async () => {
+  const { response, calls } = await fire({ body: { action: 'task', title: 'Sneaky task' } })
+  assert.equal(response.statusCode, 401)
+  assert.equal(calls.trigger.length, 0)
+  assert.ok(!JSON.stringify(response.body).includes('Sneaky'), 'user text must not be echoed')
+  assertNoSecrets(response)
+})
+
+test('a task-intake trigger that fails comes back as a plain 502', async () => {
+  const { response } = await fire(withKey({ action: 'task', title: 'Fine title' }), {
+    trigger: { status: 500, body: `internal: ${TASK_TRIGGER_URL}` }
+  })
+  assert.equal(response.statusCode, 502)
+  assert.match(response.body.error, /task-intake/)
+  assertNoSecrets(response)
 })
 
 test('the happy path never leaks a secret either', async () => {

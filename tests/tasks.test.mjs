@@ -65,3 +65,26 @@ test('a done task adds no Done card of its own — its run log is the record', (
   assert.deepEqual(todo, [], 'done tasks never sit in the todo column')
   assert.deepEqual(done.map((card) => card.name), ['monday-brief'], 'only the run log cards Done — no double-carding')
 })
+
+// --- the Add-task form's text split (mirrored in public/index.html) -----------------------
+import { splitTaskText } from '../api/lib.js'
+
+test('splitTaskText: one short line is a title with no details', () => {
+  assert.deepEqual(splitTaskText('  Research podcast sponsors  '), { title: 'Research podcast sponsors' })
+  assert.equal(splitTaskText(''), null)
+  assert.equal(splitTaskText('   \n  '), null)
+  assert.equal(splitTaskText(undefined), null)
+})
+
+test('splitTaskText: extra lines become details, with the full text preserved', () => {
+  const split = splitTaskText('Chase the invoice\nJuly is still unpaid.\nBe polite.')
+  assert.equal(split.title, 'Chase the invoice')
+  assert.equal(split.details, 'Chase the invoice\nJuly is still unpaid.\nBe polite.')
+})
+
+test('splitTaskText: a first line over 200 chars is clipped for the title, kept in details', () => {
+  const long = 'w'.repeat(250)
+  const split = splitTaskText(long)
+  assert.equal(split.title.length, 200)
+  assert.equal(split.details, long)
+})

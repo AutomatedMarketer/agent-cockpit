@@ -94,6 +94,21 @@
   .fire-note.ok { color: var(--ok); }
   .fire-note.bad { color: var(--bad); }
 
+  /* Add-task — an inline form at the top of the To do column. Phone-first: full-width
+     fields, one thumb-sized submit button, no dialog. */
+  .add-task { padding: .6rem .9rem .7rem; border-bottom: 1px solid var(--line); }
+  #task-form { display: grid; gap: .5rem; margin-top: .6rem; }
+  #task-form[hidden] { display: none; }
+  #task-form label { font-size: .75rem; font-weight: 600; color: var(--muted); }
+  #task-form textarea, #task-form select {
+    width: 100%; font: inherit; font-size: .875rem; color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: .55rem .65rem;
+  }
+  #task-form textarea { resize: vertical; min-height: 4.4rem; }
+  #task-form .row { flex-wrap: nowrap; }
+  #task-form select { flex: 1; min-width: 0; }
+
   /* Board — four columns stack on a phone (one-handed rule), pair up on medium screens,
      and sit side by side only when there is genuinely room for four. */
   .board { display: grid; grid-template-columns: 1fr; gap: .6rem; }
@@ -408,18 +423,45 @@ function fireButtonsHtml(workflows) {
 // The Done column carries everything the Overnight feed used to show, and more.
 const STATUS_GLYPH = { ok: '&#10003;', partial: '&#9680;', blocked: '&#9940;', failed: '&#10007;' }
 
-function boardColumnHtml(title, cards, emptyText) {
+function boardColumnHtml(title, cards, emptyText, extra = '') {
   const rows = cards.length
     ? cards.join('')
     : `<div class="empty">${escapeHtml(emptyText)}</div>`
   return `<div class="panel">
     <div class="col-title"><span>${escapeHtml(title)}</span><span>${cards.length}</span></div>
-    ${rows}</div>`
+    ${extra}${rows}</div>`
+}
+
+// The inline Add-task form. Submitting POSTs /api/fire { action: "task", … } — the same
+// client path as the Run buttons (prompt-once key, sessionStorage, PUBLIC_FIRE) — and the
+// task-intake routine's session writes the card; this page still never writes the repo.
+// Agent slugs come from the live team list; slugs are repo data, so they stay escaped.
+function addTaskHtml() {
+  const options = (data.agents ?? []).map((agent) =>
+    `<option value="${escapeHtml(agent.slug)}">${escapeHtml(agent.slug)}</option>`
+  ).join('')
+  return `<div class="add-task">
+    <button class="fire" type="button" id="task-open">+ Add task</button>
+    <form id="task-form" hidden>
+      <label for="task-text">What do you want done?</label>
+      <textarea id="task-text" rows="3" maxlength="2200"
+        placeholder="e.g. Research podcast sponsors - or - Build me a skill that drafts YouTube descriptions"></textarea>
+      <div class="row">
+        <select id="task-for" aria-label="Who should do it">
+          <option value="">Anyone — let the team route it</option>
+          ${options}
+        </select>
+        <button class="fire" type="submit" id="task-send">Add</button>
+      </div>
+      <span class="fire-note" id="task-note"></span>
+    </form>
+  </div>`
 }
 
 function boardHtml(board) {
-  // To do cards come from tasks/*.md in the team repo — read-only here. Creating and
-  // moving tasks stays with the agents (and later the dispatch path), not this page.
+  // To do cards come from tasks/*.md in the team repo — read-only here. "+ Add task"
+  // dispatches through /api/fire to the task-intake routine, whose session commits the
+  // card; moving tasks stays with the agents. This page still never writes the repo.
   // The left border is the `for:` agent's identity color; no agent, no color.
   const todo = (board.todo ?? []).map((card) =>
     `<div class="kcard agent-accent"${accentStyle(card.for)}>
@@ -456,7 +498,7 @@ function boardHtml(board) {
     </div>`
   })
   return `<div class="board">
-    ${boardColumnHtml('To do', todo, 'No open tasks in tasks/ yet.')}
+    ${boardColumnHtml('To do', todo, 'No open tasks in tasks/ yet.', addTaskHtml())}
     ${boardColumnHtml('Up Next', upNext, 'Nothing scheduled in the next 48 hours.')}
     ${boardColumnHtml('Running', running, 'Nothing is running right now.')}
     ${boardColumnHtml('Done', done, 'No finished runs in the last 14 days.')}
@@ -695,6 +737,18 @@ document.addEventListener('click', (event) => {
   if (file) openFile(file.dataset.path)
   const fire = event.target.closest('button[data-fire]')
   if (fire && !fire.disabled) fireWorkflow(fire)
+  if (event.target.closest('#task-open')) {
+    const form = el('task-form')
+    form.hidden = !form.hidden
+    if (!form.hidden) el('task-text').focus()
+  }
+})
+// The Add-task form is re-rendered with the board, so its submit is delegated too.
+document.addEventListener('submit', (event) => {
+  if (event.target.id === 'task-form') {
+    event.preventDefault()
+    submitTask()
+  }
 })
 el('viewer-close').addEventListener('click', () => el('viewer').classList.remove('open'))
 
@@ -715,17 +769,36 @@ function fireNoteFor(button) {
   return note
 }
 
-async function callFire(slug, action, key) {
+async function callFire(body, key) {
   const headers = { 'Content-Type': 'application/json' }
   if (key) headers['x-fire-key'] = key
   const response = await fetch('/api/fire', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ workflow: slug, action })
+    body: JSON.stringify(body)
   })
   let payload = {}
   try { payload = await response.json() } catch (error) { /* non-JSON error page */ }
   return { status: response.status, ok: response.ok, payload }
+}
+
+// One client path for every dispatch — Run, Pause, and Add task all go through here, so
+// the prompt-once key handling exists exactly once.
+async function postFire(body) {
+  let key = sessionStorage.getItem(FIRE_KEY_STORE) || ''
+  let result = await callFire(body, key)
+  if (result.status === 401) {
+    const entered = window.prompt(
+      'This dashboard needs its fire key to dispatch jobs.\n\nPaste the FIRE_KEY you set in the hosting environment — it is kept in this tab only, never in the page.'
+    )
+    if (entered !== null && entered.trim()) {
+      key = entered.trim()
+      sessionStorage.setItem(FIRE_KEY_STORE, key)
+      result = await callFire(body, key)
+    }
+  }
+  if (!result.ok && result.status === 401) sessionStorage.removeItem(FIRE_KEY_STORE)
+  return result
 }
 
 async function fireWorkflow(button) {
@@ -738,18 +811,7 @@ async function fireWorkflow(button) {
   note.className = 'fire-note'
   note.textContent = ''
   try {
-    let key = sessionStorage.getItem(FIRE_KEY_STORE) || ''
-    let result = await callFire(slug, action, key)
-    if (result.status === 401) {
-      const entered = window.prompt(
-        'This dashboard needs its fire key to dispatch jobs.\n\nPaste the FIRE_KEY you set in the hosting environment — it is kept in this tab only, never in the page.'
-      )
-      if (entered !== null && entered.trim()) {
-        key = entered.trim()
-        sessionStorage.setItem(FIRE_KEY_STORE, key)
-        result = await callFire(slug, action, key)
-      }
-    }
+    const result = await postFire({ workflow: slug, action })
     if (result.ok) {
       note.className = 'fire-note ok'
       if (result.payload.sessionUrl) {
@@ -758,7 +820,6 @@ async function fireWorkflow(button) {
         note.textContent = action === 'pause' ? 'Pause sent to the agent.' : 'Job sent.'
       }
     } else {
-      if (result.status === 401) sessionStorage.removeItem(FIRE_KEY_STORE)
       note.className = 'fire-note bad'
       note.textContent = result.payload.error || `Dispatch failed (${result.status}).`
     }
@@ -768,6 +829,55 @@ async function fireWorkflow(button) {
   }
   button.disabled = false
   button.innerHTML = original
+}
+
+/* ---------- Add task ---------- */
+
+// KEEP IN SYNC: splitTaskText is mirrored verbatim as an export in api/lib.js, where the
+// test suite exercises it (this page has no module loading). Change it here, change it
+// there. First line → title (clipped to the endpoint's 200-char cap); anything beyond the
+// title rides as details.
+function splitTaskText(text) {
+  const trimmed = String(text ?? '').trim()
+  if (!trimmed) return null
+  const title = trimmed.split(/\r?\n/)[0].trim().slice(0, 200).trim()
+  return trimmed === title ? { title } : { title, details: trimmed.slice(0, 2000) }
+}
+
+async function submitTask() {
+  const note = el('task-note')
+  const send = el('task-send')
+  note.className = 'fire-note'
+  note.textContent = ''
+  const parts = splitTaskText(el('task-text').value)
+  if (!parts) {
+    note.className = 'fire-note bad'
+    note.textContent = 'Say what you want done first.'
+    return
+  }
+  const body = { action: 'task', title: parts.title }
+  if (parts.details) body.details = parts.details
+  const agent = el('task-for').value
+  if (agent) body.for = agent
+  send.disabled = true
+  send.textContent = 'Sending…'
+  try {
+    const result = await postFire(body)
+    if (result.ok) {
+      note.className = 'fire-note ok'
+      note.textContent = 'Card sent — it appears once your team commits it (about a minute).'
+      el('task-text').value = ''
+      el('task-for').value = ''
+    } else {
+      note.className = 'fire-note bad'
+      note.textContent = result.payload.error || `Dispatch failed (${result.status}).`
+    }
+  } catch (error) {
+    note.className = 'fire-note bad'
+    note.textContent = 'Could not reach the fire endpoint.'
+  }
+  send.disabled = false
+  send.textContent = 'Add'
 }
 
 /* ---------- Connections ---------- */
