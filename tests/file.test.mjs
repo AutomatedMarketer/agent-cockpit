@@ -4,6 +4,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import handler, { safePath } from '../api/file.js'
 
+// These suites cover the endpoint's data logic, not the view gate - that has its own
+// suite in gate.test.mjs. Opting out here keeps every case from carrying a key header.
+process.env.PUBLIC_DASHBOARD = 'true'
+
 test('plain vault paths pass', () => {
   assert.equal(safePath('wiki/INDEX.md'), 'wiki/INDEX.md')
   assert.equal(safePath('inbox/2026-08-07/monday-brief.md'), 'inbox/2026-08-07/monday-brief.md')

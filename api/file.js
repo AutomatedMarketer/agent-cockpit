@@ -2,6 +2,8 @@
 // without bouncing the reader out to GitHub. Read-only, same token discipline as
 // api/state.js: the token stays on the server and never reaches the browser.
 
+import { viewGate } from './lib.js'
+
 const GITHUB = 'https://api.github.com'
 const ALLOWED_EXTENSIONS = /\.(md|txt|json|ya?ml)$/i
 const MAX_BYTES = 200_000
@@ -24,6 +26,11 @@ function headers() {
 }
 
 export default async function handler(request, response) {
+  const denied = viewGate(request)
+  if (denied) {
+    response.status(denied.status).json({ error: denied.error })
+    return
+  }
   const owner = process.env.GITHUB_OWNER
   const repo = process.env.GITHUB_REPO
   const branch = process.env.GITHUB_BRANCH || 'main'

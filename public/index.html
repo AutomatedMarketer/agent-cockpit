@@ -94,6 +94,18 @@
   .fire-note.ok { color: var(--ok); }
   .fire-note.bad { color: var(--bad); }
 
+  /* Unlock — the whole page when the view key is missing or wrong. Phone-first: one
+     field, one thumb-sized button, nothing else to read. */
+  .unlock { max-width: 22rem; margin: 18vh auto; padding: 0 1.2rem; text-align: left; }
+  .unlock h1 { font-size: 1.4rem; margin: 0 0 .4rem; }
+  .unlock p { color: var(--muted); font-size: .875rem; }
+  #unlock-form { display: flex; gap: .5rem; margin: 1rem 0 .8rem; }
+  #unlock-key {
+    flex: 1; min-width: 0; font: inherit; font-size: 1rem; color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: .6rem .7rem;
+  }
+
   /* Add-task — an inline form at the top of the To do column. Phone-first: full-width
      fields, one thumb-sized submit button, no dialog. */
   .add-task { padding: .6rem .9rem .7rem; border-bottom: 1px solid var(--line); }
@@ -812,9 +824,10 @@ async function openFile(path) {
   el('viewer-body').textContent = 'Loading…'
   el('viewer').classList.add('open')
   try {
-    const response = await fetch(`/api/file?path=${encodeURIComponent(path)}`)
-    const payload = await response.json()
-    el('viewer-body').textContent = response.ok ? payload.content : (payload.error || 'Could not load this file.')
+    const result = await apiGet(`/api/file?path=${encodeURIComponent(path)}`)
+    el('viewer-body').textContent = result.ok
+      ? result.payload.content
+      : (result.payload.error || 'Could not load this file.')
   } catch (error) {
     el('viewer-body').textContent = 'Could not load this file.'
   }
@@ -856,6 +869,22 @@ document.addEventListener('submit', (event) => {
 el('viewer-close').addEventListener('click', () => el('viewer').classList.remove('open'))
 
 /* ---------- Fire ---------- */
+
+// --- the view key ------------------------------------------------------------------
+// The two read endpoints refuse to answer without it, so the dashboard's own URL is the
+// thing being protected rather than the domain it sits on. Kept in localStorage, not
+// sessionStorage: this is a phone dashboard opened many times a day, and a key you retype
+// every tab is a key you turn off. On a shared device, use Log out.
+const VIEW_KEY_STORE = 'agent-cockpit-view-key'
+const viewKey = () => localStorage.getItem(VIEW_KEY_STORE) || ''
+
+async function apiGet(path) {
+  const key = viewKey()
+  const response = await fetch(path, { headers: key ? { 'x-view-key': key } : {} })
+  let payload = {}
+  try { payload = await response.json() } catch (error) { /* non-JSON error page */ }
+  return { status: response.status, ok: response.ok, payload }
+}
 
 // The fire key never ships in this page's source. First tap asks the endpoint; a 401 means
 // this deployment wants the key (FIRE_KEY), so we prompt once and keep it in sessionStorage
@@ -1084,14 +1113,46 @@ function renderError(message) {
   </div>`
 }
 
-fetch('/api/state')
-  .then(async (response) => {
-    const payload = await response.json()
-    if (!response.ok) throw new Error(payload.error || `Request failed with ${response.status}`)
-    return payload
+function renderUnlock(message) {
+  document.body.innerHTML = `<div class="unlock">
+    <h1>Locked</h1>
+    <p>${escapeHtml(message)}</p>
+    <form id="unlock-form">
+      <input id="unlock-key" type="password" autocomplete="current-password"
+        inputmode="text" placeholder="View key" aria-label="View key" />
+      <button class="fire" type="submit">Unlock</button>
+    </form>
+    <p class="small">The key is the <code>VIEW_KEY</code> set in your hosting environment. It
+    is stored on this device only and never appears in this page's source.</p>
+  </div>`
+  el('unlock-key').focus()
+  el('unlock-form').addEventListener('submit', (event) => {
+    event.preventDefault()
+    const entered = el('unlock-key').value.trim()
+    if (!entered) return
+    localStorage.setItem(VIEW_KEY_STORE, entered)
+    location.reload()
   })
-  .then((payload) => { data = payload; render() })
-  .catch((error) => renderError(error.message))
+}
+
+async function boot() {
+  const result = await apiGet('/api/state')
+  if (result.status === 401) {
+    // A stored key that stopped working is dropped, so the next attempt is a clean one
+    // rather than a loop against a key the deployment no longer accepts.
+    localStorage.removeItem(VIEW_KEY_STORE)
+    renderUnlock('This dashboard needs its view key.')
+    return
+  }
+  if (!result.ok) {
+    renderError(result.payload.error || `Request failed with ${result.status}`)
+    return
+  }
+  data = result.payload
+  render()
+}
+
+boot()
 </script>
 </body>
 </html>

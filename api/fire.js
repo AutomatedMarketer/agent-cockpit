@@ -13,7 +13,6 @@
 //   and never appear in a response or error.
 // - GITHUB_TOKEN stays on the server, as in api/state.js and api/file.js.
 
-import { createHash, timingSafeEqual } from 'node:crypto'
 import { parseSimpleYaml } from './yaml-lite.js'
 
 const GITHUB = 'https://api.github.com'
@@ -39,15 +38,11 @@ export function isValidSlug(slug) {
   return typeof slug === 'string' && slug.length <= MAX_SLUG_LENGTH && SLUG_SHAPE.test(slug)
 }
 
-// Hash both sides to a fixed length first so timingSafeEqual never throws on length
-// mismatch — a plain length check would itself leak the key's length through timing.
-export function keysMatch(provided, expected) {
-  if (typeof provided !== 'string' || typeof expected !== 'string' || !expected) return false
-  return timingSafeEqual(
-    createHash('sha256').update(provided).digest(),
-    createHash('sha256').update(expected).digest()
-  )
-}
+// Imported from lib.js so the fire key and the view key are compared by exactly one
+// implementation. Two copies of a constant-time compare is one copy too many.
+// Re-exported because this module's tests are the ones that cover it.
+import { keysMatch } from './lib.js'
+export { keysMatch }
 
 // FIRE_TRIGGERS must be a JSON object of slug → https URL. Anything else reads as
 // "not configured" — never as "open".

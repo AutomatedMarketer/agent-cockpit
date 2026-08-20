@@ -19,8 +19,7 @@ import {
   fillMarkers,
   sortRunsNewestFirst,
   runsSince,
-  heartbeatStatus
-} from './lib.js'
+  heartbeatStatus, viewGate } from './lib.js'
 import {
   parseWorkflow,
   normaliseSteps,
@@ -357,6 +356,11 @@ export function shapeGoneQuiet(agents, workflows) {
 // --- the handler --------------------------------------------------------------------------
 
 export default async function handler(request, response) {
+  const denied = viewGate(request)
+  if (denied) {
+    response.status(denied.status).json({ error: denied.error })
+    return
+  }
   try {
     const settings = config()
     const { owner, repo, branch } = settings

@@ -126,6 +126,7 @@ In Vercel: **Settings → Environment Variables**. Add these:
 
 | Name | Value |
 |---|---|
+| `VIEW_KEY` | **Required.** The key that unlocks this dashboard - see "Who can read this" |
 | `GITHUB_OWNER` | Your GitHub username |
 | `GITHUB_REPO` | Your team repo's name |
 | `GITHUB_BRANCH` | Leave it out unless your branch is not `main` |
@@ -136,6 +137,31 @@ In Vercel: **Settings → Environment Variables**. Add these:
 (`.env.example` in this repo lists all of them with placeholder values.)
 
 Then **Deployments → the latest one → Redeploy**.
+
+### Who can read this
+
+**This dashboard serves a private repo, so it refuses to answer without a key.**
+
+Set `VIEW_KEY` to any long random string. The first time you open the dashboard it asks for
+it once, keeps it on that device, and never puts it in the page's source. Every device you
+want to read it from gets asked once.
+
+Without `VIEW_KEY` the read endpoints return **503 and serve nothing**. That default is
+deliberate: an unconfigured dashboard has to fail silent, never open.
+
+**Do not rely on your host's access control alone.** Vercel's "Standard Protection" reads
+as though it covers everything, and it exempts your production domain - the exact URL you
+bookmark on your phone. Closing that gap on Vercel's side needs Advanced Deployment
+Protection at $150 a month. This key does the same job for nothing, and it protects the URL
+itself rather than the domain it happens to sit on.
+
+If your team repo is genuinely public and you want a dashboard anyone can read, set
+`PUBLIC_DASHBOARD=true` instead. That is the only way past the key, and it has to be typed
+exactly - `TRUE`, `yes` and `1` all keep it closed.
+
+**On a shared device**, clear the key from the browser's site data when you are done. It is
+in `localStorage` rather than `sessionStorage` on purpose: a phone dashboard opened ten
+times a day whose key has to be retyped every tab is a dashboard whose key gets turned off.
 
 ### 4. If your team repo is private
 

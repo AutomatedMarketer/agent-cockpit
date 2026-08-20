@@ -4,6 +4,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import handler from '../api/state.js'
 
+// This suite covers the endpoint's data logic, not the view gate - that has its own
+// suite in gate.test.mjs. Opting out here keeps every case from carrying a key header.
+process.env.PUBLIC_DASHBOARD = 'true'
+
 // Relative, so the fixture stays correct whatever day the suite runs on.
 const isoAgo = (ms) => new Date(Date.now() - ms).toISOString().replace(/\.\d+Z$/, 'Z')
 const recent = isoAgo(3600_000)
