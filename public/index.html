@@ -86,7 +86,12 @@
     display: inline-flex; align-items: center; gap: .5rem;
   }
   button.fire[disabled] { opacity: .55; }
+  button.fire:not([disabled]) { cursor: pointer; }
+  button.fire:not([disabled]):hover { border-color: var(--accent); }
   .soon { font-size: .625rem; letter-spacing: .05em; text-transform: uppercase; color: var(--warn); border: 1px solid var(--warn); border-radius: 999px; padding: .05rem .4rem; }
+  .fire-note { font-size: .8125rem; }
+  .fire-note.ok { color: var(--ok); }
+  .fire-note.bad { color: var(--bad); }
 
   /* Run list */
   .run { padding: .7rem .9rem; border-bottom: 1px solid var(--line); }
@@ -243,12 +248,12 @@ function ladderHtml(setup) {
 function fireButtonsHtml(workflows) {
   const firing = workflows.filter((workflow) => workflow.fire)
   if (!firing.length) return ''
-  // TODO(step-4): wire these to POST /api/fire { workflow: slug }. api/fire.js is the next
-  // build step; until it lands the buttons render disabled so nothing pretends to work.
+  // Each button POSTs /api/fire { workflow: slug } same-origin. The fire key never lives
+  // in this page's source — the endpoint asks for it (401) and the prompt keeps it in
+  // sessionStorage for this tab only. See fireWorkflow() below.
   const buttons = firing.map((workflow) =>
-    `<button class="fire" type="button" disabled data-workflow="${escapeHtml(workflow.slug)}"
-       title="Run buttons arrive with the fire endpoint (build step 4)">
-       &#9654; ${escapeHtml(workflow.name)} <span class="soon">soon</span></button>`
+    `<button class="fire" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="run">
+       &#9654; ${escapeHtml(workflow.name)}</button>`
   ).join('')
   return `<h2>Run a job</h2><div class="fires">${buttons}</div>`
 }
@@ -355,13 +360,17 @@ function renderWorkflows() {
     const problems = workflow.problems.length
       ? `<ul class="problems">${workflow.problems.map((problem) => `<li>${escapeHtml(problem)}</li>`).join('')}</ul>`
       : ''
-    // TODO(step-4): run posts to /api/fire, pause posts to /api/fire {action:"pause"} —
-    // pausing is a dispatch too (the dashboard itself never writes to the repo, spec B.2).
+    // Run posts /api/fire {action:"run"}, pause posts {action:"pause"} — pausing is a
+    // dispatch too: the agent session edits the workflow file, the dashboard itself never
+    // writes to the repo (spec B.2). Both need trigger.fire: true, because dispatch goes
+    // through the workflow's registered trigger URL.
     const runButton = workflow.fire
-      ? `<button class="fire" type="button" disabled title="Run buttons arrive with the fire endpoint (build step 4)">&#9654; Run <span class="soon">soon</span></button>`
+      ? `<button class="fire" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="run">&#9654; Run</button>`
       : ''
     const pauseButton = workflow.schedule
-      ? `<button class="fire" type="button" disabled title="Pause arrives with the fire endpoint (build step 4)">&#10074;&#10074; Pause <span class="soon">soon</span></button>`
+      ? (workflow.fire
+        ? `<button class="fire" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="pause">&#10074;&#10074; Pause</button>`
+        : `<button class="fire" type="button" disabled title="Pause dispatches through this workflow's trigger URL — add fire: true to its trigger block first">&#10074;&#10074; Pause</button>`)
       : ''
     return `<div class="panel card ${workflow.state}">
       <div class="row between">
@@ -460,8 +469,82 @@ async function openFile(path) {
 document.addEventListener('click', (event) => {
   const file = event.target.closest('.file[data-path]')
   if (file) openFile(file.dataset.path)
+  const fire = event.target.closest('button[data-fire]')
+  if (fire && !fire.disabled) fireWorkflow(fire)
 })
 el('viewer-close').addEventListener('click', () => el('viewer').classList.remove('open'))
+
+/* ---------- Fire ---------- */
+
+// The fire key never ships in this page's source. First tap asks the endpoint; a 401 means
+// this deployment wants the key (FIRE_KEY), so we prompt once and keep it in sessionStorage
+// for this tab only. Deployments with PUBLIC_FIRE=true never prompt at all.
+const FIRE_KEY_STORE = 'agent-cockpit-fire-key'
+
+function fireNoteFor(button) {
+  let note = button.parentElement.querySelector('.fire-note')
+  if (!note) {
+    note = document.createElement('span')
+    note.className = 'fire-note'
+    button.parentElement.appendChild(note)
+  }
+  return note
+}
+
+async function callFire(slug, action, key) {
+  const headers = { 'Content-Type': 'application/json' }
+  if (key) headers['x-fire-key'] = key
+  const response = await fetch('/api/fire', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ workflow: slug, action })
+  })
+  let payload = {}
+  try { payload = await response.json() } catch (error) { /* non-JSON error page */ }
+  return { status: response.status, ok: response.ok, payload }
+}
+
+async function fireWorkflow(button) {
+  const slug = button.dataset.fire
+  const action = button.dataset.action === 'pause' ? 'pause' : 'run'
+  const note = fireNoteFor(button)
+  const original = button.innerHTML
+  button.disabled = true
+  button.innerHTML = action === 'pause' ? 'Pausing&hellip;' : 'Starting&hellip;'
+  note.className = 'fire-note'
+  note.textContent = ''
+  try {
+    let key = sessionStorage.getItem(FIRE_KEY_STORE) || ''
+    let result = await callFire(slug, action, key)
+    if (result.status === 401) {
+      const entered = window.prompt(
+        'This dashboard needs its fire key to dispatch jobs.\n\nPaste the FIRE_KEY you set in the hosting environment — it is kept in this tab only, never in the page.'
+      )
+      if (entered !== null && entered.trim()) {
+        key = entered.trim()
+        sessionStorage.setItem(FIRE_KEY_STORE, key)
+        result = await callFire(slug, action, key)
+      }
+    }
+    if (result.ok) {
+      note.className = 'fire-note ok'
+      if (result.payload.sessionUrl) {
+        note.innerHTML = `Sent &middot; <a href="${escapeHtml(result.payload.sessionUrl)}" rel="noreferrer noopener">watch live</a>`
+      } else {
+        note.textContent = action === 'pause' ? 'Pause sent to the agent.' : 'Job sent.'
+      }
+    } else {
+      if (result.status === 401) sessionStorage.removeItem(FIRE_KEY_STORE)
+      note.className = 'fire-note bad'
+      note.textContent = result.payload.error || `Dispatch failed (${result.status}).`
+    }
+  } catch (error) {
+    note.className = 'fire-note bad'
+    note.textContent = 'Could not reach the fire endpoint.'
+  }
+  button.disabled = false
+  button.innerHTML = original
+}
 
 /* ---------- Connections ---------- */
 

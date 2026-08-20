@@ -36,8 +36,50 @@ here are a port of that template's own `scripts/lib/` contract, so a file that p
 renders here.
 
 **The one rule: this dashboard reads git and never writes it.** Dispatching work is the fire
-endpoint's job (`api/fire.js`, a separate build step — until it lands, run buttons render
-disabled).
+endpoint's job (`api/fire.js`): tap a Run button → the endpoint POSTs the workflow's
+registered trigger URL server-side → the agent runs in the cloud → you get a live session
+link. Pause is a dispatch too — the payload instructs the *agent session* to edit the
+workflow file and commit; the dashboard itself still never writes.
+
+## The fire endpoint
+
+`POST /api/fire` with `{ "workflow": "<slug>", "action": "run" | "pause" }` (action
+defaults to `run`). It refuses anything that is not:
+
+- authorised (see the two modes below),
+- a kebab-case slug that is **registered in `FIRE_TRIGGERS`**, and
+- a real workflow in the team repo with `trigger.fire: true`.
+
+It answers `{ ok, sessionUrl }` when the trigger returns a session link, else
+`{ ok, accepted: true }`. Trigger timeouts and non-2xx answers come back as a plain 502 —
+never the trigger's URL or body.
+
+Two env vars make it live (with neither `FIRE_KEY` nor `PUBLIC_FIRE` set it answers `503` —
+closed, never open):
+
+| Name | Value |
+|---|---|
+| `FIRE_KEY` | A long random string, e.g. `openssl rand -hex 32`. Callers must send it in the `x-fire-key` header. |
+| `FIRE_TRIGGERS` | One JSON object mapping workflow slug → its Claude routine trigger URL: `{"monday-brief":"https://…"}`. Trigger URLs are secret-adjacent — env var only, never the repo. |
+
+### How the browser authenticates (two modes)
+
+The page never ships `FIRE_KEY` in its source. Pick one:
+
+1. **Prompt-once (default).** The first tap gets a 401, the page prompts you for the fire
+   key once, and keeps it in `sessionStorage` for that tab only. Wrong key → the stored
+   value is dropped and you are asked again next tap.
+2. **`PUBLIC_FIRE=true`.** Skips the key for same-origin browser calls. The endpoint
+   enforces this with the `Sec-Fetch-Site` / `Origin` headers — but that is best-effort,
+   since non-browser clients can forge headers. Use it **only** on deployments already
+   locked behind Vercel's own authentication (private, team-only access). Anything but the
+   exact string `true` still requires the key.
+
+Neither mode rate-limits. Every accepted dispatch starts a real cloud session against your
+plan's daily routine cap, and every rejected one still costs a GitHub read — so keep the
+deployment private, keep the key long, and don't hand the URL around. If you need throttling,
+put the deployment behind Vercel's WAF / rate-limit rules; the endpoint deliberately stays
+simple.
 
 ## Deploy it
 
@@ -48,7 +90,7 @@ Press **Fork** at the top of the GitHub page.
 ### 2. Connect it to Vercel
 
 Go to `vercel.com/new`, pick your fork, press **Deploy**. There is no build step and no
-`npm install` — it is a static page and two small functions.
+`npm install` — it is a static page and three small functions.
 
 The first deploy will show an error telling you it cannot read your repo. That is expected.
 Step 3 fixes it.
@@ -63,6 +105,10 @@ In Vercel: **Settings → Environment Variables**. Add these:
 | `GITHUB_REPO` | Your team repo's name |
 | `GITHUB_BRANCH` | Leave it out unless your branch is not `main` |
 | `GITHUB_TOKEN` | **Only if your team repo is private** — see below |
+| `FIRE_KEY` | **Only if you want the Run/Pause buttons** — see "The fire endpoint" |
+| `FIRE_TRIGGERS` | Same — the slug → trigger URL map, as one JSON object |
+
+(`.env.example` in this repo lists all of them with placeholder values.)
 
 Then **Deployments → the latest one → Redeploy**.
 
@@ -91,11 +137,11 @@ There is no chat box on this page, on purpose. A chat box would need an Anthropi
 which is billed per token and would quietly break the promise that this costs nothing beyond
 your Claude plan.
 
-Everything you see here is free to run: a static page, two functions, and GitHub's read API.
+Everything you see here is free to run: a static page, three functions, and GitHub's read API.
 
 ## Runs anywhere
 
-It is a static page plus two serverless functions using nothing but `fetch`. Zero npm
+It is a static page plus three serverless functions using nothing but `fetch`. Zero npm
 dependencies. It works on Vercel out of the box; Cloudflare Pages and Netlify both work with
 their own function conventions.
 
@@ -107,8 +153,11 @@ npm test
 
 The suite covers frontmatter and YAML parsing, workflow validation (matching the template's
 rules word for word), next-run computation for every schedule form, gone-quiet and heartbeat
-staleness logic, the file endpoint's path safety, and an end-to-end pass over a stubbed
-GitHub for every screen's data. No network, no keys, no install.
+staleness logic, the file endpoint's path safety, an end-to-end pass over a stubbed
+GitHub for every screen's data, and the fire endpoint end to end — auth (401/503, both
+modes), slug and action validation, repo + `trigger.fire` checks, run and pause dispatch,
+502 on trigger failure, and a no-secret-ever-leaks assertion on every path. No network,
+no keys, no install.
 
 ## What the states mean
 

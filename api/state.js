@@ -9,8 +9,8 @@
 // files each screen needs. The GitHub token, when there is one, stays on the server. A
 // private team repo works; the token never reaches the browser.
 //
-// The dashboard READS git. It never writes. Dispatching work is api/fire.js's job, which
-// is a separate build step and is not here yet — the UI renders its buttons disabled.
+// The dashboard READS git. It never writes. Dispatching work is api/fire.js's job — even
+// "pause" is a dispatch there, instructing the agent session to make the edit itself.
 
 import {
   parseFrontmatter,
