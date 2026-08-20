@@ -25,6 +25,7 @@ test('up next holds only workflows due inside 48 hours, soonest first', () => {
       workflow({ slug: 'unscheduled', name: 'Unscheduled', nextRun: null })
     ],
     [],
+    [],
     NOW
   )
   assert.deepEqual(upNext.map((card) => card.slug), ['soon', 'later'])
@@ -38,6 +39,7 @@ test('a run with status "running" or no status at all is running', () => {
       { agent: 'research', workflow: 'monday-brief', status: 'running', started_at: iso(-2 * HOUR), session_url: 'https://claude.ai/code/s1' },
       { agent: 'email', started_at: iso(-5 * HOUR) }
     ],
+    [],
     NOW
   )
   assert.deepEqual(running.map((card) => card.name), ['monday-brief', 'email'])
@@ -49,7 +51,7 @@ test('a run with status "running" or no status at all is running', () => {
 test('a fresh run with a provisional status but no finished_at is still running for 30 minutes', () => {
   const fresh = { agent: 'research', status: 'ok', started_at: iso(-10 * 60_000), summary: 'kicked off' }
   const settled = { agent: 'research', status: 'ok', started_at: iso(-HOUR), summary: 'settled' }
-  const { running, done } = shapeBoard([], [fresh, settled], NOW)
+  const { running, done } = shapeBoard([], [fresh, settled], [], NOW)
   assert.deepEqual(running.map((card) => card.started_at), [fresh.started_at])
   assert.deepEqual(done.map((card) => card.summary), ['settled'])
 })
@@ -58,6 +60,7 @@ test('a stamped finished_at is never running, whatever the status says', () => {
   const { running, done } = shapeBoard(
     [],
     [{ agent: 'research', status: 'running', started_at: iso(-5 * 60_000), finished_at: iso(-60_000), summary: 'over' }],
+    [],
     NOW
   )
   assert.deepEqual(running, [])
@@ -72,6 +75,7 @@ test('done holds 14 days of finished runs, newest first, with summary and watch 
       { agent: 'research', workflow: 'monday-brief', status: 'ok', started_at: iso(-DAY), summary: 'Brief written.', session_url: 'https://claude.ai/code/s2' },
       { agent: 'research', status: 'ok', started_at: iso(-20 * DAY), summary: 'Ancient history.' }
     ],
+    [],
     NOW
   )
   assert.deepEqual(done.map((card) => card.name), ['monday-brief', 'email'])
@@ -93,11 +97,11 @@ test('every terminal status lands in done; anything else without a finish does n
     started_at: iso(-DAY),
     summary: status
   }))
-  const { running, done } = shapeBoard([], runs, NOW)
+  const { running, done } = shapeBoard([], runs, [], NOW)
   assert.deepEqual(done.map((card) => card.status), ['ok', 'partial', 'blocked', 'failed'])
   assert.deepEqual(running, [], 'an hour-old unknown status is neither running nor done')
 })
 
-test('empty inputs give three empty columns, not a crash', () => {
-  assert.deepEqual(shapeBoard([], [], NOW), { upNext: [], running: [], done: [] })
+test('empty inputs give four empty columns, not a crash', () => {
+  assert.deepEqual(shapeBoard([], [], [], NOW), { todo: [], upNext: [], running: [], done: [] })
 })

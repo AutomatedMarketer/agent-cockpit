@@ -94,9 +94,11 @@
   .fire-note.ok { color: var(--ok); }
   .fire-note.bad { color: var(--bad); }
 
-  /* Board — columns stack on a phone (one-handed rule), sit side by side on wide screens */
+  /* Board — four columns stack on a phone (one-handed rule), pair up on medium screens,
+     and sit side by side only when there is genuinely room for four. */
   .board { display: grid; grid-template-columns: 1fr; gap: .6rem; }
-  @media (min-width: 48rem) { .board { grid-template-columns: repeat(3, 1fr); align-items: start; } }
+  @media (min-width: 48rem) { .board { grid-template-columns: repeat(2, 1fr); align-items: start; } }
+  @media (min-width: 64rem) { .board { grid-template-columns: repeat(4, 1fr); } }
   .board .col-title { display: flex; justify-content: space-between; align-items: baseline; padding: .55rem .9rem; border-bottom: 1px solid var(--line); font-size: .6875rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
   .board .kcard { padding: .6rem .9rem; border-bottom: 1px solid var(--line); font-size: .875rem; }
   .board .kcard:last-child { border-bottom: 0; }
@@ -171,6 +173,11 @@
   nav a .glyph { font-size: 1.05rem; line-height: 1; font-weight: 400; }
   nav a.active { color: var(--accent); }
 
+  /* "Talk to your team" — a plain link out to claude.ai/code, no API call behind it.
+     In the header on every size; the sidebar copy only exists on desktop. */
+  .talk-header { margin-left: auto; font-size: .8125rem; white-space: nowrap; }
+  nav .talk { display: none; }
+
   /* Desktop: the same nav markup becomes a fixed LEFT sidebar; below 48rem nothing changes
      and the bottom thumb bar stays exactly as it is. Pure CSS, no script involved. */
   @media (min-width: 48rem) {
@@ -179,15 +186,22 @@
       top: 0; bottom: 0; right: auto; width: var(--sidenav-w);
       border-top: 0; border-right: 1px solid var(--line);
       padding-bottom: 0;
+      display: flex; flex-direction: column;
     }
     nav .tabs {
       grid-template-columns: 1fr; align-content: start;
-      max-width: none; margin: 0; height: 100%; padding-top: 1rem;
+      max-width: none; margin: 0; flex: 1; min-height: 0; padding-top: 1rem;
     }
     nav a {
       flex-direction: row; justify-content: flex-start; gap: .65rem;
       height: 3rem; padding: 0 1.1rem; font-size: .8125rem;
     }
+    nav .talk {
+      display: flex; flex: none; height: 3rem;
+      border-top: 1px solid var(--line);
+      color: var(--muted); font-weight: 600;
+    }
+    nav .talk:hover { color: var(--accent); }
   }
 
   /* Agent identity colors — set inline from AGENT_PALETTE. Identity (who owns this) is a
@@ -219,6 +233,8 @@
   <header>
     <h1 id="screen-title">Today</h1>
     <span id="repo-link" class="small"></span>
+    <a class="talk-header" href="https://claude.ai/code" target="_blank" rel="noreferrer noopener"
+       title="Open a Claude session on your team repo - your orchestrator, your rules">Talk to your team</a>
   </header>
   <p class="sub" id="strap">Reading your repo…</p>
 
@@ -248,6 +264,8 @@
     <a href="#memory" data-screen="memory"><span class="glyph">&#9632;</span>Memory</a>
     <a href="#connections" data-screen="connections"><span class="glyph">&#9673;</span>Connections</a>
   </div>
+  <a class="talk" href="https://claude.ai/code" target="_blank" rel="noreferrer noopener"
+     title="Open a Claude session on your team repo - your orchestrator, your rules"><span class="glyph">&#9998;</span>Talk to your team</a>
 </nav>
 
 <script>
@@ -400,6 +418,17 @@ function boardColumnHtml(title, cards, emptyText) {
 }
 
 function boardHtml(board) {
+  // To do cards come from tasks/*.md in the team repo — read-only here. Creating and
+  // moving tasks stays with the agents (and later the dispatch path), not this page.
+  // The left border is the `for:` agent's identity color; no agent, no color.
+  const todo = (board.todo ?? []).map((card) =>
+    `<div class="kcard agent-accent"${accentStyle(card.for)}>
+      <div class="row between">
+        <b>${escapeHtml(card.title)}</b>
+        ${card.doing ? '<span class="chip on">doing</span>' : ''}
+      </div>
+      ${ownerChipHtml(card.for)}
+    </div>`)
   const upNext = board.upNext.map((card) =>
     `<div class="kcard agent-accent"${accentStyle(card.owner)}>
       <div class="row between">
@@ -427,6 +456,7 @@ function boardHtml(board) {
     </div>`
   })
   return `<div class="board">
+    ${boardColumnHtml('To do', todo, 'No open tasks in tasks/ yet.')}
     ${boardColumnHtml('Up Next', upNext, 'Nothing scheduled in the next 48 hours.')}
     ${boardColumnHtml('Running', running, 'Nothing is running right now.')}
     ${boardColumnHtml('Done', done, 'No finished runs in the last 14 days.')}
@@ -434,7 +464,7 @@ function boardHtml(board) {
 }
 
 function renderToday() {
-  const board = data.board ?? { upNext: [], running: [], done: [] }
+  const board = data.board ?? { todo: [], upNext: [], running: [], done: [] }
   const due = data.workflows
     .filter((workflow) => workflow.nextRun && new Date(workflow.nextRun).getTime() - Date.now() <= 86400000)
     .sort((a, b) => String(a.nextRun).localeCompare(String(b.nextRun)))

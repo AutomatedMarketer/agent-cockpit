@@ -222,7 +222,32 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, on
   ]
 }
 
-// The Board: three columns for the Today screen — Up Next, Running, Done.
+// Tasks: tasks/*.md is the human to-do list living next to the agents' run logs.
+// Frontmatter carries `status: todo|doing|done` and an optional `for: <agent-slug>`;
+// the first heading in the body (or, failing that, the filename) is the title. A file
+// with no frontmatter at all still parses — its status defaults to todo, because a task
+// someone bothered to write down is work until something says otherwise.
+const TASK_STATUSES = ['todo', 'doing', 'done']
+
+export function parseTasks(taskFiles) {
+  return taskFiles.map(([path, body]) => {
+    const source = body ?? ''
+    const data = parseFrontmatter(source)
+    const status = TASK_STATUSES.includes(data.status) ? data.status : 'todo'
+    const withoutFrontmatter = source.replace(/^---\r?\n[\s\S]*?\r?\n---/, '')
+    const heading = /^#{1,6}\s+(.+?)\s*$/m.exec(withoutFrontmatter)
+    const slug = path.split('/').pop().replace(/\.md$/, '')
+    return {
+      slug,
+      path,
+      title: heading ? heading[1] : slug,
+      status,
+      for: typeof data.for === 'string' && data.for ? data.for : null
+    }
+  })
+}
+
+// The Board: four columns for the Today screen — To do, Up Next, Running, Done.
 //
 // Running-detection rule, decided from the run-log shape (logs carry started_at, status,
 // summary, session_url; finished_at only when the agent came back to stamp the result):
@@ -244,7 +269,24 @@ function isRunningLog(run, now) {
   return Number.isFinite(started) && now - started <= RUNNING_GRACE_MINUTES * 60_000
 }
 
-export function shapeBoard(workflows, runs, now = Date.now()) {
+export function shapeBoard(workflows, runs, tasks = [], now = Date.now()) {
+  // To do: open tasks (todo and doing), oldest first — task filenames are date-prefixed
+  // by convention, so path order is age order. `doing` rides along as a flag rather than
+  // its own column: on a phone four columns already stack tall enough.
+  //
+  // Done tasks add no card of their own. A finished task only earns its place in Done
+  // through the run log the agent wrote — the run card IS the record, and carding the
+  // task file next to it would show the same work twice.
+  const todo = tasks
+    .filter((task) => task.status === 'todo' || task.status === 'doing')
+    .sort((a, b) => a.path.localeCompare(b.path))
+    .map((task) => ({
+      slug: task.slug,
+      title: task.title,
+      for: task.for,
+      doing: task.status === 'doing'
+    }))
+
   const upNext = workflows
     .filter((workflow) => {
       if (!workflow.nextRun) return false
@@ -289,7 +331,7 @@ export function shapeBoard(workflows, runs, now = Date.now()) {
   done.sort((a, b) => b._at - a._at)
   for (const card of done) delete card._at
 
-  return { upNext, running, done }
+  return { todo, upNext, running, done }
 }
 
 export function shapeGoneQuiet(agents, workflows) {
@@ -329,6 +371,7 @@ export default async function handler(request, response) {
     const agentPaths = paths.filter((path) => path.startsWith(`${AGENT_DIR}/`) && path.endsWith('.md'))
     const runPaths = paths.filter((path) => /^runs\/\d{4}-\d{2}\/.+\.json$/.test(path))
     const workflowPaths = paths.filter((path) => /^workflows\/[^/]+\.ya?ml$/.test(path))
+    const taskPaths = paths.filter((path) => /^tasks\/[^/]+\.md$/.test(path))
     const skillSlugs = [
       ...new Set(
         paths
@@ -341,12 +384,13 @@ export default async function handler(request, response) {
     const ONBOARDING_STATE = '.agent-team/onboarding-state.md'
     const hasOnboarding = paths.includes(ONBOARDING_STATE)
 
-    const [agentFiles, runFiles, brainFiles, workflowFiles, runtimesSource, tilesSource, onboardingSource] =
+    const [agentFiles, runFiles, brainFiles, workflowFiles, taskFiles, runtimesSource, tilesSource, onboardingSource] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(BRAIN_FILES.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(workflowPaths.map(async (path) => [path, await rawFile(settings, path)])),
+        Promise.all(taskPaths.map(async (path) => [path, await rawFile(settings, path)])),
         hasRuntimes ? rawFile(settings, 'runtimes.yml') : null,
         hasTiles ? rawFile(settings, 'tiles.yml') : null,
         hasOnboarding ? rawFile(settings, ONBOARDING_STATE) : null
@@ -389,6 +433,7 @@ export default async function handler(request, response) {
     if (agents.length) known.agents = agents.map((agent) => agent.slug)
     if (skillSlugs.length) known.skills = skillSlugs
     const workflows = shapeWorkflows(workflowFiles, runs, known, now)
+    const tasks = parseTasks(taskFiles)
 
     // Heartbeat files named by the registry, fetched only if the tree actually has them.
     const registry = runtimesSource ? parseSimpleYaml(runtimesSource) : { runtimes: [] }
@@ -421,7 +466,7 @@ export default async function handler(request, response) {
       unparseableRuns: unparseable,
       overnight: runsSince(runs, undefined, now).slice(0, MAX_RUNS_RETURNED),
       goneQuiet: shapeGoneQuiet(agents, workflows),
-      board: shapeBoard(workflows, runs, now),
+      board: shapeBoard(workflows, runs, tasks, now),
       brain,
       workflows,
       runtimes,

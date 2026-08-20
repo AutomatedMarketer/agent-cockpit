@@ -29,6 +29,8 @@ const TREE = {
     { type: 'blob', path: 'skills/pull-calendar/SKILL.md' },
     { type: 'blob', path: 'skills/write-brief/SKILL.md' },
     { type: 'blob', path: 'skills/scan-inbox/SKILL.md' },
+    { type: 'blob', path: 'tasks/2026-08-19-draft-post.md' },
+    { type: 'blob', path: 'tasks/2026-08-18-call-supplier.md' },
     { type: 'blob', path: 'runtimes.yml' },
     { type: 'blob', path: 'tiles.yml' },
     { type: 'blob', path: 'wiki/INDEX.md', size: 2048 },
@@ -80,6 +82,9 @@ const FILES = {
   'workflows/broken.yml': 'name: Broken\nsteps: []\n',
   'workflows/hourly-sweep.yml':
     'name: Hourly Sweep\nowner: email\nsteps: [scan-inbox]\ntrigger:\n  schedule: "every 2 hours"\noutput: inbox/{date}/sweep.md\n',
+  'tasks/2026-08-19-draft-post.md':
+    '---\nstatus: doing\nfor: email\n---\n\n# Draft the launch post\n\nHalf-written.\n',
+  'tasks/2026-08-18-call-supplier.md': '# Call the supplier\n\nNo frontmatter on purpose.\n',
   'runtimes.yml':
     'runtimes:\n  - name: Hermes\n    kind: agent-runtime\n    url: http://hermes.tail.ts.net:8080\n    heartbeat: runs/heartbeat/hermes.json\n  - name: OpenClaw\n    kind: gateway\n    url: http://openclaw.tail.ts.net:3000\n    heartbeat: runs/heartbeat/openclaw.json\n',
   'tiles.yml': 'hero: pipeline-value\nchosen: [inbox, calendar]\n'
@@ -258,8 +263,14 @@ test('gone-quiet lists agents and workflows that stopped, and nothing that is fi
   assert.deepEqual(body.goneQuiet, [], 'this fixture has nothing quiet')
 })
 
-test('the board ships in the payload with its three columns filled from the repo', async () => {
+test('the board ships in the payload with its four columns filled from the repo', async () => {
   const { body } = await run()
+  // To do: both task files — oldest first by date-prefixed filename, the frontmatter-less
+  // one tolerated as a plain todo, the doing one flagged and colored by its agent.
+  assert.deepEqual(body.board.todo, [
+    { slug: '2026-08-18-call-supplier', title: 'Call the supplier', for: null, doing: false },
+    { slug: '2026-08-19-draft-post', title: 'Draft the launch post', for: 'email', doing: true }
+  ])
   // Up Next: the two-hour sweep is always inside the 48-hour window; the weekly brief
   // only lands here on the right days, so the sweep is the one deterministic member.
   const sweep = body.board.upNext.find((card) => card.slug === 'hourly-sweep')

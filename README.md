@@ -10,7 +10,7 @@ You deploy it. You own it. Nothing here runs on anyone else's infrastructure.
 
 | Screen | What it shows |
 |---|---|
-| **Today** | Setup progress (the five rungs), the Board — a three-column kanban of what's up next (48 h), running now, and done (last 14 days) — what is due next, what has gone quiet, and one-tap job buttons |
+| **Today** | Setup progress (the five rungs), the Board — a four-column kanban of open tasks (`tasks/*.md`), what's up next (48 h), running now, and done (last 14 days) — what is due next, what has gone quiet, and one-tap job buttons |
 | **Team** | Every agent: role, model, last run, and its state — working, needs a look, gone quiet, or never run. Tap one to see its recent runs and live session links |
 | **Workflows** | The board. Each named job: its chain of steps, trigger, schedule, last result, next run |
 | **Memory** | Your vault, browsable: folder tree, index files, search, source filter |
@@ -26,6 +26,7 @@ endpoint to reverse-engineer.
 | `.claude/agents/*.md` | Team rail |
 | `workflows/*.yml` | Workflow board, job buttons, due-next, setup |
 | `runs/YYYY-MM/*.json` | Board (Running/Done columns), last-run columns, gone-quiet |
+| `tasks/*.md` | Board (To do column) — frontmatter `status: todo\|doing\|done`, optional `for: <agent-slug>`; first heading (or filename) is the title. Read-only: this page never creates or moves a task. A `done` task earns its Done card through its run log, never twice |
 | `runs/heartbeat/*.json` | Live/silent lights on the Connections rail |
 | `runtimes.yml` | Connections rail entries |
 | `tiles.yml`, `shared/*.md`, `skills/` | Setup ladder |
@@ -135,6 +136,13 @@ On a desktop-width window the same nav becomes a left sidebar, the Workflows scr
 7-day Schedule strip with a legend, and every agent keeps one stable identity color across
 Team, Workflows, Board, and Schedule.
 
+## Talk to your team
+
+The header (and the bottom of the desktop sidebar) carries a **Talk to your team** link: it
+opens [claude.ai/code](https://claude.ai/code) in a new tab, where you start a Claude session
+on your team repo — your orchestrator, your rules. It is a plain link, nothing more: no API
+call, no key, no state.
+
 ## No API key needed
 
 There is no chat box on this page, on purpose. A chat box would need an Anthropic API key,
@@ -156,7 +164,8 @@ npm test
 ```
 
 The suite covers frontmatter and YAML parsing, workflow validation (matching the template's
-rules word for word), next-run computation for every schedule form, gone-quiet and heartbeat
+rules word for word), next-run computation for every schedule form, task parsing and the
+Board's four columns, gone-quiet and heartbeat
 staleness logic, the file endpoint's path safety, an end-to-end pass over a stubbed
 GitHub for every screen's data, and the fire endpoint end to end — auth (401/503, both
 modes), slug and action validation, repo + `trigger.fire` checks, run and pause dispatch,
