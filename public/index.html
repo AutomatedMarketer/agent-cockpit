@@ -93,6 +93,18 @@
   .fire-note.ok { color: var(--ok); }
   .fire-note.bad { color: var(--bad); }
 
+  /* Board — columns stack on a phone (one-handed rule), sit side by side on wide screens */
+  .board { display: grid; grid-template-columns: 1fr; gap: .6rem; }
+  @media (min-width: 48rem) { .board { grid-template-columns: repeat(3, 1fr); align-items: start; } }
+  .board .col-title { display: flex; justify-content: space-between; align-items: baseline; padding: .55rem .9rem; border-bottom: 1px solid var(--line); font-size: .6875rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+  .board .kcard { padding: .6rem .9rem; border-bottom: 1px solid var(--line); font-size: .875rem; }
+  .board .kcard:last-child { border-bottom: 0; }
+  .board .kcard .summary { margin: .15rem 0 0; font-size: .8125rem; color: var(--muted); }
+  .st { font-weight: 700; }
+  .st-ok { color: var(--ok); }
+  .st-partial, .st-blocked { color: var(--warn); }
+  .st-failed { color: var(--bad); }
+
   /* Run list */
   .run { padding: .7rem .9rem; border-bottom: 1px solid var(--line); }
   .run:last-child { border-bottom: 0; }
@@ -258,26 +270,57 @@ function fireButtonsHtml(workflows) {
   return `<h2>Run a job</h2><div class="fires">${buttons}</div>`
 }
 
-function runsListHtml(runs, emptyText) {
-  if (!runs.length) return `<div class="panel empty">${escapeHtml(emptyText)}</div>`
-  const rows = runs.map((run) => {
-    const artifact = (run.artifacts || [])[0]
-    const links = [
-      run.session_url ? `<a href="${escapeHtml(run.session_url)}" rel="noreferrer noopener">transcript</a>` : '',
-      artifact ? `<a href="${escapeHtml(blobUrl(artifact))}" rel="noreferrer noopener">output</a>` : ''
-    ].filter(Boolean).join(' &middot; ')
-    return `<div class="run">
+// The Board lives here on Today, in the slot Overnight used to hold, rather than as a
+// sixth bottom-nav tab: six tabs on a 375px phone leave ~62px per tab, which clips the
+// "Connections" label and shrinks every thumb target — five is the comfortable maximum.
+// The Done column carries everything the Overnight feed used to show, and more.
+const STATUS_GLYPH = { ok: '&#10003;', partial: '&#9680;', blocked: '&#9940;', failed: '&#10007;' }
+
+function boardColumnHtml(title, cards, emptyText) {
+  const rows = cards.length
+    ? cards.join('')
+    : `<div class="empty">${escapeHtml(emptyText)}</div>`
+  return `<div class="panel">
+    <div class="col-title"><span>${escapeHtml(title)}</span><span>${cards.length}</span></div>
+    ${rows}</div>`
+}
+
+function boardHtml(board) {
+  const upNext = board.upNext.map((card) =>
+    `<div class="kcard">
       <div class="row between">
-        <span><b>${escapeHtml(run.agent)}</b> <span class="chip">${escapeHtml(run.trigger ?? '')}</span></span>
-        <span class="small muted">${escapeHtml(ago(run.started_at))} &middot; ${escapeHtml(run.status ?? '')}</span>
+        <b>${escapeHtml(card.name)}</b>
+        <span class="small muted">${escapeHtml(until(card.when) ?? '')}</span>
       </div>
-      <p class="summary">${escapeHtml(run.summary ?? '')}${links ? ` &middot; ${links}` : ''}</p>
+      ${card.owner ? `<span class="chip">owner: ${escapeHtml(card.owner)}</span>` : ''}
+    </div>`)
+  const running = board.running.map((card) =>
+    `<div class="kcard">
+      <div class="row between">
+        <b>${escapeHtml(card.name)}</b>
+        <span class="small muted">started ${escapeHtml(ago(card.started_at))}</span>
+      </div>
+      ${card.session_url ? `<a class="small" href="${escapeHtml(card.session_url)}" rel="noreferrer noopener">watch</a>` : ''}
+    </div>`)
+  const done = board.done.map((card) => {
+    const glyph = STATUS_GLYPH[card.status] ?? '&#10003;'
+    return `<div class="kcard">
+      <div class="row between">
+        <span><span class="st st-${escapeHtml(card.status)}">${glyph}</span> <b>${escapeHtml(card.name)}</b></span>
+        <span class="small muted">${escapeHtml(ago(card.started_at))}</span>
+      </div>
+      <p class="summary">${escapeHtml(card.summary)}${card.session_url ? ` &middot; <a href="${escapeHtml(card.session_url)}" rel="noreferrer noopener">watch</a>` : ''}</p>
     </div>`
-  }).join('')
-  return `<div class="panel">${rows}</div>`
+  })
+  return `<div class="board">
+    ${boardColumnHtml('Up Next', upNext, 'Nothing scheduled in the next 48 hours.')}
+    ${boardColumnHtml('Running', running, 'Nothing is running right now.')}
+    ${boardColumnHtml('Done', done, 'No finished runs in the last 14 days.')}
+  </div>`
 }
 
 function renderToday() {
+  const board = data.board ?? { upNext: [], running: [], done: [] }
   const due = data.workflows
     .filter((workflow) => workflow.nextRun && new Date(workflow.nextRun).getTime() - Date.now() <= 86400000)
     .sort((a, b) => String(a.nextRun).localeCompare(String(b.nextRun)))
@@ -296,7 +339,7 @@ function renderToday() {
   el('today').innerHTML =
     ladderHtml(data.setup) +
     fireButtonsHtml(data.workflows) +
-    `<h2>Overnight</h2>` + runsListHtml(data.overnight, 'Nothing ran in the last 24 hours.') +
+    `<h2>Board</h2>` + boardHtml(board) +
     `<h2>Due next</h2>` + dueHtml +
     `<h2>Gone quiet</h2>` + quietHtml +
     // Spec B.2: remaining routine runs are linked, never scraped — there is no API for them.

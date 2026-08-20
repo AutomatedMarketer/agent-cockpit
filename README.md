@@ -10,7 +10,7 @@ You deploy it. You own it. Nothing here runs on anyone else's infrastructure.
 
 | Screen | What it shows |
 |---|---|
-| **Today** | Setup progress (the five rungs), what ran overnight, what is due next, what has gone quiet, and one-tap job buttons |
+| **Today** | Setup progress (the five rungs), the Board — a three-column kanban of what's up next (48 h), running now, and done (last 14 days) — what is due next, what has gone quiet, and one-tap job buttons |
 | **Team** | Every agent: role, model, last run, and its state — working, needs a look, gone quiet, or never run. Tap one to see its recent runs and live session links |
 | **Workflows** | The board. Each named job: its chain of steps, trigger, schedule, last result, next run |
 | **Memory** | Your vault, browsable: folder tree, index files, search, source filter |
@@ -25,7 +25,7 @@ endpoint to reverse-engineer.
 |---|---|
 | `.claude/agents/*.md` | Team rail |
 | `workflows/*.yml` | Workflow board, job buttons, due-next, setup |
-| `runs/YYYY-MM/*.json` | Overnight feed, last-run columns, gone-quiet |
+| `runs/YYYY-MM/*.json` | Board (Running/Done columns), last-run columns, gone-quiet |
 | `runs/heartbeat/*.json` | Live/silent lights on the Connections rail |
 | `runtimes.yml` | Connections rail entries |
 | `tiles.yml`, `shared/*.md`, `skills/` | Setup ladder |

@@ -24,6 +24,7 @@ const TREE = {
     { type: 'blob', path: 'shared/business-brain.md' },
     { type: 'blob', path: 'shared/writing-rules.md' },
     { type: 'blob', path: 'workflows/monday-brief.yml' },
+    { type: 'blob', path: 'workflows/hourly-sweep.yml' },
     { type: 'blob', path: 'workflows/broken.yml' },
     { type: 'blob', path: 'skills/pull-calendar/SKILL.md' },
     { type: 'blob', path: 'skills/write-brief/SKILL.md' },
@@ -77,6 +78,8 @@ const FILES = {
   'workflows/monday-brief.yml':
     'name: Monday Brief\nowner: research\nsteps: [pull-calendar, scan-inbox, write-brief]\ntrigger:\n  schedule: "weekly mon 06:00"\n  fire: true\noutput: inbox/{date}/monday-brief.md\n',
   'workflows/broken.yml': 'name: Broken\nsteps: []\n',
+  'workflows/hourly-sweep.yml':
+    'name: Hourly Sweep\nowner: email\nsteps: [scan-inbox]\ntrigger:\n  schedule: "every 2 hours"\noutput: inbox/{date}/sweep.md\n',
   'runtimes.yml':
     'runtimes:\n  - name: Hermes\n    kind: agent-runtime\n    url: http://hermes.tail.ts.net:8080\n    heartbeat: runs/heartbeat/hermes.json\n  - name: OpenClaw\n    kind: gateway\n    url: http://openclaw.tail.ts.net:3000\n    heartbeat: runs/heartbeat/openclaw.json\n',
   'tiles.yml': 'hero: pipeline-value\nchosen: [inbox, calendar]\n'
@@ -253,6 +256,31 @@ test('the setup ladder judges all five rungs from the repo', async () => {
 test('gone-quiet lists agents and workflows that stopped, and nothing that is fine', async () => {
   const { body } = await run()
   assert.deepEqual(body.goneQuiet, [], 'this fixture has nothing quiet')
+})
+
+test('the board ships in the payload with its three columns filled from the repo', async () => {
+  const { body } = await run()
+  // Up Next: the two-hour sweep is always inside the 48-hour window; the weekly brief
+  // only lands here on the right days, so the sweep is the one deterministic member.
+  const sweep = body.board.upNext.find((card) => card.slug === 'hourly-sweep')
+  assert.equal(sweep.name, 'Hourly Sweep')
+  assert.equal(sweep.owner, 'email')
+  assert.ok(Date.parse(sweep.when) - Date.now() <= 48 * 3600_000)
+  for (const card of body.board.upNext) {
+    assert.ok(Date.parse(card.when) - Date.now() <= 48 * 3600_000)
+  }
+  // Running: both fixture runs carry a settled ok status older than the grace window.
+  assert.deepEqual(body.board.running, [])
+  // Done: the hour-old run is in, the twenty-day-old run is outside the 14-day window.
+  assert.deepEqual(body.board.done, [
+    {
+      name: 'monday-brief',
+      status: 'ok',
+      summary: 'The newest run, which should sort first and mark the agent as working.',
+      started_at: recent,
+      session_url: 'https://claude.ai/code/session_new'
+    }
+  ])
 })
 
 test('the payload never contains the token', async () => {

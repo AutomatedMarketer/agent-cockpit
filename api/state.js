@@ -222,6 +222,75 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, on
   ]
 }
 
+// The Board: three columns for the Today screen — Up Next, Running, Done.
+//
+// Running-detection rule, decided from the run-log shape (logs carry started_at, status,
+// summary, session_url; finished_at only when the agent came back to stamp the result):
+//   1. A run with a finished_at is never running — a stamped finish is final.
+//   2. Otherwise, a missing status or status "running" means in flight: agents write the
+//      final status when they finish, so a log without one was committed at kickoff.
+//   3. Otherwise (a status is present but no finished_at), the run still counts as running
+//      for 30 minutes after started_at — that covers logs written up front with a
+//      provisional status. Past 30 minutes the status is trusted as the result.
+const RUNNING_GRACE_MINUTES = 30
+const TERMINAL_STATUSES = ['ok', 'partial', 'blocked', 'failed']
+const UP_NEXT_WINDOW_MS = 48 * 3600_000
+const DONE_WINDOW_MS = 14 * 86400_000
+
+function isRunningLog(run, now) {
+  if (run.finished_at) return false
+  if (run.status == null || run.status === 'running') return true
+  const started = Date.parse(run.started_at)
+  return Number.isFinite(started) && now - started <= RUNNING_GRACE_MINUTES * 60_000
+}
+
+export function shapeBoard(workflows, runs, now = Date.now()) {
+  const upNext = workflows
+    .filter((workflow) => {
+      if (!workflow.nextRun) return false
+      const at = Date.parse(workflow.nextRun)
+      return Number.isFinite(at) && at - now <= UP_NEXT_WINDOW_MS
+    })
+    .sort((a, b) => String(a.nextRun).localeCompare(String(b.nextRun)))
+    .map((workflow) => ({
+      slug: workflow.slug,
+      name: workflow.name,
+      owner: workflow.owner,
+      when: workflow.nextRun
+    }))
+
+  const running = []
+  const done = []
+  for (const run of runs) {
+    const name = run.workflow ?? run.agent ?? 'unknown'
+    if (isRunningLog(run, now)) {
+      running.push({
+        name,
+        agent: run.agent ?? null,
+        started_at: run.started_at ?? null,
+        session_url: run.session_url ?? null
+      })
+      continue
+    }
+    // Done means a real result: a stamped finish or a terminal status, inside 14 days.
+    if (!run.finished_at && !TERMINAL_STATUSES.includes(run.status)) continue
+    const at = Date.parse(run.finished_at ?? run.started_at)
+    if (!Number.isFinite(at) || now - at > DONE_WINDOW_MS) continue
+    done.push({
+      name,
+      status: run.status ?? 'ok',
+      summary: run.summary ?? '',
+      started_at: run.started_at ?? null,
+      session_url: run.session_url ?? null,
+      _at: at
+    })
+  }
+  done.sort((a, b) => b._at - a._at)
+  for (const card of done) delete card._at
+
+  return { upNext, running, done }
+}
+
 export function shapeGoneQuiet(agents, workflows) {
   const quiet = []
   for (const agent of agents) {
@@ -351,6 +420,7 @@ export default async function handler(request, response) {
       unparseableRuns: unparseable,
       overnight: runsSince(runs, undefined, now).slice(0, MAX_RUNS_RETURNED),
       goneQuiet: shapeGoneQuiet(agents, workflows),
+      board: shapeBoard(workflows, runs, now),
       brain,
       workflows,
       runtimes,
