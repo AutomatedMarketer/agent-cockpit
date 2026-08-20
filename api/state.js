@@ -185,11 +185,16 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, on
   if (onboarding) {
     const pass = (stage) => onboarding[stage] === true
     const detail = (stage, doneText) => pass(stage) ? doneText : 'Not finished in /onboard yet'
+    // Rung 4 is the course's Workflows stage. The install record decides pass/fail; the
+    // behavioral signal (did anything actually run this week) rides along in the detail.
+    const workflowsDetail = pass('workflows')
+      ? shiftOk ? 'Workflows built — something ran on a schedule this week' : 'Workflows built — nothing has run on a schedule in the last 7 days'
+      : 'Not finished in /onboard yet'
     return [
       { rung: 'brief', label: 'Brief', pass: pass('brief'), detail: detail('brief', 'Business brain filled in') },
       { rung: 'access', label: 'Access', pass: pass('access'), detail: detail('access', 'Tools connected') },
       { rung: 'training', label: 'Training', pass: pass('training'), detail: detail('training', 'Skills built and verified') },
-      { rung: 'shift', label: 'Shift', pass: shiftOk, detail: shiftOk ? 'Something ran on a schedule this week' : 'Nothing has run on a schedule in the last 7 days' },
+      { rung: 'workflows', label: 'Workflows', pass: pass('workflows'), detail: workflowsDetail },
       { rung: 'oversight', label: 'Oversight', pass: pass('oversight'), detail: detail('oversight', 'Dashboard deployed, dispatched from the phone') }
     ]
   }
@@ -212,7 +217,7 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, on
     { rung: 'brief', label: 'Brief', pass: briefOk, detail: briefOk ? 'Business brain filled in' : 'Business brain files missing or still have empty fields' },
     { rung: 'access', label: 'Access', pass: accessOk, detail: accessOk ? 'Tools connected' : 'No connections or runtimes registered yet' },
     { rung: 'training', label: 'Training', pass: trainingOk, detail: trainingOk ? `${skills.length} skill${skills.length === 1 ? '' : 's'} defined` : used ? 'No skills in the repo yet' : 'No runs yet — the repo has not been used' },
-    { rung: 'shift', label: 'Shift', pass: shiftOk, detail: shiftOk ? 'Something ran on a schedule this week' : 'Nothing has run on a schedule in the last 7 days' },
+    { rung: 'workflows', label: 'Workflows', pass: shiftOk, detail: shiftOk ? 'Something ran on a schedule this week' : 'Nothing has run on a schedule in the last 7 days' },
     { rung: 'oversight', label: 'Oversight', pass: oversightOk, detail: oversightOk ? 'Fire buttons registered' : used ? 'No workflow has fire: true yet' : 'No runs yet — the repo has not been used' }
   ]
 }

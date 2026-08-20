@@ -246,7 +246,7 @@ test('the setup ladder judges all five rungs from the repo', async () => {
   assert.equal(byRung.brief.pass, false, 'fill markers remain, so Brief fails')
   assert.equal(byRung.access.pass, true, 'runtimes and tiles are registered')
   assert.equal(byRung.training.pass, true, 'three skills exist')
-  assert.equal(byRung.shift.pass, true, 'a scheduled workflow ran this week')
+  assert.equal(byRung.workflows.pass, true, 'a scheduled workflow ran this week')
   assert.equal(byRung.oversight.pass, true, 'a fire button is registered')
 })
 

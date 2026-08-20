@@ -46,7 +46,10 @@ test('with an onboarding record, the ladder believes it over repo shape', () => 
   const byRung = Object.fromEntries(setup.map((rung) => [rung.rung, rung.pass]))
   assert.equal(byRung.brief, true)
   assert.equal(byRung.training, false, 'shipped skills do not fake a finished Training stage')
+  assert.equal(byRung.workflows, false, 'a pending Workflows stage shows as pending, whatever ran')
   assert.equal(byRung.oversight, false, 'shipped fire buttons do not fake a finished Oversight stage')
+  assert.deepEqual(setup.map((rung) => rung.label), ['Brief', 'Access', 'Training', 'Workflows', 'Oversight'],
+    'ladder labels match the five course stage names')
 })
 
 test('a fresh staffed clone with no runs passes zero achievement rungs', () => {
