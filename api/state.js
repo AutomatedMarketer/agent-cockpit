@@ -87,7 +87,10 @@ export function shapeWorkflows(workflowFiles, runs, known, now = Date.now()) {
         workflow.trigger && typeof workflow.trigger === 'object' && !Array.isArray(workflow.trigger)
           ? workflow.trigger.schedule ?? null
           : null
-      const quiet = schedule !== null && isGoneQuiet(schedule, last?.started_at ?? null, now)
+      // Never-run is its own state, not "quiet": a fresh clone ships five scheduled
+      // workflows, and greeting a new owner with five alarms would teach them to ignore
+      // the one alarm that matters later.
+      const quiet = last !== null && schedule !== null && isGoneQuiet(schedule, last.started_at, now)
 
       let state = 'never-run'
       if (problems.length) state = 'attention'
@@ -152,15 +155,26 @@ export function shapeMemory(paths, treeSizes = {}) {
 // The five rungs of the Hiring Ladder, each judged from what the repo actually contains.
 // These are approximations of the executable rung tests that live in the template — the
 // dashboard can only see git, so anything needing a live probe is judged by its footprint.
-export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, now = Date.now() }) {
-  const briefOk =
-    brain.length > 0 && brain.every((file) => file.present && file.missing.length === 0)
+// The onboarding installer commits its state file into the student's repo. When it is
+// there, it is the truth about how far setup actually got — the repo-shape heuristics
+// below exist only for repos that never ran /onboard.
+export function parseOnboardingState(source) {
+  if (typeof source !== 'string' || !source.trim()) return null
+  const stages = {}
+  const rows = source.matchAll(/^\|\s*\d+\s*\|[^|]+\|\s*\d\s*·\s*([A-Za-z]+)\s*\|\s*([a-z-]+)\s*\|/gm)
+  let sawRow = false
+  for (const row of rows) {
+    sawRow = true
+    const stage = row[1].toLowerCase()
+    const done = row[2] === 'done' || row[2] === 'skipped'
+    stages[stage] = (stages[stage] ?? true) && done
+  }
+  return sawRow ? stages : null
+}
 
-  const chosenTiles = Array.isArray(tiles?.chosen) ? tiles.chosen : []
-  const accessOk = runtimes.length > 0 || chosenTiles.length > 0
-
-  const trainingOk = skills.length > 0
-
+export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, onboarding = null, now = Date.now() }) {
+  // The Shift rung is behavioral either way: it asks whether anything actually ran on a
+  // schedule this week, which no install record can answer.
   const shiftOk = workflows.some(
     (workflow) =>
       workflow.schedule !== null &&
@@ -168,14 +182,38 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, no
       (daysSince(workflow.lastRun.started_at, now) ?? 99) <= 7
   ) || runs.some((run) => run.trigger === 'schedule' && (daysSince(run.started_at, now) ?? 99) <= 7)
 
-  const oversightOk = workflows.some((workflow) => workflow.fire)
+  if (onboarding) {
+    const pass = (stage) => onboarding[stage] === true
+    const detail = (stage, doneText) => pass(stage) ? doneText : 'Not finished in /onboard yet'
+    return [
+      { rung: 'brief', label: 'Brief', pass: pass('brief'), detail: detail('brief', 'Business brain filled in') },
+      { rung: 'access', label: 'Access', pass: pass('access'), detail: detail('access', 'Tools connected') },
+      { rung: 'training', label: 'Training', pass: pass('training'), detail: detail('training', 'Skills built and verified') },
+      { rung: 'shift', label: 'Shift', pass: shiftOk, detail: shiftOk ? 'Something ran on a schedule this week' : 'Nothing has run on a schedule in the last 7 days' },
+      { rung: 'oversight', label: 'Oversight', pass: pass('oversight'), detail: detail('oversight', 'Dashboard deployed, dispatched from the phone') }
+    ]
+  }
+
+  // Heuristic fallback — but the template now ships staffed, so "skills exist" and
+  // "a fire workflow exists" are true in a fresh clone and prove nothing. Gate the
+  // achievement-shaped rungs on evidence somebody actually used the repo.
+  const used = runs.length > 0
+  const briefOk =
+    brain.length > 0 && brain.every((file) => file.present && file.missing.length === 0)
+
+  const chosenTiles = Array.isArray(tiles?.chosen) ? tiles.chosen : []
+  const accessOk = runtimes.length > 0 || chosenTiles.length > 0
+
+  const trainingOk = used && skills.length > 0
+
+  const oversightOk = used && workflows.some((workflow) => workflow.fire)
 
   return [
     { rung: 'brief', label: 'Brief', pass: briefOk, detail: briefOk ? 'Business brain filled in' : 'Business brain files missing or still have empty fields' },
     { rung: 'access', label: 'Access', pass: accessOk, detail: accessOk ? 'Tools connected' : 'No connections or runtimes registered yet' },
-    { rung: 'training', label: 'Training', pass: trainingOk, detail: trainingOk ? `${skills.length} skill${skills.length === 1 ? '' : 's'} defined` : 'No skills in the repo yet' },
+    { rung: 'training', label: 'Training', pass: trainingOk, detail: trainingOk ? `${skills.length} skill${skills.length === 1 ? '' : 's'} defined` : used ? 'No skills in the repo yet' : 'No runs yet — the repo has not been used' },
     { rung: 'shift', label: 'Shift', pass: shiftOk, detail: shiftOk ? 'Something ran on a schedule this week' : 'Nothing has run on a schedule in the last 7 days' },
-    { rung: 'oversight', label: 'Oversight', pass: oversightOk, detail: oversightOk ? 'Fire buttons registered' : 'No workflow has fire: true yet' }
+    { rung: 'oversight', label: 'Oversight', pass: oversightOk, detail: oversightOk ? 'Fire buttons registered' : used ? 'No workflow has fire: true yet' : 'No runs yet — the repo has not been used' }
   ]
 }
 
@@ -187,7 +225,7 @@ export function shapeGoneQuiet(agents, workflows) {
     }
   }
   for (const workflow of workflows) {
-    if (workflow.state === 'quiet' || (workflow.schedule && workflow.state === 'never-run')) {
+    if (workflow.state === 'quiet') {
       quiet.push({
         kind: 'workflow',
         slug: workflow.slug,
@@ -225,15 +263,18 @@ export default async function handler(request, response) {
     ]
     const hasRuntimes = paths.includes('runtimes.yml')
     const hasTiles = paths.includes('tiles.yml')
+    const ONBOARDING_STATE = '.agent-team/onboarding-state.md'
+    const hasOnboarding = paths.includes(ONBOARDING_STATE)
 
-    const [agentFiles, runFiles, brainFiles, workflowFiles, runtimesSource, tilesSource] =
+    const [agentFiles, runFiles, brainFiles, workflowFiles, runtimesSource, tilesSource, onboardingSource] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(BRAIN_FILES.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(workflowPaths.map(async (path) => [path, await rawFile(settings, path)])),
         hasRuntimes ? rawFile(settings, 'runtimes.yml') : null,
-        hasTiles ? rawFile(settings, 'tiles.yml') : null
+        hasTiles ? rawFile(settings, 'tiles.yml') : null,
+        hasOnboarding ? rawFile(settings, ONBOARDING_STATE) : null
       ])
 
     const unparseable = []
@@ -293,7 +334,8 @@ export default async function handler(request, response) {
 
     const tiles = tilesSource ? parseSimpleYaml(tilesSource) : null
     const memory = shapeMemory(paths, sizes)
-    const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, now })
+    const onboarding = parseOnboardingState(onboardingSource)
+    const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, onboarding, now })
 
     response.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
     response.status(200).json({
