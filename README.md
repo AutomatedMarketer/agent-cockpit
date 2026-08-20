@@ -10,7 +10,7 @@ You deploy it. You own it. Nothing here runs on anyone else's infrastructure.
 
 | Screen | What it shows |
 |---|---|
-| **Today** | Setup progress (the five rungs), the Board — a four-column kanban of open tasks (`tasks/*.md`), what's up next (48 h), running now, and done (last 14 days) — what is due next, what has gone quiet, and one-tap job buttons |
+| **Today** | Setup progress (the five rungs), the Board — a four-column kanban of open tasks (`tasks/*.md`), what's up next (48 h), running now, and done (last 14 days) — what is due next, what has gone quiet, one-tap job buttons, and **this week's calendar** at the bottom - every scheduled job by day, ticked when it ran, dotted when it was due and did not |
 | **Team** | Every agent: role, model, last run, and its state — working, needs a look, gone quiet, or never run. Tap one to see its recent runs and live session links |
 | **Workflows** | The board. Each named job: its chain of steps, trigger, schedule, last result, next run |
 | **Memory** | Your vault, browsable: folder tree, index files, search, source filter |
