@@ -1,3 +1,42 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
+
+// --- the read gate -----------------------------------------------------------------
+// Vercel's own "Standard Protection" exempts production domains, and closing that gap on
+// their side costs $150/month. This closes it in the app instead, for nothing: the two
+// read endpoints serve a private repo, so they answer nobody without the key.
+//
+// Hash both sides to a fixed length first so timingSafeEqual never throws on a length
+// mismatch - a plain length check would itself leak the key's length through timing.
+export function keysMatch(provided, expected) {
+  if (typeof provided !== 'string' || typeof expected !== 'string' || !expected) return false
+  return timingSafeEqual(
+    createHash('sha256').update(provided).digest(),
+    createHash('sha256').update(expected).digest()
+  )
+}
+
+// Returns null when the request may proceed, or {status, error} to send back.
+// Closed is the default. A deployment with no VIEW_KEY refuses to serve rather than
+// serving a private repo to the open web - the failure mode has to be silence, not
+// exposure. PUBLIC_DASHBOARD=true is the deliberate, documented way out.
+export function viewGate(request, env = process.env) {
+  if (env.PUBLIC_DASHBOARD === 'true') return null
+  const expected = env.VIEW_KEY
+  if (!expected) {
+    return {
+      status: 503,
+      error:
+        'This dashboard is not configured. Set VIEW_KEY in your hosting environment and ' +
+        'redeploy, or set PUBLIC_DASHBOARD=true if this repo is genuinely public.'
+    }
+  }
+  const provided = request?.headers?.['x-view-key'] ?? request?.headers?.['X-View-Key']
+  if (!keysMatch(typeof provided === 'string' ? provided : '', expected)) {
+    return { status: 401, error: 'Missing or wrong view key. Send it in the x-view-key header.' }
+  }
+  return null
+}
+
 // Pure helpers, kept out of the handler so they can be tested without a network.
 
 export const STALE_AFTER_DAYS = 7
