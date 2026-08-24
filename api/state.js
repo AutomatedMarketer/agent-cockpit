@@ -139,6 +139,45 @@ export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
     })
 }
 
+// Every skill in the repo, with its one-line description and which workflows call it.
+// A skill no workflow uses is not wrong — it is there for sessions — but the owner should
+// be able to see that at a glance.
+export function shapeSkills(skillFiles, workflows = []) {
+  return skillFiles
+    .map(([path, source]) => {
+      const slug = path.split('/').at(-2)
+      const data = parseFrontmatter(source ?? '')
+      const usedBy = workflows
+        .filter((workflow) => (workflow.steps ?? []).includes(slug))
+        .map((workflow) => workflow.slug)
+      return { slug, path, description: data.description ?? '', usedBy }
+    })
+    .sort((a, b) => a.slug.localeCompare(b.slug))
+}
+
+// The starter stack from stack.yml. A plugin entry can only be verified on the owner's
+// machine, so the dashboard shows how to check rather than pretending to know. A skill
+// entry ships in the repo, so "present" is a real fact the tree can answer.
+export function shapeStack(doc, paths = []) {
+  const entries = Array.isArray(doc?.stack) ? doc.stack : []
+  return entries
+    .filter((entry) => entry && typeof entry.name === 'string')
+    .map((entry) => {
+      const source = entry.skill ? 'repo' : 'plugin'
+      const present = source === 'repo' ? paths.includes(entry.skill) : null
+      return {
+        name: entry.name,
+        source,
+        plugin: entry.plugin ?? null,
+        skill: entry.skill ?? null,
+        present,
+        gives: entry.gives ?? '',
+        why: entry.why ?? '',
+        verify: entry.verify ?? ''
+      }
+    })
+}
+
 export function shapeMemory(paths, treeSizes = {}) {
   const files = paths
     .filter((path) => path.endsWith('.md'))
@@ -376,28 +415,26 @@ export default async function handler(request, response) {
     const runPaths = paths.filter((path) => /^runs\/\d{4}-\d{2}\/.+\.json$/.test(path))
     const workflowPaths = paths.filter((path) => /^workflows\/[^/]+\.ya?ml$/.test(path))
     const taskPaths = paths.filter((path) => /^tasks\/[^/]+\.md$/.test(path))
-    const skillSlugs = [
-      ...new Set(
-        paths
-          .map((path) => /^(?:\.claude\/)?skills\/([^/]+)\/(?:SKILL|skill)\.md$/.exec(path)?.[1])
-          .filter(Boolean)
-      )
-    ]
+    const skillPaths = paths.filter((path) => /^(?:\.claude\/)?skills\/[^/]+\/(?:SKILL|skill)\.md$/.test(path))
+    const skillSlugs = [...new Set(skillPaths.map((path) => path.split('/').at(-2)))]
     const hasRuntimes = paths.includes('runtimes.yml')
     const hasTiles = paths.includes('tiles.yml')
+    const hasStack = paths.includes('stack.yml')
     const ONBOARDING_STATE = '.agent-team/onboarding-state.md'
     const hasOnboarding = paths.includes(ONBOARDING_STATE)
 
-    const [agentFiles, runFiles, brainFiles, workflowFiles, taskFiles, runtimesSource, tilesSource, onboardingSource] =
+    const [agentFiles, runFiles, brainFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, tilesSource, onboardingSource, stackSource] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(BRAIN_FILES.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(workflowPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(taskPaths.map(async (path) => [path, await rawFile(settings, path)])),
+        Promise.all(skillPaths.map(async (path) => [path, await rawFile(settings, path)])),
         hasRuntimes ? rawFile(settings, 'runtimes.yml') : null,
         hasTiles ? rawFile(settings, 'tiles.yml') : null,
-        hasOnboarding ? rawFile(settings, ONBOARDING_STATE) : null
+        hasOnboarding ? rawFile(settings, ONBOARDING_STATE) : null,
+        hasStack ? rawFile(settings, 'stack.yml') : null
       ])
 
     const unparseable = []
@@ -457,6 +494,8 @@ export default async function handler(request, response) {
     const runtimes = shapeRuntimes(registry, heartbeats, now)
 
     const tiles = tilesSource ? parseSimpleYaml(tilesSource) : null
+    const skills = shapeSkills(skillFiles, workflows)
+    const stack = shapeStack(stackSource ? parseSimpleYaml(stackSource) : null, paths)
     const memory = shapeMemory(paths, sizes)
     const onboarding = parseOnboardingState(onboardingSource)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, onboarding, now })
@@ -474,6 +513,8 @@ export default async function handler(request, response) {
       brain,
       workflows,
       runtimes,
+      skills,
+      stack,
       memory,
       setup,
       generatedAt: new Date(now).toISOString()
