@@ -37,6 +37,7 @@ const TREE = {
     { type: 'blob', path: 'tasks/2026-08-18-call-supplier.md' },
     { type: 'blob', path: 'runtimes.yml' },
     { type: 'blob', path: 'tiles.yml' },
+    { type: 'blob', path: 'stack.yml' },
     { type: 'blob', path: 'wiki/INDEX.md', size: 2048 },
     { type: 'blob', path: 'wiki/offers.md', size: 512 },
     { type: 'blob', path: 'inbox/2026-08-07/monday-brief.md', size: 300 },
@@ -91,7 +92,12 @@ const FILES = {
   'tasks/2026-08-18-call-supplier.md': '# Call the supplier\n\nNo frontmatter on purpose.\n',
   'runtimes.yml':
     'runtimes:\n  - name: Hermes\n    kind: agent-runtime\n    url: http://hermes.tail.ts.net:8080\n    heartbeat: runs/heartbeat/hermes.json\n  - name: OpenClaw\n    kind: gateway\n    url: http://openclaw.tail.ts.net:3000\n    heartbeat: runs/heartbeat/openclaw.json\n',
-  'tiles.yml': 'hero: pipeline-value\nchosen: [inbox, calendar]\n'
+  'tiles.yml': 'hero: pipeline-value\nchosen: [inbox, calendar]\n',
+  'skills/pull-calendar/SKILL.md': '---\nname: pull-calendar\ndescription: Reads the next seven days of the calendar.\n---\n# Pull calendar\n',
+  'skills/write-brief/SKILL.md': '---\nname: write-brief\ndescription: Writes the brief.\n---\n',
+  'skills/scan-inbox/SKILL.md': 'no frontmatter here\n',
+  'stack.yml':
+    'stack:\n  - name: last30days\n    plugin: last30days@last30days-skill\n    gives: What people said in the last 30 days\n    why: Training data is out of date\n    verify: "Run it on a topic you know"\n  - name: token-saver\n    skill: skills/pull-calendar/SKILL.md\n    gives: Cost awareness\n  - name: ghost\n    skill: skills/ghost/SKILL.md\n    gives: Listed but not in the repo\n'
 }
 
 function stubGitHub() {
@@ -297,6 +303,32 @@ test('the board ships in the payload with its four columns filled from the repo'
       session_url: 'https://claude.ai/code/session_new'
     }
   ])
+})
+
+test('the skills screen lists every repo skill with its description and callers', async () => {
+  const { body } = await run()
+  assert.deepEqual(body.skills.map((skill) => skill.slug), ['pull-calendar', 'scan-inbox', 'write-brief'])
+  const calendar = body.skills.find((skill) => skill.slug === 'pull-calendar')
+  assert.equal(calendar.description, 'Reads the next seven days of the calendar.')
+  assert.equal(calendar.path, 'skills/pull-calendar/SKILL.md')
+  assert.deepEqual(calendar.usedBy, ['monday-brief'])
+  const inbox = body.skills.find((skill) => skill.slug === 'scan-inbox')
+  assert.equal(inbox.description, '', 'a SKILL.md without frontmatter still lists, with no description')
+  assert.deepEqual(inbox.usedBy.sort(), ['hourly-sweep', 'monday-brief'])
+})
+
+test('the starter stack reads stack.yml and only claims presence for repo skills', async () => {
+  const { body } = await run()
+  assert.equal(body.stack.length, 3)
+  const plugin = body.stack.find((entry) => entry.name === 'last30days')
+  assert.equal(plugin.source, 'plugin')
+  assert.equal(plugin.present, null, 'a plugin lives on the owner machine - the repo cannot know')
+  assert.equal(plugin.verify, 'Run it on a topic you know')
+  const shipped = body.stack.find((entry) => entry.name === 'token-saver')
+  assert.equal(shipped.source, 'repo')
+  assert.equal(shipped.present, true)
+  const ghost = body.stack.find((entry) => entry.name === 'ghost')
+  assert.equal(ghost.present, false, 'listed in stack.yml but the file is not in the tree')
 })
 
 test('the payload never contains the token', async () => {

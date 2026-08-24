@@ -31,7 +31,7 @@
     color: var(--ink);
     font: 16px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-text-size-adjust: 100%;
-    padding-bottom: calc(var(--nav-h) + env(safe-area-inset-bottom, 0px) + 1rem);
+    padding-top: calc(var(--nav-h) + env(safe-area-inset-top, 0px) + 1rem);
   }
   .wrap { max-width: 44rem; margin: 0 auto; padding: 1rem 1rem 0; }
   header { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; margin-bottom: .15rem; }
@@ -51,6 +51,8 @@
     color: var(--muted);
   }
   .chip.on { color: var(--ink); }
+  .chip.ok { color: var(--ok); }
+  .chip.warn { color: var(--warn); }
   .dot { width: .55rem; height: .55rem; border-radius: 50%; display: inline-block; flex: none; background: var(--muted); }
   .working .dot, .live .dot { background: var(--ok); }
   .quiet .dot, .attention .dot, .silent .dot { background: var(--warn); }
@@ -202,14 +204,14 @@
   .problems { margin: .4rem 0 0; padding-left: 1.1rem; color: var(--warn); font-size: .8125rem; }
   footer { margin-top: 2rem; color: var(--muted); font-size: .75rem; }
 
-  /* Bottom nav — one-handed, thumb-reach */
+  /* Top nav on a phone — the screens are the first thing you see, not the last */
   nav {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+    position: fixed; left: 0; right: 0; top: 0; z-index: 10;
     background: rgba(13, 15, 19, .92); backdrop-filter: blur(10px);
-    border-top: 1px solid var(--line);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
+    border-bottom: 1px solid var(--line);
+    padding-top: env(safe-area-inset-top, 0px);
   }
-  nav .tabs { display: grid; grid-template-columns: repeat(5, 1fr); max-width: 44rem; margin: 0 auto; }
+  nav .tabs { display: grid; grid-template-columns: repeat(6, 1fr); max-width: 44rem; margin: 0 auto; }
   nav a {
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .1rem;
     height: var(--nav-h); color: var(--muted); font-size: .6875rem; font-weight: 600;
@@ -225,13 +227,13 @@
   nav .talk { display: none; }
 
   /* Desktop: the same nav markup becomes a fixed LEFT sidebar; below 48rem nothing changes
-     and the bottom thumb bar stays exactly as it is. Pure CSS, no script involved. */
+     and the top bar stays exactly as it is. Pure CSS, no script involved. */
   @media (min-width: 48rem) {
-    body { padding-bottom: 1.5rem; padding-left: var(--sidenav-w); }
+    body { padding-top: 0; padding-bottom: 1.5rem; padding-left: var(--sidenav-w); }
     nav {
       top: 0; bottom: 0; right: auto; width: var(--sidenav-w);
-      border-top: 0; border-right: 1px solid var(--line);
-      padding-bottom: 0;
+      border-bottom: 0; border-right: 1px solid var(--line);
+      padding-top: 0;
       display: flex; flex-direction: column;
     }
     nav .tabs {
@@ -287,6 +289,7 @@
   <div id="today" class="screen active"><div class="panel empty">Loading.</div></div>
   <div id="team" class="screen"></div>
   <div id="workflows" class="screen"></div>
+  <div id="skills" class="screen"></div>
   <div id="memory" class="screen"></div>
   <div id="connections" class="screen"></div>
 
@@ -307,6 +310,7 @@
     <a href="#today" data-screen="today"><span class="glyph">&#9679;</span>Today</a>
     <a href="#team" data-screen="team"><span class="glyph">&#9670;</span>Team</a>
     <a href="#workflows" data-screen="workflows"><span class="glyph">&#9654;</span>Workflows</a>
+    <a href="#skills" data-screen="skills"><span class="glyph">&#9881;</span>Skills</a>
     <a href="#memory" data-screen="memory"><span class="glyph">&#9632;</span>Memory</a>
     <a href="#connections" data-screen="connections"><span class="glyph">&#9673;</span>Connections</a>
   </div>
@@ -317,8 +321,8 @@
 <script>
 'use strict'
 
-const SCREENS = ['today', 'team', 'workflows', 'memory', 'connections']
-const TITLES = { today: 'Today', team: 'Team', workflows: 'Workflows', memory: 'Memory', connections: 'Connections' }
+const SCREENS = ['today', 'team', 'workflows', 'skills', 'memory', 'connections']
+const TITLES = { today: 'Today', team: 'Team', workflows: 'Workflows', skills: 'Skills', memory: 'Memory', connections: 'Connections' }
 const STATE_LABEL = {
   working: 'Working', quiet: 'Gone quiet', 'never-run': 'Never run', attention: 'Needs a look',
   live: 'Live', silent: 'Silent', 'no-heartbeat': 'No heartbeat'
@@ -1072,6 +1076,46 @@ function renderConnections() {
   el('connections').innerHTML = `<div class="panel">${rows}</div>`
 }
 
+/* ---------- skills ---------- */
+
+// Two lists. The starter stack is what every team gets before anything else (stack.yml);
+// the repo skills are what this team's workflows actually call. Plugins live on the
+// owner's machine, so for those the card says how to check rather than guessing.
+function renderSkills() {
+  const stack = data.stack ?? []
+  const skills = data.skills ?? []
+  const stackCards = stack.map((entry) => {
+    const presence = entry.source === 'repo'
+      ? (entry.present ? '<span class="chip ok">Ships in this repo</span>' : '<span class="chip warn">Listed but missing from the repo</span>')
+      : `<span class="chip">Plugin · ${escapeHtml(entry.plugin ?? '')}</span>`
+    return `
+    <div class="agent">
+      <div class="row between">
+        <span class="title">${escapeHtml(entry.name)}</span>
+        ${presence}
+      </div>
+      <p class="small" style="margin:.35rem 0 .25rem">${escapeHtml(entry.gives)}</p>
+      <p class="small muted" style="margin:0 0 .35rem">${escapeHtml(entry.why)}</p>
+      ${entry.verify ? `<p class="small muted" style="margin:0"><strong>Check it:</strong> ${escapeHtml(entry.verify)}</p>` : ''}
+    </div>`
+  }).join('')
+  const skillRows = skills.map((skill) => `
+    <div class="agent">
+      <div class="row between">
+        <a href="#" data-open="${escapeHtml(skill.path)}" class="title">${escapeHtml(skill.slug)}</a>
+        <span class="small muted">${skill.usedBy.length ? `used by ${skill.usedBy.map(escapeHtml).join(', ')}` : 'sessions only'}</span>
+      </div>
+      <p class="small" style="margin:.3rem 0 0">${escapeHtml(skill.description)}</p>
+    </div>`).join('')
+  el('skills').innerHTML = `
+    <h2>Starter stack &middot; ${stack.length}</h2>
+    ${stack.length ? `<div class="panel">${stackCards}</div>` : '<div class="panel empty">No <code>stack.yml</code> in this repo yet. Run <code>/install-stack</code> and it appears here.</div>'}
+    <h2>This team's skills &middot; ${skills.length}</h2>
+    ${skills.length ? `<div class="panel">${skillRows}</div>` : '<div class="panel empty">No skills yet.</div>'}`
+  el('skills').querySelectorAll('[data-open]').forEach((link) =>
+    link.addEventListener('click', (event) => { event.preventDefault(); openFile(link.dataset.open) }))
+}
+
 /* ---------- shell ---------- */
 
 function showScreen(name) {
@@ -1096,6 +1140,7 @@ function render() {
   renderToday()
   renderTeam()
   renderWorkflows()
+  renderSkills()
   renderMemory()
   renderConnections()
   el('foot').textContent = `Read from your repo at ${new Date(data.generatedAt).toLocaleString()}. Nothing on this page comes from anywhere else.`
