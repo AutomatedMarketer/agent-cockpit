@@ -265,6 +265,118 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, on
 // the first heading in the body (or, failing that, the filename) is the title. A file
 // with no frontmatter at all still parses — its status defaults to todo, because a task
 // someone bothered to write down is work until something says otherwise.
+// ---------------------------------------------------------------------------------------------
+// The ledger and what was derived from it.
+//
+// These three are the first numbers on this board that come from the owner rather than from the
+// team's own activity. Everything else here counts what the agents did; this counts what the week
+// costs, in their words, from a file they corrected themselves.
+//
+// The board only ever DISPLAYS these. ledger.yml and proposals.yml are validated in the team repo
+// by `npm run check:ledger` and `npm run check:proposals`, which re-derive everything and refuse
+// what does not hold up. Re-implementing that here would be a second opinion nobody asked for and
+// a second thing to drift.
+
+const MINUTES_IN_AN_HOUR = 60
+
+function positiveNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
+export function shapeLedger(source) {
+  if (!source) return null
+  const parsed = parseSimpleYaml(source)
+  const hourlyValue = positiveNumber(parsed?.hourly_value)
+  const rows = Array.isArray(parsed?.tasks) ? parsed.tasks : []
+
+  let hoursPerWeek = 0
+  const tasks = rows.map((row) => {
+    const hours = (Number(row?.times_per_week) * Number(row?.minutes_each)) / MINUTES_IN_AN_HOUR
+    const usable = Number.isFinite(hours) ? hours : null
+    if (usable !== null) hoursPerWeek += usable
+    return {
+      task: typeof row?.task === 'string' ? row.task : '',
+      words: typeof row?.words === 'string' ? row.words : '',
+      confirmed: row?.confirmed ?? null,
+      hoursPerWeek: usable
+    }
+  })
+
+  return {
+    ownerType: parsed?.owner_type ?? null,
+    // Null, never zero, when they gave no rate. Zero would read as "this time is free", which is a
+    // different claim and a false one - and it is the claim a dashboard makes loudest.
+    hourlyValue,
+    hoursPerWeek,
+    costPerWeek: hourlyValue === null ? null : hoursPerWeek * hourlyValue,
+    unpriced: hourlyValue === null,
+    tasks
+  }
+}
+
+export function shapeProposals(source) {
+  if (!source) return null
+  const parsed = parseSimpleYaml(source)
+  const rows = Array.isArray(parsed?.proposals) ? parsed.proposals : []
+  const gapRows = Array.isArray(parsed?.gaps) ? parsed.gaps : []
+
+  return {
+    proposals: rows.map((row) => ({
+      task: typeof row?.task === 'string' ? row.task : '',
+      item: typeof row?.item === 'string' ? row.item : '',
+      why: typeof row?.why === 'string' ? row.why : '',
+      words: typeof row?.words === 'string' ? row.words : '',
+      number: typeof row?.number === 'string' ? row.number : ''
+    })),
+    gaps: gapRows.map((row) => ({
+      task: typeof row?.task === 'string' ? row.task : '',
+      question: typeof row?.question === 'string' ? row.question : ''
+    }))
+  }
+}
+
+// The hero number is the one figure on the front of the board, and it has never been rendered.
+// `tiles.yml` has named `hero: hours-saved` since the day it was written, while `hours-saved` does
+// not exist in the tiles catalogue or anywhere else - the exact declaration-nothing-backs bug this
+// whole build was written to kill, sitting in the one place everybody looks first.
+//
+// So this resolves the hero honestly or not at all. A metric the board cannot compute comes back
+// as `{ defined: false }` and the screen says so. It never renders a zero, because a zero here is
+// a claim about somebody's week.
+export const HERO_METRICS = {
+  'hours-a-week': (ledger) =>
+    ledger ? { value: ledger.hoursPerWeek, unit: 'hours a week', caption: 'what your repeating work costs you' } : null,
+  'cost-a-week': (ledger) =>
+    ledger && !ledger.unpriced
+      ? { value: ledger.costPerWeek, unit: 'a week', money: true, caption: 'at the rate you set' }
+      : null
+}
+
+export function shapeHero(tiles, ledger) {
+  const metric = typeof tiles?.hero === 'string' ? tiles.hero.trim() : ''
+  if (!metric) return null
+
+  const resolve = HERO_METRICS[metric]
+  if (!resolve) {
+    return {
+      metric,
+      defined: false,
+      why: `tiles.yml asks for "${metric}" and nothing computes it yet`
+    }
+  }
+
+  const resolved = resolve(ledger)
+  if (!resolved) {
+    return {
+      metric,
+      defined: false,
+      why: ledger ? `"${metric}" needs a number your ledger does not carry` : 'there is no ledger.yml yet'
+    }
+  }
+
+  return { metric, defined: true, ...resolved }
+}
+
 const TASK_STATUSES = ['todo', 'doing', 'done']
 
 export function parseTasks(taskFiles) {
@@ -420,10 +532,12 @@ export default async function handler(request, response) {
     const hasRuntimes = paths.includes('runtimes.yml')
     const hasTiles = paths.includes('tiles.yml')
     const hasStack = paths.includes('stack.yml')
+    const hasLedger = paths.includes('ledger.yml')
+    const hasProposals = paths.includes('proposals.yml')
     const ONBOARDING_STATE = '.agent-team/onboarding-state.md'
     const hasOnboarding = paths.includes(ONBOARDING_STATE)
 
-    const [agentFiles, runFiles, brainFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, tilesSource, onboardingSource, stackSource] =
+    const [agentFiles, runFiles, brainFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
@@ -434,7 +548,9 @@ export default async function handler(request, response) {
         hasRuntimes ? rawFile(settings, 'runtimes.yml') : null,
         hasTiles ? rawFile(settings, 'tiles.yml') : null,
         hasOnboarding ? rawFile(settings, ONBOARDING_STATE) : null,
-        hasStack ? rawFile(settings, 'stack.yml') : null
+        hasStack ? rawFile(settings, 'stack.yml') : null,
+        hasLedger ? rawFile(settings, 'ledger.yml') : null,
+        hasProposals ? rawFile(settings, 'proposals.yml') : null
       ])
 
     const unparseable = []
@@ -498,6 +614,9 @@ export default async function handler(request, response) {
     const stack = shapeStack(stackSource ? parseSimpleYaml(stackSource) : null, paths)
     const memory = shapeMemory(paths, sizes)
     const onboarding = parseOnboardingState(onboardingSource)
+    const ledger = shapeLedger(ledgerSource)
+    const proposals = shapeProposals(proposalsSource)
+    const hero = shapeHero(tiles, ledger)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, onboarding, now })
 
     response.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
@@ -516,6 +635,9 @@ export default async function handler(request, response) {
       skills,
       stack,
       memory,
+      ledger,
+      proposals,
+      hero,
       setup,
       generatedAt: new Date(now).toISOString()
     })
