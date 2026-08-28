@@ -200,3 +200,5 @@ test('names match through unicode composition, exactly as arm.mjs does', () => {
     'a decomposed name reported DECLARED while its own routine was listed as an orphan'
   )
 })
+
+

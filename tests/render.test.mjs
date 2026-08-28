@@ -204,3 +204,74 @@ test('Today says when the routine evidence was last checked', () => {
   }).get('today').innerHTML
   assert.match(stale, /4 weeks ago|last checked/)
 })
+
+/* ---------- escaping ---------------------------------------------------------------------------
+   escapeHtml had zero coverage: mutating it to stop escaping left all 232 tests green. Everything
+   on these screens comes out of somebody's repo. */
+
+test('hostile text from the repo is escaped everywhere it lands', () => {
+  const nasty = '<script>alert(1)</script>"\'&'
+  const nodes = render({
+    ...base,
+    ledger: {
+      ownerType: 'business', hourlyValue: 150, hoursPerWeek: 3, costPerWeek: 450,
+      unpriced: false, unreadable: 0, complete: true,
+      tasks: [{ task: nasty, words: nasty, confirmed: 'twice', hoursPerWeek: 3 }]
+    },
+    proposals: {
+      proposals: [{ task: nasty, item: nasty, why: nasty, words: nasty, number: nasty }],
+      gaps: [{ task: nasty, question: nasty }]
+    },
+    workflows: [workflow({ name: nasty, reason: nasty, arm: 'off' })],
+    routines: { ...base.routines, usable: true, stale: false, takenAt: new Date().toISOString(), count: 1, known: true, orphans: [{ id: 'x', name: nasty }], problems: [nasty] }
+  })
+
+  for (const screen of SCREENS) {
+    const drawn = nodes.get(screen).innerHTML
+    assert.ok(!drawn.includes('<script>'), `${screen} rendered a raw <script> tag from repo text`)
+  }
+})
+
+/* ---------- the orphan panel and the schedule problems -----------------------------------------
+   Both were only ever "proved" by grepping the page source, which passes with the render
+   short-circuited, and neither was ever drawn. */
+
+test('orphan routines are drawn, with the not-adopted wording', () => {
+  const drawn = render({
+    ...base,
+    routines: { ...base.routines, usable: true, stale: false, takenAt: new Date().toISOString(), count: 1, known: true, orphans: [{ id: 't', name: 'Something Armed' }], problems: [] }
+  }).get('workflows').innerHTML
+  assert.match(drawn, /Something Armed/)
+  assert.match(drawn, /Reported, not adopted/)
+})
+
+test('duplicate-name problems reach the screen, not just the payload', () => {
+  const drawn = render({
+    ...base,
+    routines: { ...base.routines, usable: true, stale: false, takenAt: new Date().toISOString(), count: 2, known: true, orphans: [], problems: ['2 routines share the name "brief" - they will all fire, and the spend is multiplied'] }
+  }).get('workflows').innerHTML
+  assert.match(drawn, /the spend is multiplied/, 'the one sentence explaining why a job costs twice')
+})
+
+/* ---------- the ledger week line, guarded at last ---------------------------------------------
+   The hero was guarded and this line was not, so the zero moved one panel down the page. */
+
+test('a ledger with no hours shows a sentence on the Ledger screen, not a zero', () => {
+  const drawn = render({
+    ...base,
+    ledger: { ownerType: 'business', hourlyValue: 150, hoursPerWeek: 0, costPerWeek: 0, unpriced: false, unreadable: 0, complete: false, tasks: [] }
+  }).get('ledger').innerHTML
+
+  assert.ok(!drawn.includes('$0'), 'the Ledger screen printed "$0 a week at the rate you set"')
+  assert.match(drawn, /no hours in it yet/)
+  assert.match(drawn, /would say your\s+repeating work costs you nothing/)
+})
+
+test('an unreadable row is named on the Ledger screen, not silently dropped', () => {
+  const drawn = render({
+    ...base,
+    ledger: { ownerType: 'business', hourlyValue: 150, hoursPerWeek: 3, costPerWeek: 450, unpriced: false, unreadable: 1, complete: false, tasks: [{ task: 'A', words: 'w', confirmed: 'twice', hoursPerWeek: 3 }] }
+  }).get('ledger').innerHTML
+  assert.match(drawn, /could not be read as hours/)
+  assert.match(drawn, /incomplete/)
+})

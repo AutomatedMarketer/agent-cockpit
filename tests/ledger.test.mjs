@@ -186,3 +186,47 @@ test('a partly readable ledger still reports its readable hours, and says one ro
   assert.equal(partial.unreadable, 1)
   assert.equal(partial.complete, false, 'a total with a hole in it is not a statement about their week')
 })
+
+/* A negative frequency would SUBTRACT from the weekly total, quietly making somebody's week look
+   smaller than it is. The `> 0` half of the row test is what stops that, and it was untested. */
+
+test('a negative row cannot subtract from the total', () => {
+  const ledger = shapeLedger(
+    'owner_type: business\nhourly_value: 150\ntasks:\n' +
+    '  - task: Good\n    words: "w"\n    times_per_week: 5\n    minutes_each: 40\n' +
+    '  - task: Negative\n    words: "w"\n    times_per_week: -3\n    minutes_each: 60\n'
+  )
+  assert.equal(Math.round(ledger.hoursPerWeek * 100) / 100, 3.33, 'the negative row must not be counted at all')
+  assert.equal(ledger.unreadable, 1, 'and it must be reported as unreadable')
+})
+
+/* The hero metric name comes out of tiles.yml in the student's repo, and it was looked up on a
+   bare object literal. `hero: constructor` resolved to Object, spread a truthy result and rendered
+   NaN; `hero: __proto__` threw inside shapeHero and 500'd the entire dashboard. */
+
+test('a prototype key in tiles.yml is refused, not resolved', () => {
+  const ledger = shapeLedger(LEDGER)
+  for (const key of ['constructor', 'toString', '__proto__', 'valueOf', 'hasOwnProperty']) {
+    let hero
+    assert.doesNotThrow(() => { hero = shapeHero({ hero: key }, ledger) }, `${key} threw`)
+    assert.equal(hero.defined, false, `${key} resolved to something`)
+    assert.equal(hero.value, undefined)
+  }
+})
+
+/* minutes_each: 1e308 survives every earlier check - the hours are finite and positive - and only
+   the product overflows. The hero rendered "$Infinity". */
+
+test('a hero value that overflows to Infinity is refused', () => {
+  const huge = shapeLedger('owner_type: business\nhourly_value: 150\ntasks:\n  - task: X\n    words: "w"\n    times_per_week: 1e308\n    minutes_each: 1e308\n')
+  const hero = shapeHero({ hero: 'cost-a-week' }, huge)
+  assert.equal(hero.defined, false)
+  assert.notEqual(hero.value, Infinity)
+})
+
+test('a finite but enormous week still refuses rather than printing infinity', () => {
+  const wide = { ownerType: 'business', hourlyValue: Number.MAX_VALUE, hoursPerWeek: 10, costPerWeek: Infinity, unpriced: false, unreadable: 0, complete: true, tasks: [] }
+  const hero = shapeHero({ hero: 'cost-a-week' }, wide)
+  assert.equal(hero.defined, false)
+  assert.match(hero.why, /nobody can read/)
+})

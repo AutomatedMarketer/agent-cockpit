@@ -103,15 +103,20 @@ const FILES = {
     'stack:\n  - name: last30days\n    plugin: last30days@last30days-skill\n    gives: What people said in the last 30 days\n    why: Training data is out of date\n    verify: "Run it on a topic you know"\n  - name: token-saver\n    skill: skills/pull-calendar/SKILL.md\n    gives: Cost awareness\n  - name: ghost\n    skill: skills/ghost/SKILL.md\n    gives: Listed but not in the repo\n'
 }
 
-function stubGitHub() {
+function stubGitHub({ dropPaths = [], overrideFiles = {}, extraTree = [] } = {}) {
   const original = globalThis.fetch
+  const tree = dropPaths.length || extraTree.length
+    ? { ...TREE, tree: [...TREE.tree.filter((node) => !dropPaths.includes(node.path)), ...extraTree] }
+    : TREE
+  const files = { ...FILES, ...overrideFiles }
   globalThis.fetch = async (url) => {
     const target = String(url)
     if (target.includes('/git/trees/')) {
-      return new Response(JSON.stringify(TREE), { status: 200 })
+      return new Response(JSON.stringify(tree), { status: 200 })
     }
     const match = /\/contents\/(.+?)\?ref=/.exec(target)
-    const body = match ? FILES[decodeURI(match[1])] : undefined
+    const path = match ? decodeURI(match[1]) : null
+    const body = path && !dropPaths.includes(path) ? files[path] : undefined
     if (body === undefined) return new Response('Not Found', { status: 404 })
     return new Response(body, { status: 200 })
   }
@@ -139,8 +144,8 @@ function fakeResponse() {
   }
 }
 
-async function run(env = {}) {
-  const restore = stubGitHub()
+async function run(env = {}, options = {}) {
+  const restore = stubGitHub(options)
   const previous = { ...process.env }
   Object.assign(process.env, { GITHUB_OWNER: 'someone', GITHUB_REPO: 'my-agent-team', ...env })
   const response = fakeResponse()
@@ -339,4 +344,84 @@ test('the starter stack reads stack.yml and only claims presence for repo skills
 test('the payload never contains the token', async () => {
   const { body } = await run({ GITHUB_TOKEN: 'ghp_thisMustNeverLeaveTheServer' })
   assert.doesNotMatch(JSON.stringify(body), /ghp_/)
+})
+
+/* ---------- the wiring, not just the helper ---------------------------------------------------
+
+   `snapshot.usable && !snapshot.stale` is the argument the handler passes into shapeWorkflows, and
+   it decides whether the board says DECLARED or UNKNOWN. Mutating it to `true` left the whole
+   suite green through three separate verification rounds: every test called the helpers directly
+   and none called the handler, so the one line joining them was invisible.
+
+   With that mutation applied, an absent snapshot makes every armed job report "Nothing fires this.
+   The schedule above is a wish" while the banner directly above says the routines are unknown. */
+
+test('with no snapshot, the handler reports UNKNOWN - never DECLARED', async () => {
+  const { body } = await run({}, { dropPaths: ['.agent-team/routines.json'] })
+
+  assert.equal(body.routines.usable, false)
+  const armedInFile = body.workflows.filter((workflow) => workflow.armed)
+  assert.ok(armedInFile.length > 0, 'the fixture needs an armed workflow for this to prove anything')
+
+  for (const workflow of armedInFile) {
+    assert.equal(
+      workflow.arm,
+      'unknown',
+      `${workflow.name} was called ${workflow.arm} with no evidence about what rings`
+    )
+    assert.equal(workflow.nextRun, null, 'and it cannot claim a next run either')
+  }
+})
+
+test('with a snapshot, the same workflows resolve to armed or declared', async () => {
+  const { body } = await run()
+  assert.equal(body.routines.usable, true)
+  const states = new Set(body.workflows.filter((workflow) => workflow.armed).map((workflow) => workflow.arm))
+  assert.ok(!states.has('unknown'), 'a usable snapshot is evidence, and unknown means there was none')
+})
+
+test('a stale snapshot is treated as no evidence at all', async () => {
+  const stale = JSON.stringify({
+    takenAt: new Date(Date.now() - 30 * 86400_000).toISOString(),
+    routines: [{ id: 'trig_monday', name: 'Monday Brief' }]
+  })
+  const { body } = await run({}, { overrideFiles: { '.agent-team/routines.json': stale } })
+
+  assert.equal(body.routines.stale, true)
+  for (const workflow of body.workflows.filter((entry) => entry.armed)) {
+    assert.equal(workflow.arm, 'unknown', 'a month-old snapshot is not proof that a routine exists today')
+  }
+  assert.deepEqual(body.routines.orphans, [], 'and nothing is accused of being an orphan on that evidence')
+})
+
+/* Two alarm clocks for one job both fire and both are billed, and the duplicate check that says so
+   was computed in the handler with nothing asserting it - disabling the loop left the suite green.
+   Same for two workflow files sharing a name, which both claim the one routine. */
+
+test('two routines sharing a name are reported as a problem', async () => {
+  const snapshot = JSON.stringify({
+    takenAt: new Date().toISOString(),
+    routines: [
+      { id: 'trig_a', name: 'Monday Brief' },
+      { id: 'trig_b', name: 'monday   brief' }
+    ]
+  })
+  const { body } = await run({}, { overrideFiles: { '.agent-team/routines.json': snapshot } })
+  assert.ok(
+    body.routines.problems.some((problem) => /routines share the name/.test(problem)),
+    `expected a duplicate-routine problem, got ${JSON.stringify(body.routines.problems)}`
+  )
+  assert.ok(body.routines.problems.some((problem) => /spend is multiplied/.test(problem)))
+})
+
+test('two workflow files sharing a name are reported as a problem', async () => {
+  const copy = FILES['workflows/monday-brief.yml']
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: 'workflows/monday-brief-copy.yml' }],
+    overrideFiles: { 'workflows/monday-brief-copy.yml': copy }
+  })
+  assert.ok(
+    body.routines.problems.some((problem) => /workflow files share the name/.test(problem)),
+    `expected a duplicate-workflow problem, got ${JSON.stringify(body.routines.problems)}`
+  )
 })

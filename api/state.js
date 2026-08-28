@@ -178,6 +178,27 @@ export function armStateFor(workflow, routines, routinesKnown = true) {
   return ringing ? 'armed' : 'declared'
 }
 
+// Mirrors validateArming in the team repo. Without it the board silently read `armed: "yes"` as
+// OFF and explained nothing - a student who typed the wrong kind of true saw a job quietly not
+// running and no reason anywhere. The template refuses all three of these; the board should at
+// least be able to say so.
+export function armingProblems(workflow) {
+  const problems = []
+  const name = workflow?.name || workflow?.slug || 'a workflow'
+  const armed = workflow?.armedRaw
+
+  if (armed !== undefined && typeof armed !== 'boolean') {
+    problems.push(`${name}: trigger.armed must be true or false`)
+  }
+  if (armed !== true && !workflow?.reason) {
+    problems.push(`${name}: is not armed and carries no reason - say what would have to change for it to be worth a run`)
+  }
+  if (armed === true && !workflow?.schedule) {
+    problems.push(`${name}: is armed but declares no schedule - there is nothing for a routine to fire on`)
+  }
+  return problems
+}
+
 export function shapeWorkflows(workflowFiles, runs, known, now = Date.now(), routines = [], routinesKnown = true) {
   return workflowFiles
     .map(([path, body]) => {
@@ -217,13 +238,16 @@ export function shapeWorkflows(workflowFiles, runs, known, now = Date.now(), rou
         runner: workflow.runner ?? 'routine',
         schedule,
         armed,
+        // The raw value, so the board can tell `armed: "yes"` from an absent field the way the
+        // template does. `armed` above is the coerced boolean the rest of the page uses.
+        armedRaw: workflow.trigger?.armed,
         arm,
         reason: reason || null,
         routineId: arm === 'armed' || arm === 'unapproved' ? (routine?.id ?? null) : null,
         fire: workflow.trigger?.fire === true,
         webhook: workflow.trigger?.webhook === true,
         output: typeof workflow.output === 'string' ? workflow.output : null,
-        problems,
+        problems: [...problems, ...armingProblems({ name, slug, schedule, reason, armedRaw: workflow.trigger?.armed })],
         lastRun: last
           ? { started_at: last.started_at, status: last.status, summary: last.summary ?? '', session_url: last.session_url ?? null }
           : null,
@@ -498,8 +522,12 @@ export function shapeHero(tiles, ledger) {
   const metric = typeof tiles?.hero === 'string' ? tiles.hero.trim() : ''
   if (!metric) return null
 
-  const resolve = HERO_METRICS[metric]
-  if (!resolve) {
+  // `HERO_METRICS[metric]` with an unvalidated key reaches the prototype chain. From a tiles.yml:
+  // `hero: constructor` resolved to Object, spread a truthy result and rendered NaN; `hero:
+  // __proto__` threw inside this function and 500'd the whole dashboard. The key comes out of a
+  // file in the student's repo, so it is exactly as trusted as they are careless.
+  const resolve = Object.hasOwn(HERO_METRICS, metric) ? HERO_METRICS[metric] : null
+  if (typeof resolve !== 'function') {
     return {
       metric,
       defined: false,
@@ -517,6 +545,12 @@ export function shapeHero(tiles, ledger) {
           ? 'your ledger has no hours in it yet'
           : `"${metric}" needs a number your ledger does not carry`
     return { metric, defined: false, why }
+  }
+
+  // Last gate, on the number itself. `minutes_each: 1e308` survives every earlier check - the
+  // hours are finite and positive - and only the product overflows, so the hero rendered "$Infinity".
+  if (!Number.isFinite(resolved.value)) {
+    return { metric, defined: false, why: `"${metric}" came out as a number nobody can read` }
   }
 
   return { metric, defined: true, ...resolved }
@@ -764,15 +798,26 @@ export default async function handler(request, response) {
     const memory = shapeMemory(paths, sizes)
     const onboarding = parseOnboardingState(onboardingSource)
     const routinesKnown = snapshot.usable && !snapshot.stale
+    // Claimed when a routine MATCHED, not when it happened to carry an id. Built from routineId,
+    // a routine with no id matched its workflow, reported ARMED on its card, and appeared under
+    // "Routines with no workflow file" at the same time - two contradictory statements about one
+    // job on one screen. arm.mjs claims on the match; so does this now.
     const claimedRoutines = new Set(
-      workflows.filter((workflow) => workflow.routineId).map((workflow) => routineNameKey(workflow.name))
+      workflows
+        .filter((workflow) => workflow.arm === 'armed' || workflow.arm === 'unapproved')
+        .map((workflow) => routineNameKey(workflow.name))
     )
     // Only from a snapshot the board has agreed to trust. A stale one turned every correctly armed
     // routine into a reported orphan, underneath a banner saying the data was not to be trusted.
     const orphanRoutines = routinesKnown
       ? (snapshot.routines ?? [])
           .filter((routine) => !claimedRoutines.has(routineNameKey(routine?.name)))
-          .map((routine) => ({ id: routine?.id ?? null, name: routine?.name ?? '(unnamed)' }))
+          .map((routine) => ({
+            id: routine?.id ?? null,
+            // Matching arm.mjs: a blank, whitespace or non-string name is "(unnamed)", not an
+            // empty bold tag or a stray number rendered as if it were a name.
+            name: (typeof routine?.name === 'string' && routine.name.trim()) || '(unnamed)'
+          }))
       : []
 
     // Two alarm clocks for one job both fire and both are billed, and the second was invisible.

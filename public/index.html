@@ -592,13 +592,32 @@ function renderLedger() {
     return
   }
 
+  /* The hero was guarded and this line was not, so the zero simply moved down the page: an empty
+     ledger printed "0 hours a week - $0 a week at the rate you set" here instead. Same claim,
+     same screen, one panel lower. Guarded at the source now, in the same terms. */
+  const hoursKnown = Number.isFinite(ledger.hoursPerWeek) && ledger.hoursPerWeek > 0
+  const costKnown = hoursKnown && !ledger.unpriced && Number.isFinite(ledger.costPerWeek)
+
   const money = ledger.unpriced
     ? '<span class="small muted">No rate recorded, so this is counted in hours only.</span>'
-    : `<b>$${Math.round(ledger.costPerWeek).toLocaleString('en-US')}</b> a week at the rate you set`
+    : costKnown
+      ? `<b>$${Math.round(ledger.costPerWeek).toLocaleString('en-US')}</b> a week at the rate you set`
+      : '<span class="small muted">No cost, because there are no hours to cost.</span>'
 
-  const weekHtml = `<div class="panel"><div class="gap"><b>${(Math.round(ledger.hoursPerWeek * 10) / 10)}</b> hours a week &middot; ${money}</div>
-    <p class="small muted">Your numbers, from <code>ledger.yml</code>. Disagree with any of it and the
-    answer is to change that file - nothing here is a recommendation.</p></div>`
+  const unreadableNote = ledger.unreadable
+    ? `<p class="small bad">${ledger.unreadable} row${ledger.unreadable === 1 ? '' : 's'} in your
+       ledger could not be read as hours, so the total below is incomplete. Fix
+       <code>ledger.yml</code> and re-run <code>npm run check:ledger</code>.</p>`
+    : ''
+
+  const weekHtml = hoursKnown
+    ? `<div class="panel"><div class="gap"><b>${(Math.round(ledger.hoursPerWeek * 10) / 10)}</b> hours a week &middot; ${money}</div>
+       ${unreadableNote}
+       <p class="small muted">Your numbers, from <code>ledger.yml</code>. Disagree with any of it and the
+       answer is to change that file - nothing here is a recommendation.</p></div>`
+    : `<div class="panel empty"><b>Your ledger has no hours in it yet.</b>
+       <span class="small">Nothing is shown rather than a zero, because a zero here would say your
+       repeating work costs you nothing.</span>${unreadableNote}</div>`
 
   const tasksHtml = ledger.tasks.length
     ? `<div class="panel">${ledger.tasks.map((task) =>
@@ -761,7 +780,7 @@ function scheduleStripHtml(workflows, options = {}) {
   const scheduled = workflows.filter((workflow) => workflow.schedule && ringsNow(workflow))
   const silent = workflows.filter((workflow) => workflow.schedule && !ringsNow(workflow))
   const silentNote = silent.length
-    ? `<p class="small muted">${silent.length} other job${silent.length === 1 ? '' : 's'} name a time in their file and nothing fires them - see the Workflows screen.</p>`
+    ? `<p class="small muted">${silent.length === 1 ? '1 other job names a time in its file and nothing fires it' : silent.length + ' other jobs name a time in their files and nothing fires them'} - see the Workflows screen.</p>`
     : ''
   if (!scheduled.length) {
     return silentNote
@@ -870,6 +889,16 @@ function snapshotBannerHtml(routines) {
     on your account, as recorded ${escapeHtml(when)}. This is a snapshot, not a live reading.</span></div>`
 }
 
+/* Both duplicate-name checks were computed server-side and displayed nowhere, so the owner never
+   saw "they will all fire, and the spend is multiplied" - the one sentence that explains why a
+   job arrives twice and costs twice. */
+function routineProblemsHtml(routines) {
+  if (!routines || !routines.problems || !routines.problems.length) return ''
+  return `<h2>Problems with your schedule</h2><div class="panel">${routines.problems.map((problem) =>
+    `<div class="gap small bad">${escapeHtml(problem)}</div>`
+  ).join('')}</div>`
+}
+
 function orphanRoutinesHtml(routines) {
   if (!routines || !routines.orphans || !routines.orphans.length) return ''
   return `<h2>Routines with no workflow file</h2><div class="panel">${routines.orphans.map((orphan) =>
@@ -880,8 +909,15 @@ function orphanRoutinesHtml(routines) {
 }
 
 function renderWorkflows() {
+  // An early return here used to hide the orphan panel and the schedule problems entirely, so a
+  // repo with no workflow files but a live routine on the account showed nothing about it at all.
+  // That is the one case where those panels matter most.
   if (!data.workflows.length) {
-    el('workflows').innerHTML = `<div class="panel empty">No workflow files in <code>workflows/</code> yet. Ask for one — <code>/new-workflow</code> — and it appears here.</div>`
+    el('workflows').innerHTML =
+      snapshotBannerHtml(data.routines) +
+      `<div class="panel empty">No workflow files in <code>workflows/</code> yet. Ask for one — <code>/new-workflow</code> — and it appears here.</div>` +
+      routineProblemsHtml(data.routines) +
+      orphanRoutinesHtml(data.routines)
     return
   }
   const cards = data.workflows.map((workflow) => {
@@ -947,7 +983,7 @@ function renderWorkflows() {
       ${problems}
     </div>`
   }).join('')
-  el('workflows').innerHTML = snapshotBannerHtml(data.routines) + scheduleStripHtml(data.workflows) + `<div class="stack">${cards}</div>` + orphanRoutinesHtml(data.routines)
+  el('workflows').innerHTML = snapshotBannerHtml(data.routines) + scheduleStripHtml(data.workflows) + `<div class="stack">${cards}</div>` + routineProblemsHtml(data.routines) + orphanRoutinesHtml(data.routines)
 }
 
 /* ---------- Memory ---------- */
