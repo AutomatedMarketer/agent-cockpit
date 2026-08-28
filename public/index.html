@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#0d0f13" />
 <title>Agent OS</title>
+<!-- The course tells every attendee to bookmark this on their phone before they leave the
+     room. Without these it lands as a blank tile. Rebuild: node scripts/build-icons.mjs -->
+<link rel="icon" href="/favicon.ico" sizes="32x32" />
+<link rel="icon" href="/icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<meta name="apple-mobile-web-app-title" content="Agent OS" />
+<meta name="mobile-web-app-capable" content="yes" />
 <style>
   :root {
     color-scheme: dark;
@@ -1522,6 +1530,11 @@ function renderUnlock(message) {
     <h1>Locked</h1>
     <p>${escapeHtml(message)}</p>
     <form id="unlock-form">
+      <!-- Password managers will not offer to SAVE a lone password field. Without this the
+           key gets re-typed by hand on every device, and the course asks people to open this
+           on their phone. Hidden, never submitted anywhere - the form never leaves the page. -->
+      <input type="text" name="username" value="Agent OS view key" autocomplete="username"
+        readonly tabindex="-1" aria-hidden="true" style="display:none" />
       <input id="unlock-key" type="password" autocomplete="current-password"
         inputmode="text" placeholder="View key" aria-label="View key" />
       <button class="fire" type="submit">Unlock</button>

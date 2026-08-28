@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Agent OS">
+  <rect width="512" height="512" fill="#0d0f13"/>
+  <circle cx="256" cy="256" r="148" fill="none" stroke="#6ea8ff" stroke-width="48"/>
+  <circle cx="256" cy="256" r="69" fill="#6ea8ff"/>
+</svg>
