@@ -373,3 +373,42 @@ test('empty screens name the next step rather than only the absence', () => {
       `the empty ${screen} screen said what was missing and not what to do about it`)
   }
 })
+
+/* ---------- UI3, second pass: found by opening the page in a browser at 375px ------------------
+   The DOM harness above renders content correctly and knows nothing about what overlaps what or
+   how big anything is. Two things only a real viewport could say. */
+
+test('the timestamps a reader is asked to trust are written for a person', () => {
+  const drawn = render({
+    ...base,
+    routines: { takenAt: new Date(Date.now() - 2 * 86400e3).toISOString(), usable: true, stale: false, why: null, count: 1, known: true, orphans: [], problems: [] }
+  })
+  const today = drawn.get('today').innerHTML
+  const foot = drawn.get('foot').textContent
+
+  // "as recorded 8/26/2026, 12:44:21 AM" - a raw toLocaleString, seconds and all, in the two
+  // places on the board whose entire job is to make an evidence claim believable.
+  for (const [where, text] of [['the snapshot banner', today], ['the footer', foot]]) {
+    assert.ok(!/:\d\d:\d\d/.test(text), `${where} prints a timestamp to the second`)
+  }
+  assert.match(today, /days ago/, 'the snapshot never says how old it is in words')
+  assert.match(foot, /ago/, 'the footer never says how old the reading is in words')
+})
+
+test('the link to a live session is big enough to hit with a thumb', () => {
+  // Measured in Chromium at 375x667: every other control cleared 32px; "watch" was 34x17.
+  // It is also the one control on the board that goes from a phone to a live transcript.
+  const drawn = render({
+    ...base,
+    board: { todo: [], upNext: [], running: [], done: [{ name: 'X', owner: 'research', status: 'ok', summary: 's', started_at: new Date().toISOString(), session_url: 'https://claude.ai/code/sessions/a' }] }
+  }).get('today').innerHTML
+  assert.match(drawn, /class="watch"/, 'the watch link has no class, so it cannot be given a hit area')
+  assert.match(html, /\.watch\s*\{[^}]*min-height/, 'nothing in the stylesheet gives .watch a minimum height')
+})
+
+test('a skill name is a link that opens a file, so it gets a thumb target too', () => {
+  // Measured at 23px in the same browser pass. Every tappable thing, not just the one that
+  // happened to be looked at first.
+  assert.match(html, /a\.title\[data-open\]\s*\{[^}]*min-height/,
+    'the link that opens a skill file has no minimum height')
+})

@@ -162,6 +162,18 @@
   .run:last-child { border-bottom: 0; }
   .run .summary { margin: .2rem 0 0; font-size: .875rem; color: var(--muted); }
 
+  /* Measured in Chromium at 375x667: every other control on the board cleared 32px and this one
+     was 34x17. It is also the only control that goes from a phone to the live transcript of a
+     run, which makes it the worst one to have to aim at. */
+  a.watch {
+    display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0 .5rem;
+    margin: -.6rem 0; font-weight: 600;
+  }
+
+  /* Same measurement, same fix: a skill's name is the link that opens the file, and it was 23px
+     tall. Anything on this page that is meant to be tapped gets the thumb target. */
+  a.title[data-open] { display: inline-flex; align-items: center; min-height: 2.75rem; }
+
   /* Team */
   .agent { padding: .85rem .9rem; border-bottom: 1px solid var(--line); }
   .agent:last-child { border-bottom: 0; }
@@ -428,6 +440,19 @@ function ago(iso) {
   return days === 1 ? 'yesterday' : `${days} days ago`
 }
 
+// Two places on this board exist purely to make an evidence claim believable - the snapshot
+// banner and the footer - and both printed a raw toLocaleString: "as recorded 8/26/2026,
+// 12:44:21 AM". Seconds serve nobody, and a bare date makes a reader do arithmetic to find out
+// whether it is old. How long ago first, in words, with the exact moment kept in brackets.
+function stamp(iso) {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return 'at an unreadable time'
+  const exact = date.toLocaleString(undefined, {
+    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+  })
+  return `${ago(iso)} (${exact})`
+}
+
 function until(iso) {
   if (!iso) return null
   const seconds = (new Date(iso).getTime() - Date.now()) / 1000
@@ -548,7 +573,7 @@ function boardHtml(board) {
         <b>${escapeHtml(card.name)}</b>
         <span class="small muted">started ${escapeHtml(ago(card.started_at))}</span>
       </div>
-      ${card.session_url ? `<a class="small" href="${escapeHtml(card.session_url)}" rel="noreferrer noopener">watch</a>` : ''}
+      ${card.session_url ? `<a class="small watch" href="${escapeHtml(card.session_url)}" rel="noreferrer noopener">watch</a>` : ''}
     </div>`)
   const done = board.done.map((card) => {
     const glyph = STATUS_GLYPH[card.status] ?? '&#10003;'
@@ -557,7 +582,7 @@ function boardHtml(board) {
         <span><span class="st st-${escapeHtml(card.status)}">${glyph}</span> <b>${escapeHtml(card.name)}</b></span>
         <span class="small muted">${escapeHtml(ago(card.started_at))}</span>
       </div>
-      <p class="summary">${escapeHtml(card.summary)}${card.session_url ? ` &middot; <a href="${escapeHtml(card.session_url)}" rel="noreferrer noopener">watch</a>` : ''}</p>
+      <p class="summary">${escapeHtml(card.summary)}${card.session_url ? ` &middot; <a class="watch" href="${escapeHtml(card.session_url)}" rel="noreferrer noopener">watch</a>` : ''}</p>
     </div>`
   })
   return `<div class="board">
@@ -740,7 +765,7 @@ function renderTeam() {
     const runRows = mine.map((run) =>
       `<div class="run"><div class="row between">
         <span class="small">${escapeHtml(run.summary ?? '')}</span>
-        <span class="small muted">${escapeHtml(ago(run.started_at))}${run.session_url ? ` &middot; <a href="${escapeHtml(run.session_url)}" rel="noreferrer noopener">watch</a>` : ''}</span>
+        <span class="small muted">${escapeHtml(ago(run.started_at))}${run.session_url ? ` &middot; <a class="watch" href="${escapeHtml(run.session_url)}" rel="noreferrer noopener">watch</a>` : ''}</span>
       </div></div>`
     ).join('')
     return `<details class="agent agent-accent ${agent.state}"${accentStyle(agent.slug)}>
@@ -914,14 +939,14 @@ function snapshotBannerHtml(routines) {
       to record what is really scheduled. Until then the states below come from your files alone,
       and a file claiming a schedule is exactly what this screen is here to check.</span></div>`
   }
-  const when = new Date(routines.takenAt).toLocaleString()
+  const when = stamp(routines.takenAt)
   if (routines.stale) {
     return `<div class="panel empty"><b>These routines were last checked ${escapeHtml(when)}.</b>
       <span class="small">${escapeHtml(routines.why ?? '')} — run <code>/routines</code> again before
       trusting it.</span></div>`
   }
   return `<div class="panel"><span class="small muted">${routines.count} routine${routines.count === 1 ? '' : 's'}
-    on your account, as recorded ${escapeHtml(when)}. This is a snapshot, not a live reading.</span></div>`
+    on your account, recorded ${escapeHtml(when)}. This is a snapshot, not a live reading.</span></div>`
 }
 
 /* Both duplicate-name checks were computed server-side and displayed nowhere, so the owner never
@@ -967,7 +992,7 @@ function renderWorkflows() {
       workflow.webhook ? `<span class="chip on">webhook</span>` : ''
     ].filter(Boolean).join('')
     const last = workflow.lastRun
-      ? `Last: ${escapeHtml(workflow.lastRun.status)} ${escapeHtml(ago(workflow.lastRun.started_at))}${workflow.lastRun.session_url ? ` &middot; <a href="${escapeHtml(workflow.lastRun.session_url)}" rel="noreferrer noopener">watch</a>` : ''}`
+      ? `Last: ${escapeHtml(workflow.lastRun.status)} ${escapeHtml(ago(workflow.lastRun.started_at))}${workflow.lastRun.session_url ? ` &middot; <a class="watch" href="${escapeHtml(workflow.lastRun.session_url)}" rel="noreferrer noopener">watch</a>` : ''}`
       : 'Never run'
     const next = workflow.nextRun ? ` &middot; next ${escapeHtml(until(workflow.nextRun) ?? '')}` : ''
     // No next-run time is invented for anything that does not ring. Instead the card says why.
@@ -1477,7 +1502,7 @@ function render() {
   renderSkills()
   renderMemory()
   renderConnections()
-  el('foot').textContent = `Read from your repo at ${new Date(data.generatedAt).toLocaleString()}. Nothing on this page comes from anywhere else.`
+  el('foot').textContent = `Read from your repo ${stamp(data.generatedAt)}. Nothing on this page comes from anywhere else.`
   showScreen(location.hash.slice(1))
 }
 
