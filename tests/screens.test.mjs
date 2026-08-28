@@ -92,3 +92,8 @@ test('orphan routines are reported and explicitly not adopted', () => {
 test('the schedule chip is only lit when something actually rings', () => {
   assert.match(page, /const scheduleLive = workflow\.arm === 'armed' \|\| workflow\.arm === 'unapproved'/)
 })
+
+test('the unknown state has its own label and explanation', () => {
+  assert.match(page, /UNKNOWN/)
+  assert.match(page, /Whether anything actually fires it is unknown/)
+})

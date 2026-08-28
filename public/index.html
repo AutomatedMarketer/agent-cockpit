@@ -814,7 +814,10 @@ const ARM_LABELS = {
   armed: { text: 'ARMED', cls: 'on', note: 'a routine exists and this fires' },
   declared: { text: 'DECLARED', cls: 'bad', note: 'this file says run it and NOTHING rings' },
   unapproved: { text: 'UNAPPROVED', cls: 'bad', note: 'something is firing that this file never approved' },
-  off: { text: 'OFF', cls: '', note: 'deliberately not running' }
+  off: { text: 'OFF', cls: '', note: 'deliberately not running' },
+  // Not a fifth kind of job - the same jobs, with the evidence missing. Saying UNKNOWN is the
+  // honest answer when the snapshot cannot be trusted; saying DECLARED would be a claim.
+  unknown: { text: 'UNKNOWN', cls: '', note: 'this file says run it, and there is no snapshot to check it against' }
 }
 
 function armChipHtml(workflow) {
@@ -874,7 +877,9 @@ function renderWorkflows() {
       : 'Never run'
     const next = workflow.nextRun ? ` &middot; next ${escapeHtml(until(workflow.nextRun) ?? '')}` : ''
     // No next-run time is invented for anything that does not ring. Instead the card says why.
-    const armNote = workflow.arm === 'declared'
+    const armNote = workflow.arm === 'unknown'
+      ? `<div class="small muted">This file says it should run. Whether anything actually fires it is unknown until you run <code>/routines</code> and commit the result.</div>`
+      : workflow.arm === 'declared'
       ? `<div class="small bad">Nothing fires this. The schedule above is a wish until you arm it — <code>/arm</code>.</div>`
       : workflow.arm === 'unapproved'
         ? `<div class="small bad">A routine is firing for this and the file says it is off. It is spending runs nobody approved.</div>`

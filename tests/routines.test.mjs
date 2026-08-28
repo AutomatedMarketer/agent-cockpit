@@ -61,7 +61,7 @@ test('a snapshot with no takenAt is served but never as current', () => {
 test('an old snapshot is stale and says how old', () => {
   const snap = shapeSnapshot(JSON.stringify({ takenAt: isoAgo(72 * 3600_000), routines: [] }))
   assert.equal(snap.stale, true)
-  assert.match(snap.why, /hours old/)
+  assert.match(snap.why, /days ago|hours ago/, 'an age a person can read')
 })
 
 /* ---------- the four states -------------------------------------------------------------------- */
@@ -152,4 +152,42 @@ test('a workflow with no armed field at all is off, never armed by default', () 
   const files = [workflowFile('legacy', { name: 'Legacy' })]
   assert.equal(shapeWorkflows(files, [], known, Date.now(), [])[0].arm, 'off')
   assert.equal(shapeWorkflows(files, [], known, Date.now(), [{ id: 'x', name: 'Legacy' }])[0].arm, 'unapproved')
+})
+
+/* ---------- the mirror must not drift from arm.mjs ---------------------------------------------
+   This reconcile logic is mirrored from scripts/lib/arm.mjs in the team repo, not imported — there
+   is no import path between a student's repo and a deployed app. That makes drift the standing
+   risk, and it happened once already: arm.mjs learned to refuse future timestamps and to say
+   `unknown`, and this file kept accepting a 2099 stamp as the freshest snapshot possible. */
+
+test('a snapshot stamped in the future is refused, not treated as the freshest possible', () => {
+  const now = Date.parse('2026-08-27T12:00:00Z')
+  const snap = shapeSnapshot(JSON.stringify({ takenAt: '2099-01-01T00:00:00Z', routines: [] }), now)
+  assert.equal(snap.usable, false)
+  assert.notEqual(snap.stale, false, 'it must never read as fresh')
+  assert.match(snap.why, /future/)
+})
+
+test('an age is rendered in something a person reads', () => {
+  const now = Date.parse('2026-08-27T12:00:00Z')
+  const snap = shapeSnapshot(JSON.stringify({ takenAt: '1999-01-01T00:00:00Z', routines: [] }), now)
+  assert.doesNotMatch(snap.why, /\d{5,} hours/, '242426 hours is noise, not a number')
+})
+
+/* "Nothing rings" and "I cannot tell what rings" are different claims, and only one of them
+   survives a snapshot the board cannot trust. */
+
+test('with the routines unknown, no job is called declared', () => {
+  const files = [workflowFile('brief', { name: 'Brief', armed: true })]
+  const unknown = shapeWorkflows(files, [], known, Date.now(), [], false)
+  assert.equal(unknown[0].arm, 'unknown')
+  assert.equal(unknown[0].nextRun, null)
+
+  const declared = shapeWorkflows(files, [], known, Date.now(), [], true)
+  assert.equal(declared[0].arm, 'declared', 'with a trustworthy snapshot, an empty list DOES mean nothing rings')
+})
+
+test('an unarmed job is still off when the routines are unknown - the file decides that one', () => {
+  const files = [workflowFile('cold', { name: 'Cold', armed: false, reason: 'not yet' })]
+  assert.equal(shapeWorkflows(files, [], known, Date.now(), [], false)[0].arm, 'off')
 })

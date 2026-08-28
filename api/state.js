@@ -92,7 +92,19 @@ async function rawFile({ owner, repo, branch }, filePath) {
 // between them. tests/routines.test.mjs pins the two to the same answers.
 
 export const SNAPSHOT_STALE_AFTER_HOURS = 24
-export const ARM_STATES = ['armed', 'declared', 'unapproved', 'off']
+
+// "242426 hours old" is not a number anybody reads, and the point of the sentence is that somebody
+// notices it.
+export function describeAge(hours) {
+  if (hours < 48) return `${Math.round(hours)} hours`
+  const days = Math.round(hours / 24)
+  if (days < 14) return `${days} days`
+  const weeks = Math.round(days / 7)
+  if (weeks < 9) return `${weeks} weeks`
+  const months = Math.round(days / 30)
+  return months < 24 ? `${months} months` : `${Math.round(days / 365)} years`
+}
+export const ARM_STATES = ['armed', 'declared', 'unapproved', 'off', 'unknown']
 
 function routineNameKey(value) {
   return typeof value === 'string' ? value.trim().toLowerCase().replace(/\s+/g, ' ') : ''
@@ -120,6 +132,20 @@ export function shapeSnapshot(source, now = Date.now()) {
     return { takenAt: null, routines, usable: false, why: 'the snapshot does not say when it was taken' }
   }
   const ageHours = (now - takenMs) / 3600_000
+
+  // A stamp in the future is not fresh, it is wrong - clock skew, a hand edit, a bad timezone.
+  // Left alone it gives the worst possible answer: ageHours goes negative, the staleness test
+  // passes, and a file dated 2099 reads as the most current snapshot imaginable.
+  if (ageHours < 0) {
+    return {
+      takenAt,
+      routines,
+      ageHours,
+      usable: false,
+      why: 'the snapshot is stamped in the future, so its age cannot be trusted'
+    }
+  }
+
   const stale = ageHours > SNAPSHOT_STALE_AFTER_HOURS
   return {
     takenAt,
@@ -127,7 +153,7 @@ export function shapeSnapshot(source, now = Date.now()) {
     ageHours,
     stale,
     usable: true,
-    why: stale ? `the snapshot is ${Math.round(ageHours)} hours old` : null
+    why: stale ? `the snapshot was taken ${describeAge(ageHours)} ago` : null
   }
 }
 
@@ -137,13 +163,19 @@ export function routineFor(workflow, routines) {
   return (routines ?? []).find((routine) => routineNameKey(routine?.name) === wanted) ?? null
 }
 
-export function armStateFor(workflow, routines) {
+// `routinesKnown` is the difference between "nothing rings" and "I have no idea what rings".
+//
+// Without it an unusable snapshot gives an empty routine list, every armed job comes back
+// `declared`, and the board asserts a pile of wishes it has no evidence for - while the banner
+// above it says the routines are unknown. Two answers on one screen, and the confident one wrong.
+export function armStateFor(workflow, routines, routinesKnown = true) {
+  if (!routinesKnown) return workflow?.armed === true ? 'unknown' : 'off'
   const ringing = Boolean(routineFor(workflow, routines))
   if (workflow?.armed !== true) return ringing ? 'unapproved' : 'off'
   return ringing ? 'armed' : 'declared'
 }
 
-export function shapeWorkflows(workflowFiles, runs, known, now = Date.now(), routines = []) {
+export function shapeWorkflows(workflowFiles, runs, known, now = Date.now(), routines = [], routinesKnown = true) {
   return workflowFiles
     .map(([path, body]) => {
       const slug = path.split('/').pop().replace(/\.ya?ml$/, '')
@@ -171,7 +203,7 @@ export function shapeWorkflows(workflowFiles, runs, known, now = Date.now(), rou
       const armed = workflow.trigger?.armed === true
       const reason = typeof workflow.trigger?.reason === 'string' ? workflow.trigger.reason.trim() : null
       const routine = routineFor({ name, slug }, routines)
-      const arm = armStateFor({ name, slug, armed }, routines)
+      const arm = armStateFor({ name, slug, armed }, routines, routinesKnown)
 
       return {
         slug,
@@ -677,7 +709,7 @@ export default async function handler(request, response) {
     if (agents.length) known.agents = agents.map((agent) => agent.slug)
     if (skillSlugs.length) known.skills = skillSlugs
     const snapshot = shapeSnapshot(routineSnapshotSource, now)
-    const workflows = shapeWorkflows(workflowFiles, runs, known, now, snapshot.routines)
+    const workflows = shapeWorkflows(workflowFiles, runs, known, now, snapshot.routines, snapshot.usable && !snapshot.stale)
     const tasks = parseTasks(taskFiles)
 
     // Heartbeat files named by the registry, fetched only if the tree actually has them.
