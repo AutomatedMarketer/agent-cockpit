@@ -27,19 +27,29 @@ test('every screen that shipped still has somewhere to render into', () => {
   }
 })
 
+/* SCREENS used to be a hand-kept array sitting beside a hand-kept TITLES map, and the map lost
+   `ledger`: the screen routed perfectly and drew its header as the word "undefined". SCREENS is
+   derived from TITLES now, so being registered and having a name are the same fact - which is
+   what these two check. */
+
+const titleMap = () => {
+  const declared = /const TITLES = \{([^}]+)\}/.exec(page)
+  assert.ok(declared, 'the TITLES map should still exist - SCREENS is derived from it')
+  return declared[1]
+}
+
 test('every screen that shipped is still registered for routing', () => {
-  const declared = /const SCREENS = \[([^\]]+)\]/.exec(page)
-  assert.ok(declared, 'the SCREENS list should still exist')
+  assert.match(page, /const SCREENS = Object\.keys\(TITLES\)/,
+    'SCREENS must stay derived from TITLES, or a screen can exist with no name again')
   for (const screen of SHIPPED_SCREENS) {
-    assert.match(declared[1], new RegExp(`'${screen}'`), `${screen} is not in the SCREENS list, so its hash will not route`)
+    assert.ok(titleMap().includes(`${screen}: '`), `${screen} has no title, so its hash will not route`)
   }
 })
 
 test('the ledger screen was added without displacing anything', () => {
   assert.match(page, /data-screen="ledger"/)
   assert.match(page, /id="ledger"/)
-  const declared = /const SCREENS = \[([^\]]+)\]/.exec(page)
-  assert.match(declared[1], /'ledger'/)
+  assert.ok(titleMap().includes("ledger: 'Ledger'"))
 })
 
 /* The hero number is the reason UI1 exists, and the reason it took this long: tiles.yml has named

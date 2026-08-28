@@ -14,7 +14,7 @@ const script = html.match(/<script>([\s\S]*)<\/script>/)[1]
 
 // The smallest DOM the page needs. Elements record what was written to them, which is the whole
 // point: the assertions below read the rendered HTML rather than the source that produced it.
-function render(payload) {
+function render(payload, options = {}) {
   const nodes = new Map()
   const node = (id) => {
     if (!nodes.has(id)) {
@@ -49,10 +49,11 @@ function render(payload) {
     documentElement: node('html')
   }
 
+  const hash = options.hash ?? ''
   const context = {
     document,
-    window: { addEventListener() {}, matchMedia: () => ({ matches: false, addEventListener() {} }), location: { hash: '' }, scrollTo() {}, requestAnimationFrame: (fn) => fn() },
-    location: { hash: '', search: '' },
+    window: { addEventListener() {}, matchMedia: () => ({ matches: false, addEventListener() {} }), location: { hash }, scrollTo() {}, requestAnimationFrame: (fn) => fn() },
+    location: { hash, search: '' },
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     fetch: async () => ({ ok: true, status: 200, json: async () => payload }),
     console,
@@ -274,4 +275,101 @@ test('an unreadable row is named on the Ledger screen, not silently dropped', ()
   }).get('ledger').innerHTML
   assert.match(drawn, /could not be read as hours/)
   assert.match(drawn, /incomplete/)
+})
+
+
+/* ---------- UI3: the screens you have to click to reach ---------------------------------------
+   Every test above draws the DEFAULT screen. Nothing had ever navigated, so nothing had ever
+   looked at the header of a screen you reach by tapping. */
+
+test('every screen has a title - none renders the word undefined in its header', () => {
+  for (const screen of SCREENS) {
+    const title = render(base, { hash: '#' + screen }).get('screen-title').textContent
+    assert.ok(title, `${screen} rendered no title at all`)
+    assert.notEqual(String(title), 'undefined', `the ${screen} screen header reads "undefined"`)
+  }
+})
+
+test('the nav has exactly as many tabs as there are screens, and the grid fits them', () => {
+  const tabs = html.split('<div class="tabs">')[1].split('</div>')[0]
+  const links = tabs.match(/data-screen="/g) ?? []
+  assert.equal(links.length, SCREENS.length, 'nav tabs and screens have drifted apart')
+
+  // A 6-column grid holding 7 links wraps to a second row, and --nav-h (which the body's
+  // top padding is built from) only ever described one row. The result was a strip of every
+  // page sitting underneath the nav on a phone, on every screen, permanently.
+  const columns = html.match(/nav \.tabs \{[^}]*grid-template-columns: repeat\((\d+)/)
+  if (columns) {
+    assert.ok(Number(columns[1]) >= links.length,
+      `the phone nav lays ${links.length} tabs into ${columns[1]} columns, so it wraps`)
+  }
+})
+
+/* ---------- UI3: an empty list is not an all-clear -------------------------------------------
+   The disease this whole product exists to treat, printed on its own front page. */
+
+test('a team with nothing armed is never told everything scheduled is running', () => {
+  const drawn = render({ ...base, workflows: [workflow({ arm: 'declared', armed: true })] }).get('today').innerHTML
+  assert.ok(!drawn.includes('Everything scheduled is running'),
+    'nine jobs declare a schedule, nothing rings, and Today reported all clear')
+  assert.match(drawn, /Nothing can go quiet yet|nothing scheduled to miss/)
+})
+
+test('a ledger that has never been matched is not told it has no gaps', () => {
+  const drawn = render({
+    ...base,
+    ledger: { ownerType: 'business', hourlyValue: 150, hoursPerWeek: 3, costPerWeek: 450, unpriced: false, unreadable: 0, complete: true, tasks: [{ task: 'A', words: 'w', confirmed: 'twice', hoursPerWeek: 3 }] },
+    proposals: null
+  }).get('ledger').innerHTML
+  assert.ok(!/Nothing on the gaps list/.test(drawn),
+    'never having asked what the team cannot do was reported as the team being able to do everything')
+  assert.match(drawn, /No gaps list yet/)
+})
+
+test('a matched ledger with a genuinely empty gaps list says so as a finding', () => {
+  const drawn = render({
+    ...base,
+    ledger: { ownerType: 'business', hourlyValue: 150, hoursPerWeek: 3, costPerWeek: 450, unpriced: false, unreadable: 0, complete: true, tasks: [] },
+    proposals: { proposals: [], gaps: [] }
+  }).get('ledger').innerHTML
+  assert.match(drawn, /Nothing on the gaps list/)
+})
+
+/* ---------- UI3: what will this do to my stuff, answered BEFORE the click ---------------------- */
+
+test('every button that spends or changes something says what it does before it is clicked', () => {
+  const nodes = render({
+    ...base,
+    workflows: [
+      workflow({ slug: 'brief', arm: 'armed', armed: true, fire: true, routineId: 't1' }),
+      workflow({ slug: 'cold', name: 'Cold', arm: 'declared', armed: true })
+    ],
+    ledger: { ownerType: 'business', hourlyValue: 150, hoursPerWeek: 3, costPerWeek: 450, unpriced: false, unreadable: 0, complete: true, tasks: [] },
+    proposals: { proposals: [{ task: 'A', item: 'agent:x', why: 'because', words: 'w', number: '3 hours a week' }], gaps: [] }
+  })
+
+  const today = nodes.get('today').innerHTML
+  assert.match(today, /spends one run/, 'the Run buttons never say a run costs anything')
+
+  const workflows = nodes.get('workflows').innerHTML
+  assert.match(workflows, /asks for your run cap first|before it arms/,
+    'Arm is the one button that starts spending money and it explained nothing first')
+
+  const ledger = nodes.get('ledger').innerHTML
+  assert.match(ledger, /[Nn]othing is switched on/,
+    'Approve gave its reassurance only after it had already been clicked')
+})
+
+/* ---------- UI3: an empty screen tells a non-technical owner what to do next ------------------- */
+
+test('empty screens name the next step rather than only the absence', () => {
+  const nodes = render(base)
+  const cases = [
+    ['team', /\/onboard/],
+    ['skills', /\/new-skill|ask your team|\/onboard/]
+  ]
+  for (const [screen, expected] of cases) {
+    assert.match(nodes.get(screen).innerHTML, expected,
+      `the empty ${screen} screen said what was missing and not what to do about it`)
+  }
 })

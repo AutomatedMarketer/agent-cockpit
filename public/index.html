@@ -20,7 +20,8 @@
     --bad: #f87171;
     --chip: #202632;
     --radius: 12px;
-    --nav-h: 3.6rem;
+    --nav-row: 3.2rem;
+    --nav-h: calc(var(--nav-row) * 2); /* the phone nav is two rows; see nav .tabs */
     --sidenav-w: 11rem;
   }
   * { box-sizing: border-box; }
@@ -211,10 +212,14 @@
     border-bottom: 1px solid var(--line);
     padding-top: env(safe-area-inset-top, 0px);
   }
-  nav .tabs { display: grid; grid-template-columns: repeat(6, 1fr); max-width: 44rem; margin: 0 auto; }
+  /* Seven tabs used to sit in a six-column grid: the seventh wrapped to a second row while
+     --nav-h still described one, so a strip of every page lived underneath the nav on every
+     phone. Four per row, wrapping to a centred three, and --nav-h counts both rows. */
+  nav .tabs { display: flex; flex-wrap: wrap; justify-content: center; max-width: 44rem; margin: 0 auto; }
+  nav .tabs > a { flex: 0 0 25%; }
   nav a {
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .1rem;
-    height: var(--nav-h); color: var(--muted); font-size: .6875rem; font-weight: 600;
+    height: var(--nav-row); color: var(--muted); font-size: .6875rem; font-weight: 600;
     letter-spacing: .02em; text-decoration: none;
   }
   nav a:hover { text-decoration: none; }
@@ -237,7 +242,7 @@
       display: flex; flex-direction: column;
     }
     nav .tabs {
-      grid-template-columns: 1fr; align-content: start;
+      display: grid; grid-template-columns: 1fr; align-content: start;
       max-width: none; margin: 0; flex: 1; min-height: 0; padding-top: 1rem;
     }
     nav a {
@@ -326,8 +331,12 @@
 <script>
 'use strict'
 
-const SCREENS = ['today', 'ledger', 'team', 'workflows', 'skills', 'memory', 'connections']
-const TITLES = { today: 'Today', team: 'Team', workflows: 'Workflows', skills: 'Skills', memory: 'Memory', connections: 'Connections' }
+/* One list, in nav order. TITLES was maintained by hand alongside SCREENS and lost `ledger`
+   somewhere, so tapping Ledger - the screen the whole measured-week idea lives on - put the
+   literal word "undefined" in the page header. Deriving one from the other makes a screen
+   without a title unrepresentable rather than merely unlikely. */
+const TITLES = { today: 'Today', ledger: 'Ledger', team: 'Team', workflows: 'Workflows', skills: 'Skills', memory: 'Memory', connections: 'Connections' }
+const SCREENS = Object.keys(TITLES)
 const STATE_LABEL = {
   working: 'Working', quiet: 'Gone quiet', 'never-run': 'Never run', attention: 'Needs a look',
   live: 'Live', silent: 'Silent', 'no-heartbeat': 'No heartbeat'
@@ -454,12 +463,16 @@ function fireButtonsHtml(workflows) {
     `<button class="fire" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="run">
        &#9654; ${escapeHtml(workflow.name)}</button>`
   ).join('')
-  return `<h2>Run a job</h2><div class="fires">${buttons}</div>`
+  return `<h2>Run a job</h2><div class="fires">${buttons}</div>
+    <p class="small muted">Starts that job now rather than waiting for its schedule. It spends one run
+    from your Claude account and leaves its work in your repo as a draft &mdash; nothing is sent
+    anywhere and nothing is deleted.</p>`
 }
 
 // The Board lives here on Today, in the slot Overnight used to hold, rather than as a
-// sixth bottom-nav tab: six tabs on a 375px phone leave ~62px per tab, which clips the
-// "Connections" label and shrinks every thumb target — five is the comfortable maximum.
+// extra nav tab: the phone nav is already seven tabs across two rows, and each one added
+// costs vertical space on every screen. Four per row at 375px is ~94px a tab, which fits the
+// longest label and clears the 44px thumb target with room to spare.
 // The Done column carries everything the Overnight feed used to show, and more.
 const STATUS_GLYPH = { ok: '&#10003;', partial: '&#9680;', blocked: '&#9940;', failed: '&#10007;' }
 
@@ -626,7 +639,9 @@ function renderLedger() {
           ${task.confirmed === 'once' ? '<span class="chip">said once</span>' : ''}
           <div class="small muted">&ldquo;${escapeHtml(task.words)}&rdquo;</div></div>`
       ).join('')}</div>`
-    : '<div class="panel empty">No tasks in the ledger yet.</div>'
+    : `<div class="panel empty"><b>Your ledger names no tasks yet.</b> <span class="small">Run
+       <code>/ledger</code> again and tell it what you actually repeat each week &mdash; everything
+       proposed below is derived from those lines and nothing else.</span></div>`
 
   /* Every proposal shows all three citations, because the whole point is that it can be checked
      without trusting anybody - their words, their number, and a thing that already exists. */
@@ -638,17 +653,25 @@ function renderLedger() {
           <div class="small">that is: ${escapeHtml(row.number)}</div>
           ${row.why ? `<div class="small muted">why this one: ${escapeHtml(row.why)}</div>` : ''}
           <div class="gap"><button class="fire" type="button" data-approve="${escapeHtml(row.task)}">Approve</button>
-            <span class="fire-note"></span></div></div>`
+            <span class="fire-note"></span>
+            <div class="small muted">Records your decision in <code>proposals.yml</code>.
+            Nothing is switched on and nothing is spent &mdash; arming is a separate step you take on
+            purpose.</div></div></div>`
       ).join('')
     : '<div class="panel empty">No proposals yet. Run <code>/match</code> after your ledger is checked.</div>'
 
   /* The gaps are half the answer and the more useful half - they are the specification for what
      gets built next. Shown at the same weight as the proposals, never tucked away. */
-  const gapHtml = proposals && proposals.gaps.length
-    ? `<div class="panel">${proposals.gaps.map((gap) =>
-        `<div class="gap"><b>${escapeHtml(gap.task)}</b><div class="small muted">${escapeHtml(gap.question)}</div></div>`
-      ).join('')}</div>`
-    : '<div class="panel empty">Nothing on the gaps list.</div>'
+  const gapHtml = !proposals
+    ? `<div class="panel empty"><b>No gaps list yet.</b> <span class="small">Run <code>/match</code>
+       in your team repo. Never having asked what your team cannot do is not the same as your team
+       being able to do everything, so nothing is claimed here either way.</span></div>`
+    : proposals.gaps.length
+      ? `<div class="panel">${proposals.gaps.map((gap) =>
+          `<div class="gap"><b>${escapeHtml(gap.task)}</b><div class="small muted">${escapeHtml(gap.question)}</div></div>`
+        ).join('')}</div>`
+      : `<div class="panel empty">Nothing on the gaps list &mdash; <code>/match</code> found
+         something already in your repo for every line of your ledger.</div>`
 
   el('ledger').innerHTML =
     heroHtml(data.hero) +
@@ -669,11 +692,21 @@ function renderToday() {
       ).join('')}</div>`
     : `<div class="panel empty">Nothing scheduled in the next 24 hours.</div>`
 
+  /* An empty quiet list used to print "Everything scheduled is running". On a repo where nine
+     files declare a schedule and no routine exists, nothing CAN go quiet - and the board was
+     reporting all clear about jobs that had never been switched on. That is precisely the claim
+     this whole product exists to refuse, printed on its own front page. */
+  const ringing = data.workflows.filter((workflow) => workflow.arm === 'armed').length
   const quietHtml = data.goneQuiet.length
     ? `<div class="panel">${data.goneQuiet.map((item) =>
         `<div class="gap"><b>${escapeHtml(item.name)}</b> <span class="chip">${escapeHtml(item.kind)}</span> <span class="small muted">last ran ${escapeHtml(ago(item.lastRun))}</span></div>`
       ).join('')}</div>`
-    : `<div class="panel empty">Nothing has gone quiet. Everything scheduled is running.</div>`
+    : ringing
+      ? `<div class="panel empty">Nothing has gone quiet. All ${ringing} armed job${ringing === 1 ? '' : 's'}
+         ran when ${ringing === 1 ? 'it was' : 'they were'} last due.</div>`
+      : `<div class="panel empty"><b>Nothing can go quiet yet.</b> <span class="small">No job on this
+         team is armed, so there is nothing scheduled to miss. That is not the same as everything
+         running.</span></div>`
 
   // The snapshot banner belongs here too. Today is the first screen anybody opens, and it was the
   // one place a month-old snapshot was presented with no age at all.
@@ -697,7 +730,9 @@ function renderToday() {
 
 function renderTeam() {
   if (!data.agents.length) {
-    el('team').innerHTML = `<div class="panel empty">No agent files in <code>.claude/agents/</code> yet.</div>`
+    el('team').innerHTML = `<div class="panel empty"><b>You have no agents yet.</b>
+      <span class="small">Run <code>/onboard</code> in your team repo. It asks about your business
+      and writes the first agents into <code>.claude/agents/</code>, and they appear here.</span></div>`
     return
   }
   const cards = data.agents.map((agent) => {
@@ -963,7 +998,11 @@ function renderWorkflows() {
     // Arming goes through the general intake, not this workflow's own trigger - a job being armed
     // has no routine yet, so it has no trigger URL of its own to dispatch to.
     const armButton = workflow.arm === 'declared' || workflow.arm === 'off'
-      ? `<button class="fire" type="button" data-arm="${escapeHtml(workflow.slug)}">Arm</button>`
+      ? `<button class="fire" type="button" data-arm="${escapeHtml(workflow.slug)}"
+           title="Asks your team to create a real routine for this job">Arm</button>
+         <div class="small muted">Arming is what makes a schedule real, and it is the point where
+         this job starts spending runs. Your team asks for your run cap first and confirms the
+         routine exists afterwards; it never arms anything silently.</div>`
       : ''
     return `<div class="panel card agent-accent ${workflow.state}"${accentStyle(workflow.owner)}>
       <div class="row between">
@@ -1402,7 +1441,10 @@ function renderSkills() {
     <h2>Starter stack &middot; ${stack.length}</h2>
     ${stack.length ? `<div class="panel">${stackCards}</div>` : '<div class="panel empty">No <code>stack.yml</code> in this repo yet. Run <code>/install-stack</code> and it appears here.</div>'}
     <h2>This team's skills &middot; ${skills.length}</h2>
-    ${skills.length ? `<div class="panel">${skillRows}</div>` : '<div class="panel empty">No skills yet.</div>'}`
+    ${skills.length ? `<div class="panel">${skillRows}</div>` : `<div class="panel empty"><b>No skills yet.</b>
+      <span class="small">Skills are the single tasks your jobs are built from. Run <code>/onboard</code>
+      to get the starter set, or ask your team for one in plain words &mdash; you never write the file
+      yourself.</span></div>`}`
   el('skills').querySelectorAll('[data-open]').forEach((link) =>
     link.addEventListener('click', (event) => { event.preventDefault(); openFile(link.dataset.open) }))
 }
