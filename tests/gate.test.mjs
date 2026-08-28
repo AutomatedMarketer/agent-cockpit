@@ -5,6 +5,10 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 import { viewGate, keysMatch } from '../api/lib.js'
 
 const req = (headers = {}) => ({ headers })
@@ -114,5 +118,55 @@ test('state and file both refuse an unauthenticated caller', async () => {
   } finally {
     delete process.env.VIEW_KEY
     if (previous !== undefined) process.env.PUBLIC_DASHBOARD = previous
+  }
+})
+
+/* `api/fire.js` says, in a comment: "which is why the README still says to keep PUBLIC_FIRE
+   deployments behind Vercel's own access control." The README said no such thing. PUBLIC_FIRE
+   appeared once, in a table, marked Required: No, with no risk note at all — while the code
+   beside that comment calls its own same-origin check "best-effort by nature (non-browser
+   clients forge headers freely)".
+
+   Setting one environment variable to `true` lets anybody who knows the URL fire a job on the
+   owner's Claude account. That is the most expensive thing a reader can do to themselves with
+   this dashboard, and it was the one row of the table with nothing to say about it. */
+
+test('the README carries the PUBLIC_FIRE warning that the code says it carries', async () => {
+  const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8')
+  const fire = await readFile(new URL('../api/fire.js', import.meta.url), 'utf8')
+
+  if (/README/.test(fire) && /PUBLIC_FIRE/.test(fire)) {
+    assert.match(readme, /PUBLIC_FIRE/, 'fire.js cites the README about PUBLIC_FIRE and the README never mentions it')
+  }
+  const row = readme.split('\n').find((line) => line.includes('PUBLIC_FIRE'))
+  assert.ok(row, 'PUBLIC_FIRE is not documented at all')
+  // Both halves, not either. An alternation here let the substantive warning be deleted while
+  // one stray phrase kept the test green - which is the same failure this test exists to catch.
+  assert.match(readme, /not a security boundary/i,
+    'nothing says PUBLIC_FIRE is not a security boundary, which is the whole point of the row')
+  assert.match(readme, /forge/i,
+    'nothing says the headers it trusts can be forged by anything that is not a browser')
+  assert.match(readme, /anyone who knows your dashboard's URL|anyone who knows the URL/i,
+    'nothing says who can fire your jobs once this is on')
+})
+
+test('the README quotes the number of tests the suite actually reports', () => {
+  if (process.env.COCKPIT_README_SELF_CHECK === '1') return
+  const env = { ...process.env, COCKPIT_README_SELF_CHECK: '1' }
+  delete env.NODE_TEST_CONTEXT
+  const run = spawnSync(process.execPath, ['--test'], {
+    cwd: fileURLToPath(new URL('../', import.meta.url)),
+    encoding: 'utf8',
+    env
+  })
+  const reported = /^\s*(?:ℹ|#)\s*pass\s+(\d+)\s*$/m.exec(run.stdout ?? '')
+  assert.ok(reported, "could not read a pass count out of the suite's own output")
+
+  const readme = readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8')
+  const claims = [...readme.matchAll(/(\d+) tests/g)].map((found) => found[1])
+  assert.ok(claims.length, 'the README no longer says how many tests there are')
+  for (const claimed of claims) {
+    assert.equal(claimed, reported[1],
+      `the README says ${claimed} tests and the suite reports ${reported[1]}`)
   }
 })

@@ -80,9 +80,17 @@ has no evidence for.
 | `PUBLIC_DASHBOARD` | `true` to skip the key entirely — only if the repo is genuinely public | No |
 | `FIRE_TRIGGERS` | JSON mapping job slug → its trigger URL. Needed for the Run buttons | For buttons |
 | `FIRE_KEY` | A password for firing jobs, sent as `x-fire-key` | For buttons |
-| `PUBLIC_FIRE` | `true` to allow same-origin firing from the page without a key | No |
+| `PUBLIC_FIRE` | `true` to drop `FIRE_KEY` for requests from your own page. **Read the warning below first** | No |
 
 **Redeploy after changing any of these.** Vercel does not apply env vars to a running deployment.
+
+> **`PUBLIC_FIRE` is a convenience, not a security boundary.** It tells the fire endpoint to accept
+> requests that look like they came from your own page, using headers a browser sets. A browser
+> cannot lie about them; anything that is not a browser can **forge them freely**. So with
+> `PUBLIC_FIRE=true`, anyone who knows your dashboard's URL can start your jobs - spending runs on
+> your Claude account - without a key. The buttons still cannot make anything *send*, and the
+> dashboard still cannot write to your repo, but the runs are real and they are yours. Leave it
+> unset and use `FIRE_KEY` unless you have a reason not to.
 
 **4. Open it.** If you set `VIEW_KEY`, the page asks for it once and remembers.
 
@@ -106,7 +114,7 @@ Locally:
 npm test
 ```
 
-246 tests, no dependencies to install. They cover the data logic, the fire endpoint's auth, and —
+255 tests, no dependencies to install. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output.
 
