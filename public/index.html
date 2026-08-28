@@ -274,6 +274,9 @@
   .sched-foot .pill { display: inline-block; margin: .15rem .35rem .15rem 0; }
   .legend { display: flex; flex-wrap: wrap; gap: .35rem .9rem; padding: .55rem .9rem; border-top: 1px solid var(--line); font-size: .75rem; color: var(--muted); align-items: center; }
   .legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .hero { text-align: center; padding: 1.6rem 1rem; }
+  .hero-value { font-size: clamp(2.6rem, 9vw, 4.2rem); font-weight: 700; line-height: 1.05; }
+  .hero-unit { font-size: 1rem; opacity: .85; margin-top: .2rem; }
 </style>
 </head>
 <body>
@@ -287,6 +290,7 @@
   <p class="sub" id="strap">Reading your repo…</p>
 
   <div id="today" class="screen active"><div class="panel empty">Loading.</div></div>
+  <div id="ledger" class="screen"></div>
   <div id="team" class="screen"></div>
   <div id="workflows" class="screen"></div>
   <div id="skills" class="screen"></div>
@@ -308,6 +312,7 @@
 <nav>
   <div class="tabs">
     <a href="#today" data-screen="today"><span class="glyph">&#9679;</span>Today</a>
+    <a href="#ledger" data-screen="ledger"><span class="glyph">&#9632;</span>Ledger</a>
     <a href="#team" data-screen="team"><span class="glyph">&#9670;</span>Team</a>
     <a href="#workflows" data-screen="workflows"><span class="glyph">&#9654;</span>Workflows</a>
     <a href="#skills" data-screen="skills"><span class="glyph">&#9881;</span>Skills</a>
@@ -321,7 +326,7 @@
 <script>
 'use strict'
 
-const SCREENS = ['today', 'team', 'workflows', 'skills', 'memory', 'connections']
+const SCREENS = ['today', 'ledger', 'team', 'workflows', 'skills', 'memory', 'connections']
 const TITLES = { today: 'Today', team: 'Team', workflows: 'Workflows', skills: 'Skills', memory: 'Memory', connections: 'Connections' }
 const STATE_LABEL = {
   working: 'Working', quiet: 'Gone quiet', 'never-run': 'Never run', attention: 'Needs a look',
@@ -550,6 +555,90 @@ function boardHtml(board) {
   </div>`
 }
 
+/* ---------- The hero number ---------- */
+
+/* One figure, at the top, and the only one on this board that says what somebody's week costs
+   rather than what the agents did.
+
+   tiles.yml has named `hero: hours-saved` since the day it was written, and nothing has ever
+   computed it. So when the number cannot be produced this says so, plainly, instead of rendering
+   a zero - a zero here is a claim about their week, made in the largest type on the screen. */
+
+function heroHtml(hero) {
+  if (!hero) return ''
+  if (!hero.defined) {
+    return `<div class="panel empty"><b>No hero number yet.</b> <span class="small">${escapeHtml(hero.why ?? '')}. Nothing is shown rather than a zero, because a zero here would be a claim about your week.</span></div>`
+  }
+  const value = hero.money
+    ? '$' + Math.round(hero.value).toLocaleString('en-US')
+    : (Math.round(hero.value * 10) / 10).toLocaleString('en-US')
+  return `<div class="panel hero"><div class="hero-value">${escapeHtml(value)}</div>
+    <div class="hero-unit">${escapeHtml(hero.unit ?? '')}</div>
+    <div class="small muted">${escapeHtml(hero.caption ?? '')}</div></div>`
+}
+
+/* ---------- Ledger ---------- */
+
+function renderLedger() {
+  const ledger = data.ledger
+  const proposals = data.proposals
+
+  if (!ledger) {
+    el('ledger').innerHTML =
+      heroHtml(data.hero) +
+      `<div class="panel empty"><b>No ledger yet.</b> <span class="small">Run <code>/ledger</code> in your
+        team repo. It measures where your week actually goes, and everything on this screen is
+        derived from it.</span></div>`
+    return
+  }
+
+  const money = ledger.unpriced
+    ? '<span class="small muted">No rate recorded, so this is counted in hours only.</span>'
+    : `<b>$${Math.round(ledger.costPerWeek).toLocaleString('en-US')}</b> a week at the rate you set`
+
+  const weekHtml = `<div class="panel"><div class="gap"><b>${(Math.round(ledger.hoursPerWeek * 10) / 10)}</b> hours a week &middot; ${money}</div>
+    <p class="small muted">Your numbers, from <code>ledger.yml</code>. Disagree with any of it and the
+    answer is to change that file - nothing here is a recommendation.</p></div>`
+
+  const tasksHtml = ledger.tasks.length
+    ? `<div class="panel">${ledger.tasks.map((task) =>
+        `<div class="gap"><b>${escapeHtml(task.task)}</b>
+          <span class="small">${task.hoursPerWeek === null ? '' : (Math.round(task.hoursPerWeek * 10) / 10) + 'h'}</span>
+          ${task.confirmed === 'once' ? '<span class="chip">said once</span>' : ''}
+          <div class="small muted">&ldquo;${escapeHtml(task.words)}&rdquo;</div></div>`
+      ).join('')}</div>`
+    : '<div class="panel empty">No tasks in the ledger yet.</div>'
+
+  /* Every proposal shows all three citations, because the whole point is that it can be checked
+     without trusting anybody - their words, their number, and a thing that already exists. */
+  const proposalHtml = proposals && proposals.proposals.length
+    ? proposals.proposals.map((row) =>
+        `<div class="panel"><div class="row between"><b>${escapeHtml(row.task)}</b>
+            <span class="chip">${escapeHtml(row.item)}</span></div>
+          <div class="small">you said: &ldquo;${escapeHtml(row.words)}&rdquo;</div>
+          <div class="small">that is: ${escapeHtml(row.number)}</div>
+          ${row.why ? `<div class="small muted">why this one: ${escapeHtml(row.why)}</div>` : ''}
+          <div class="gap"><button class="fire" type="button" data-approve="${escapeHtml(row.task)}">Approve</button>
+            <span class="fire-note"></span></div></div>`
+      ).join('')
+    : '<div class="panel empty">No proposals yet. Run <code>/match</code> after your ledger is checked.</div>'
+
+  /* The gaps are half the answer and the more useful half - they are the specification for what
+     gets built next. Shown at the same weight as the proposals, never tucked away. */
+  const gapHtml = proposals && proposals.gaps.length
+    ? `<div class="panel">${proposals.gaps.map((gap) =>
+        `<div class="gap"><b>${escapeHtml(gap.task)}</b><div class="small muted">${escapeHtml(gap.question)}</div></div>`
+      ).join('')}</div>`
+    : '<div class="panel empty">Nothing on the gaps list.</div>'
+
+  el('ledger').innerHTML =
+    heroHtml(data.hero) +
+    `<h2>Your week</h2>` + weekHtml +
+    `<h2>What eats it</h2>` + tasksHtml +
+    `<h2>Proposed</h2>` + proposalHtml +
+    `<h2>Nothing on the team does these yet</h2>` + gapHtml
+}
+
 function renderToday() {
   const board = data.board ?? { todo: [], upNext: [], running: [], done: [] }
   const due = data.workflows
@@ -568,6 +657,7 @@ function renderToday() {
     : `<div class="panel empty">Nothing has gone quiet. Everything scheduled is running.</div>`
 
   el('today').innerHTML =
+    heroHtml(data.hero) +
     ladderHtml(data.setup) +
     fireButtonsHtml(data.workflows) +
     `<h2>Board</h2>` + boardHtml(board) +
@@ -840,6 +930,11 @@ async function openFile(path) {
 document.addEventListener('click', (event) => {
   const file = event.target.closest('.file[data-path]')
   if (file) openFile(file.dataset.path)
+  const approve = event.target.closest('button[data-approve]')
+  if (approve) {
+    approveProposal(approve)
+    return
+  }
   const fire = event.target.closest('button[data-fire]')
   if (fire && !fire.disabled) fireWorkflow(fire)
   if (event.target.closest('#task-open')) {
@@ -935,6 +1030,34 @@ async function postFire(body) {
   }
   if (!result.ok && result.status === 401) sessionStorage.removeItem(FIRE_KEY_STORE)
   return result
+}
+
+/* Approving records that the owner said yes to a line they read. It builds nothing and arms
+   nothing - that is a separate action, deliberately. */
+async function approveProposal(button) {
+  const task = button.dataset.approve
+  const note = fireNoteFor(button)
+  const original = button.innerHTML
+  button.disabled = true
+  button.innerHTML = 'Recording&hellip;'
+  note.className = 'fire-note'
+  note.textContent = ''
+  try {
+    const result = await postFire({ action: 'approve', task })
+    if (result.ok) {
+      note.className = 'fire-note ok'
+      note.textContent = 'Approved. Nothing has been switched on.'
+    } else {
+      note.className = 'fire-note bad'
+      note.textContent = result.payload.error || `Dispatch failed (${result.status}).`
+    }
+  } catch (error) {
+    note.className = 'fire-note bad'
+    note.textContent = 'Could not reach the dashboard.'
+  } finally {
+    button.disabled = false
+    button.innerHTML = original
+  }
 }
 
 async function fireWorkflow(button) {
@@ -1138,6 +1261,7 @@ function render() {
   const working = data.agents.filter((agent) => agent.state === 'working').length
   el('strap').textContent = `${working} of ${data.agents.length} agents working · ${data.workflows.length} workflows · ${data.overnight.length} runs in the last day.`
   renderToday()
+  renderLedger()
   renderTeam()
   renderWorkflows()
   renderSkills()
