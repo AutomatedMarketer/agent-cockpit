@@ -30,6 +30,7 @@ const TREE = {
     { type: 'blob', path: 'workflows/monday-brief.yml' },
     { type: 'blob', path: 'workflows/hourly-sweep.yml' },
     { type: 'blob', path: 'workflows/broken.yml' },
+    { type: 'blob', path: '.agent-team/routines.json' },
     { type: 'blob', path: 'skills/pull-calendar/SKILL.md' },
     { type: 'blob', path: 'skills/write-brief/SKILL.md' },
     { type: 'blob', path: 'skills/scan-inbox/SKILL.md' },
@@ -83,10 +84,12 @@ const FILES = {
   'shared/business-brain.md': '# Business brain\n\nAll filled in.\n',
   'shared/writing-rules.md': '# Writing rules\n<!-- fill: voice-samples -->\n<!-- fill: default-cta -->\n',
   'workflows/monday-brief.yml':
-    'name: Monday Brief\nowner: research\nsteps: [pull-calendar, scan-inbox, write-brief]\ntrigger:\n  schedule: "weekly mon 06:00"\n  fire: true\noutput: inbox/{date}/monday-brief.md\n',
+    'name: Monday Brief\nowner: research\nsteps: [pull-calendar, scan-inbox, write-brief]\ntrigger:\n  schedule: "weekly mon 06:00"\n  armed: true\n  fire: true\noutput: inbox/{date}/monday-brief.md\n',
   'workflows/broken.yml': 'name: Broken\nsteps: []\n',
   'workflows/hourly-sweep.yml':
-    'name: Hourly Sweep\nowner: email\nsteps: [scan-inbox]\ntrigger:\n  schedule: "every 2 hours"\noutput: inbox/{date}/sweep.md\n',
+    'name: Hourly Sweep\nowner: email\nsteps: [scan-inbox]\ntrigger:\n  schedule: "every 2 hours"\n  armed: true\noutput: inbox/{date}/sweep.md\n',
+  '.agent-team/routines.json':
+    JSON.stringify({ takenAt: isoAgo(3600_000), routines: [{ id: 'trig_monday', name: 'Monday Brief' }, { id: 'trig_sweep', name: 'Hourly Sweep' }] }),
   'tasks/2026-08-19-draft-post.md':
     '---\nstatus: doing\nfor: email\n---\n\n# Draft the launch post\n\nHalf-written.\n',
   'tasks/2026-08-18-call-supplier.md': '# Call the supplier\n\nNo frontmatter on purpose.\n',
@@ -219,7 +222,9 @@ test('workflows render from their files: chain, trigger, last result, next run',
   assert.deepEqual(brief.problems, [])
   assert.equal(brief.lastRun.session_url, 'https://claude.ai/code/session_new')
   assert.equal(brief.state, 'working')
-  // The next run is a real future Monday 06:00 UTC.
+  // The next run is a real future Monday 06:00 UTC - and it exists ONLY because a routine named
+  // "Monday Brief" is in the snapshot. A schedule alone no longer buys a next-run time.
+  assert.equal(brief.arm, 'armed')
   const next = new Date(brief.nextRun)
   assert.ok(next.getTime() > Date.now())
   assert.equal(next.getUTCDay(), 1)

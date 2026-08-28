@@ -59,3 +59,36 @@ test('proposals are rendered with all three citations, not just a name', () => {
 test('the gaps list is rendered, not tucked away', () => {
   assert.match(page, /Nothing on the team does these yet/)
 })
+
+/* --- UI2: which jobs actually ring ------------------------------------------------------------
+   The board reported nine jobs running, each with a next-run time, against one real routine. The
+   schedule chip said "daily 06:30" and looked exactly like a fact. */
+
+test('the workflows screen shows an arm state, not just a schedule', () => {
+  for (const state of ['ARMED', 'DECLARED', 'UNAPPROVED', 'OFF']) {
+    assert.match(page, new RegExp(state), `the ${state} state has no label on screen`)
+  }
+})
+
+test('a declared job is told it is a wish, not given a next-run time', () => {
+  assert.match(page, /Nothing fires this/)
+  assert.match(page, /is a wish until you arm it/)
+})
+
+test('unapproved spend is named as spend nobody approved', () => {
+  assert.match(page, /spending runs nobody approved/)
+})
+
+test('the snapshot is always presented as a snapshot, with its age', () => {
+  assert.match(page, /This is a snapshot, not a live reading/)
+  assert.match(page, /Which of these actually ring is unknown/, 'and an absent one says so')
+  assert.match(page, /run <code>\/routines<\/code> again before/, 'and a stale one says so')
+})
+
+test('orphan routines are reported and explicitly not adopted', () => {
+  assert.match(page, /Reported, not adopted/)
+})
+
+test('the schedule chip is only lit when something actually rings', () => {
+  assert.match(page, /const scheduleLive = workflow\.arm === 'armed' \|\| workflow\.arm === 'unapproved'/)
+})

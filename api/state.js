@@ -73,7 +73,77 @@ async function rawFile({ owner, repo, branch }, filePath) {
 
 // --- shaping, exported so the suite can hit them without a network -----------------------
 
-export function shapeWorkflows(workflowFiles, runs, known, now = Date.now()) {
+// ---------------------------------------------------------------------------------------------
+// Which jobs actually ring.
+//
+// A workflow file saying `schedule: "daily 06:30"` makes nothing happen at 06:30. A routine is the
+// alarm clock. This board reported nine jobs running, each with a next-run time, against one real
+// routine - not because anyone lied, but because a file that says `schedule:` looks exactly like a
+// job that runs, and nothing here ever checked.
+//
+// This dashboard is a web app reading GitHub. It cannot call the routines API - no browser can. So
+// the truth arrives as a snapshot committed by /routines, and everything below treats it as one:
+// it carries the moment it was taken, and a stale or absent snapshot says so rather than passing
+// for current. A snapshot presented as live is the same class of lie as the declared job it is
+// here to catch.
+//
+// The reconcile logic mirrors scripts/lib/arm.mjs in the team repo. Deliberately mirrored, not
+// imported: that repo is the student's, this one is a deployed app, and there is no import path
+// between them. tests/routines.test.mjs pins the two to the same answers.
+
+export const SNAPSHOT_STALE_AFTER_HOURS = 24
+export const ARM_STATES = ['armed', 'declared', 'unapproved', 'off']
+
+function routineNameKey(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase().replace(/\s+/g, ' ') : ''
+}
+
+export function shapeSnapshot(source, now = Date.now()) {
+  if (source === null || source === undefined) {
+    return { takenAt: null, routines: [], usable: false, why: 'no snapshot has been taken yet' }
+  }
+  let parsed
+  try {
+    parsed = JSON.parse(source)
+  } catch {
+    // Corrupt is not absent. An empty routine list for an unreadable file would assert "nothing is
+    // scheduled", which is a claim about somebody's account a broken file cannot support.
+    return { takenAt: null, routines: [], usable: false, why: 'the snapshot could not be read' }
+  }
+  const routines = Array.isArray(parsed?.routines) ? parsed.routines : null
+  if (!routines) {
+    return { takenAt: null, routines: [], usable: false, why: 'the snapshot has no routines list' }
+  }
+  const takenAt = typeof parsed?.takenAt === 'string' ? parsed.takenAt.trim() : ''
+  const takenMs = takenAt ? Date.parse(takenAt) : NaN
+  if (!takenAt || Number.isNaN(takenMs)) {
+    return { takenAt: null, routines, usable: false, why: 'the snapshot does not say when it was taken' }
+  }
+  const ageHours = (now - takenMs) / 3600_000
+  const stale = ageHours > SNAPSHOT_STALE_AFTER_HOURS
+  return {
+    takenAt,
+    routines,
+    ageHours,
+    stale,
+    usable: true,
+    why: stale ? `the snapshot is ${Math.round(ageHours)} hours old` : null
+  }
+}
+
+export function routineFor(workflow, routines) {
+  const wanted = routineNameKey(workflow?.name) || routineNameKey(workflow?.slug)
+  if (!wanted) return null
+  return (routines ?? []).find((routine) => routineNameKey(routine?.name) === wanted) ?? null
+}
+
+export function armStateFor(workflow, routines) {
+  const ringing = Boolean(routineFor(workflow, routines))
+  if (workflow?.armed !== true) return ringing ? 'unapproved' : 'off'
+  return ringing ? 'armed' : 'declared'
+}
+
+export function shapeWorkflows(workflowFiles, runs, known, now = Date.now(), routines = []) {
   return workflowFiles
     .map(([path, body]) => {
       const slug = path.split('/').pop().replace(/\.ya?ml$/, '')
@@ -86,7 +156,7 @@ export function shapeWorkflows(workflowFiles, runs, known, now = Date.now()) {
         workflow.trigger && typeof workflow.trigger === 'object' && !Array.isArray(workflow.trigger)
           ? workflow.trigger.schedule ?? null
           : null
-      // Never-run is its own state, not "quiet": a fresh clone ships five scheduled
+      // Never-run is its own state, not "quiet": a fresh clone ships nine scheduled
       // workflows, and greeting a new owner with five alarms would teach them to ignore
       // the one alarm that matters later.
       const quiet = last !== null && schedule !== null && isGoneQuiet(schedule, last.started_at, now)
@@ -97,14 +167,24 @@ export function shapeWorkflows(workflowFiles, runs, known, now = Date.now()) {
       else if (quiet) state = 'quiet'
       else if (last) state = 'working'
 
+      const name = typeof workflow.name === 'string' ? workflow.name : slug
+      const armed = workflow.trigger?.armed === true
+      const reason = typeof workflow.trigger?.reason === 'string' ? workflow.trigger.reason.trim() : null
+      const routine = routineFor({ name, slug }, routines)
+      const arm = armStateFor({ name, slug, armed }, routines)
+
       return {
         slug,
         path,
-        name: typeof workflow.name === 'string' ? workflow.name : slug,
+        name,
         owner: typeof workflow.owner === 'string' ? workflow.owner : null,
         steps: Array.isArray(workflow.steps) ? workflow.steps : [],
         runner: workflow.runner ?? 'routine',
         schedule,
+        armed,
+        arm,
+        reason: reason || null,
+        routineId: arm === 'armed' || arm === 'unapproved' ? (routine?.id ?? null) : null,
         fire: workflow.trigger?.fire === true,
         webhook: workflow.trigger?.webhook === true,
         output: typeof workflow.output === 'string' ? workflow.output : null,
@@ -112,7 +192,11 @@ export function shapeWorkflows(workflowFiles, runs, known, now = Date.now()) {
         lastRun: last
           ? { started_at: last.started_at, status: last.status, summary: last.summary ?? '', session_url: last.session_url ?? null }
           : null,
-        nextRun: schedule ? nextRunAt(schedule, { now, lastRun: last?.started_at ?? null }) : null,
+        // ONLY when something actually rings. This one expression is the bug the whole brick is
+        // about: it used to read `schedule ? nextRunAt(...) : null`, so every file with a
+        // `schedule:` got a confident next-run time whether or not any alarm clock existed. Nine
+        // jobs said "next in 14h" while one routine existed.
+        nextRun: arm === 'armed' && schedule ? nextRunAt(schedule, { now, lastRun: last?.started_at ?? null }) : null,
         state
       }
     })
@@ -534,10 +618,12 @@ export default async function handler(request, response) {
     const hasStack = paths.includes('stack.yml')
     const hasLedger = paths.includes('ledger.yml')
     const hasProposals = paths.includes('proposals.yml')
+    const ROUTINE_SNAPSHOT = '.agent-team/routines.json'
+    const hasRoutineSnapshot = paths.includes(ROUTINE_SNAPSHOT)
     const ONBOARDING_STATE = '.agent-team/onboarding-state.md'
     const hasOnboarding = paths.includes(ONBOARDING_STATE)
 
-    const [agentFiles, runFiles, brainFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource] =
+    const [agentFiles, runFiles, brainFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
@@ -550,7 +636,8 @@ export default async function handler(request, response) {
         hasOnboarding ? rawFile(settings, ONBOARDING_STATE) : null,
         hasStack ? rawFile(settings, 'stack.yml') : null,
         hasLedger ? rawFile(settings, 'ledger.yml') : null,
-        hasProposals ? rawFile(settings, 'proposals.yml') : null
+        hasProposals ? rawFile(settings, 'proposals.yml') : null,
+        hasRoutineSnapshot ? rawFile(settings, ROUTINE_SNAPSHOT) : null
       ])
 
     const unparseable = []
@@ -589,7 +676,8 @@ export default async function handler(request, response) {
     const known = {}
     if (agents.length) known.agents = agents.map((agent) => agent.slug)
     if (skillSlugs.length) known.skills = skillSlugs
-    const workflows = shapeWorkflows(workflowFiles, runs, known, now)
+    const snapshot = shapeSnapshot(routineSnapshotSource, now)
+    const workflows = shapeWorkflows(workflowFiles, runs, known, now, snapshot.routines)
     const tasks = parseTasks(taskFiles)
 
     // Heartbeat files named by the registry, fetched only if the tree actually has them.
@@ -614,6 +702,13 @@ export default async function handler(request, response) {
     const stack = shapeStack(stackSource ? parseSimpleYaml(stackSource) : null, paths)
     const memory = shapeMemory(paths, sizes)
     const onboarding = parseOnboardingState(onboardingSource)
+    const claimedRoutines = new Set(
+      workflows.filter((workflow) => workflow.routineId).map((workflow) => routineNameKey(workflow.name))
+    )
+    const orphanRoutines = (snapshot.routines ?? [])
+      .filter((routine) => !claimedRoutines.has(routineNameKey(routine?.name)))
+      .map((routine) => ({ id: routine?.id ?? null, name: routine?.name ?? '(unnamed)' }))
+
     const ledger = shapeLedger(ledgerSource)
     const proposals = shapeProposals(proposalsSource)
     const hero = shapeHero(tiles, ledger)
@@ -638,6 +733,14 @@ export default async function handler(request, response) {
       ledger,
       proposals,
       hero,
+      routines: {
+        takenAt: snapshot.takenAt,
+        usable: snapshot.usable,
+        stale: snapshot.stale ?? false,
+        why: snapshot.why,
+        count: snapshot.routines.length,
+        orphans: orphanRoutines
+      },
       setup,
       generatedAt: new Date(now).toISOString()
     })

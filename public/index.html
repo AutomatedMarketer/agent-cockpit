@@ -801,6 +801,58 @@ function scheduleStripHtml(workflows, options = {}) {
   </div>`
 }
 
+/* Which jobs actually ring.
+
+   A file saying `schedule: "daily 06:30"` makes nothing happen at 06:30 - a routine is the alarm
+   clock. This board reported nine jobs running, each with a next-run time, against one real
+   routine. The schedule chip alone said "daily 06:30" and looked exactly like a fact.
+
+   So the arm state is shown first, in words, and the schedule chip is never allowed to stand on
+   its own again. */
+
+const ARM_LABELS = {
+  armed: { text: 'ARMED', cls: 'on', note: 'a routine exists and this fires' },
+  declared: { text: 'DECLARED', cls: 'bad', note: 'this file says run it and NOTHING rings' },
+  unapproved: { text: 'UNAPPROVED', cls: 'bad', note: 'something is firing that this file never approved' },
+  off: { text: 'OFF', cls: '', note: 'deliberately not running' }
+}
+
+function armChipHtml(workflow) {
+  const label = ARM_LABELS[workflow.arm] ?? ARM_LABELS.off
+  return `<span class="chip ${label.cls}" title="${escapeHtml(label.note)}">${label.text}</span>`
+}
+
+/* The snapshot is how the truth reaches a web app that cannot call the routines API. It is always
+   presented AS a snapshot, with its age - a snapshot passed off as live would be the same class of
+   lie as the declared job this screen exists to expose. */
+
+function snapshotBannerHtml(routines) {
+  if (!routines) return ''
+  if (!routines.usable) {
+    return `<div class="panel empty"><b>Which of these actually ring is unknown.</b>
+      <span class="small">${escapeHtml(routines.why ?? '')}. Run <code>/routines</code> in your team repo
+      to record what is really scheduled. Until then the states below come from your files alone,
+      and a file claiming a schedule is exactly what this screen is here to check.</span></div>`
+  }
+  const when = new Date(routines.takenAt).toLocaleString()
+  if (routines.stale) {
+    return `<div class="panel empty"><b>These routines were last checked ${escapeHtml(when)}.</b>
+      <span class="small">${escapeHtml(routines.why ?? '')} — run <code>/routines</code> again before
+      trusting it.</span></div>`
+  }
+  return `<div class="panel"><span class="small muted">${routines.count} routine${routines.count === 1 ? '' : 's'}
+    on your account, as recorded ${escapeHtml(when)}. This is a snapshot, not a live reading.</span></div>`
+}
+
+function orphanRoutinesHtml(routines) {
+  if (!routines || !routines.orphans || !routines.orphans.length) return ''
+  return `<h2>Routines with no workflow file</h2><div class="panel">${routines.orphans.map((orphan) =>
+    `<div class="gap"><b>${escapeHtml(orphan.name)}</b>
+      <div class="small muted">Something was armed and then renamed or removed. Reported, not adopted —
+      the dashboard will not attach it to a file it does not match.</div></div>`
+  ).join('')}</div>`
+}
+
 function renderWorkflows() {
   if (!data.workflows.length) {
     el('workflows').innerHTML = `<div class="panel empty">No workflow files in <code>workflows/</code> yet. Ask for one — <code>/new-workflow</code> — and it appears here.</div>`
@@ -808,8 +860,12 @@ function renderWorkflows() {
   }
   const cards = data.workflows.map((workflow) => {
     const chain = workflow.steps.map((step) => `<b>${escapeHtml(step)}</b>`).join(' &rarr; ')
+    // The schedule chip is deliberately NOT "on" unless something rings. A green chip reading
+    // "daily 06:30" beside a job nothing fires is the whole bug, rendered.
+    const scheduleLive = workflow.arm === 'armed' || workflow.arm === 'unapproved'
     const triggers = [
-      workflow.schedule ? `<span class="chip on">${escapeHtml(workflow.schedule)}</span>` : '',
+      armChipHtml(workflow),
+      workflow.schedule ? `<span class="chip ${scheduleLive ? 'on' : ''}">${escapeHtml(workflow.schedule)}</span>` : '',
       workflow.fire ? `<span class="chip on">button</span>` : '',
       workflow.webhook ? `<span class="chip on">webhook</span>` : ''
     ].filter(Boolean).join('')
@@ -817,6 +873,14 @@ function renderWorkflows() {
       ? `Last: ${escapeHtml(workflow.lastRun.status)} ${escapeHtml(ago(workflow.lastRun.started_at))}${workflow.lastRun.session_url ? ` &middot; <a href="${escapeHtml(workflow.lastRun.session_url)}" rel="noreferrer noopener">watch</a>` : ''}`
       : 'Never run'
     const next = workflow.nextRun ? ` &middot; next ${escapeHtml(until(workflow.nextRun) ?? '')}` : ''
+    // No next-run time is invented for anything that does not ring. Instead the card says why.
+    const armNote = workflow.arm === 'declared'
+      ? `<div class="small bad">Nothing fires this. The schedule above is a wish until you arm it — <code>/arm</code>.</div>`
+      : workflow.arm === 'unapproved'
+        ? `<div class="small bad">A routine is firing for this and the file says it is off. It is spending runs nobody approved.</div>`
+        : workflow.arm === 'off' && workflow.reason
+          ? `<div class="small muted">Off: ${escapeHtml(workflow.reason)}</div>`
+          : ''
     const problems = workflow.problems.length
       ? `<ul class="problems">${workflow.problems.map((problem) => `<li>${escapeHtml(problem)}</li>`).join('')}</ul>`
       : ''
@@ -832,6 +896,11 @@ function renderWorkflows() {
         ? `<button class="fire" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="pause">&#10074;&#10074; Pause</button>`
         : `<button class="fire" type="button" disabled title="Pause dispatches through this workflow's trigger URL — add fire: true to its trigger block first">&#10074;&#10074; Pause</button>`)
       : ''
+    // Arming goes through the general intake, not this workflow's own trigger - a job being armed
+    // has no routine yet, so it has no trigger URL of its own to dispatch to.
+    const armButton = workflow.arm === 'declared' || workflow.arm === 'off'
+      ? `<button class="fire" type="button" data-arm="${escapeHtml(workflow.slug)}">Arm</button>`
+      : ''
     return `<div class="panel card agent-accent ${workflow.state}"${accentStyle(workflow.owner)}>
       <div class="row between">
         <span class="row"><span class="dot"></span><span class="title">${escapeHtml(workflow.name)}</span></span>
@@ -844,12 +913,13 @@ function renderWorkflows() {
       </div>
       <div class="row between">
         <span class="small muted">${last}${next}</span>
-        <span class="row">${runButton}${pauseButton}</span>
+        <span class="row">${runButton}${armButton}${pauseButton}</span>
       </div>
+      ${armNote}
       ${problems}
     </div>`
   }).join('')
-  el('workflows').innerHTML = scheduleStripHtml(data.workflows) + `<div class="stack">${cards}</div>`
+  el('workflows').innerHTML = snapshotBannerHtml(data.routines) + scheduleStripHtml(data.workflows) + `<div class="stack">${cards}</div>` + orphanRoutinesHtml(data.routines)
 }
 
 /* ---------- Memory ---------- */
@@ -930,6 +1000,11 @@ async function openFile(path) {
 document.addEventListener('click', (event) => {
   const file = event.target.closest('.file[data-path]')
   if (file) openFile(file.dataset.path)
+  const arm = event.target.closest('button[data-arm]')
+  if (arm) {
+    armWorkflow(arm)
+    return
+  }
   const approve = event.target.closest('button[data-approve]')
   if (approve) {
     approveProposal(approve)
@@ -1030,6 +1105,35 @@ async function postFire(body) {
   }
   if (!result.ok && result.status === 401) sessionStorage.removeItem(FIRE_KEY_STORE)
   return result
+}
+
+/* Arming creates a real routine, which spends runs on a schedule forever. The dashboard only
+   dispatches: an agent session runs the /arm skill, which refuses to proceed until the owner has
+   said their run cap out loud, arms one job, and confirms it exists afterwards. */
+async function armWorkflow(button) {
+  const slug = button.dataset.arm
+  const note = fireNoteFor(button)
+  const original = button.innerHTML
+  button.disabled = true
+  button.innerHTML = 'Sending&hellip;'
+  note.className = 'fire-note'
+  note.textContent = ''
+  try {
+    const result = await postFire({ workflow: slug, action: 'arm' })
+    if (result.ok) {
+      note.className = 'fire-note ok'
+      note.textContent = 'Sent. It will ask for your run cap before it arms anything.'
+    } else {
+      note.className = 'fire-note bad'
+      note.textContent = result.payload.error || `Dispatch failed (${result.status}).`
+    }
+  } catch (error) {
+    note.className = 'fire-note bad'
+    note.textContent = 'Could not reach the dashboard.'
+  } finally {
+    button.disabled = false
+    button.innerHTML = original
+  }
 }
 
 /* Approving records that the owner said yes to a line they read. It builds nothing and arms
