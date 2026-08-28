@@ -656,8 +656,11 @@ function renderToday() {
       ).join('')}</div>`
     : `<div class="panel empty">Nothing has gone quiet. Everything scheduled is running.</div>`
 
+  // The snapshot banner belongs here too. Today is the first screen anybody opens, and it was the
+  // one place a month-old snapshot was presented with no age at all.
   el('today').innerHTML =
     heroHtml(data.hero) +
+    snapshotBannerHtml(data.routines) +
     ladderHtml(data.setup) +
     fireButtonsHtml(data.workflows) +
     `<h2>Board</h2>` + boardHtml(board) +
@@ -715,6 +718,18 @@ function renderTeam() {
 // "did today's job run", and a UTC week would answer it for the wrong day either side of
 // midnight.
 
+/* The week strip. This is the site the last pass missed: it filtered on `workflow.schedule`
+   alone, so a job nothing fires still appeared on every day of the week, visually identical to a
+   real one - and on the Today strip it collected a "was due, no run logged" mark four times a
+   week. That is an accusation, and it needs an alarm clock to exist before it can be made.
+
+   Only jobs that actually ring appear here. The rest are counted underneath, so their absence is
+   visible rather than silent. */
+
+function ringsNow(workflow) {
+  return workflow.arm === 'armed' || workflow.arm === 'unapproved'
+}
+
 function weekDates(now = new Date()) {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   start.setDate(start.getDate() - ((start.getDay() + 6) % 7))
@@ -743,8 +758,16 @@ function ranOnDays(runs, slug) {
   return days
 }
 function scheduleStripHtml(workflows, options = {}) {
-  const scheduled = workflows.filter((workflow) => workflow.schedule)
-  if (!scheduled.length) return ''
+  const scheduled = workflows.filter((workflow) => workflow.schedule && ringsNow(workflow))
+  const silent = workflows.filter((workflow) => workflow.schedule && !ringsNow(workflow))
+  const silentNote = silent.length
+    ? `<p class="small muted">${silent.length} other job${silent.length === 1 ? '' : 's'} name a time in their file and nothing fires them - see the Workflows screen.</p>`
+    : ''
+  if (!scheduled.length) {
+    return silentNote
+      ? `<h2>${escapeHtml(options.heading ?? 'Schedule')}</h2><div class="panel empty">Nothing that rings is scheduled. ${silentNote}</div>`
+      : ''
+  }
   const { dates = false, runs = [], heading = 'Schedule' } = options
   const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
   const dayPills = DAY_NAMES.map(() => [])

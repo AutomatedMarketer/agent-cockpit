@@ -191,3 +191,12 @@ test('an unarmed job is still off when the routines are unknown - the file decid
   const files = [workflowFile('cold', { name: 'Cold', armed: false, reason: 'not yet' })]
   assert.equal(shapeWorkflows(files, [], known, Date.now(), [], false)[0].arm, 'off')
 })
+
+test('names match through unicode composition, exactly as arm.mjs does', () => {
+  const composed = 'Café Report'
+  const decomposed = 'Café Report'
+  assert.ok(
+    routineFor({ name: decomposed }, [{ id: 'x', name: composed }]),
+    'a decomposed name reported DECLARED while its own routine was listed as an orphan'
+  )
+})

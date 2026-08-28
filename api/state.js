@@ -107,7 +107,10 @@ export function describeAge(hours) {
 export const ARM_STATES = ['armed', 'declared', 'unapproved', 'off', 'unknown']
 
 function routineNameKey(value) {
-  return typeof value === 'string' ? value.trim().toLowerCase().replace(/\s+/g, ' ') : ''
+  // NFC, matching arm.mjs. Without it "Cafe\u0301" and "Caf\u00e9" are different strings that look
+  // identical, and one correctly armed job reports DECLARED while its own routine is listed as an
+  // orphan - two false statements about the same job, on the same screen.
+  return typeof value === 'string' ? value.trim().normalize('NFC').toLowerCase().replace(/\s+/g, ' ') : ''
 }
 
 export function shapeSnapshot(source, now = Date.now()) {
@@ -406,9 +409,14 @@ export function shapeLedger(source) {
   const rows = Array.isArray(parsed?.tasks) ? parsed.tasks : []
 
   let hoursPerWeek = 0
+  let unreadable = 0
   const tasks = rows.map((row) => {
     const hours = (Number(row?.times_per_week) * Number(row?.minutes_each)) / MINUTES_IN_AN_HOUR
-    const usable = Number.isFinite(hours) ? hours : null
+    // Finite AND positive. A row whose numbers will not parse contributes nothing, and silently
+    // contributing nothing is how a half-broken ledger under-reports somebody's week with no sign
+    // that anything was wrong.
+    const usable = Number.isFinite(hours) && hours > 0 ? hours : null
+    if (usable === null) unreadable += 1
     if (usable !== null) hoursPerWeek += usable
     return {
       task: typeof row?.task === 'string' ? row.task : '',
@@ -418,8 +426,14 @@ export function shapeLedger(source) {
     }
   })
 
+  const complete = Number.isFinite(hoursPerWeek) && hoursPerWeek > 0 && unreadable === 0
+
   return {
     ownerType: parsed?.owner_type ?? null,
+    // How many rows the board could not turn into hours, and whether the total can be trusted as
+    // a statement about their week.
+    unreadable,
+    complete,
     // Null, never zero, when they gave no rate. Zero would read as "this time is free", which is a
     // different claim and a false one - and it is the claim a dashboard makes loudest.
     hourlyValue,
@@ -459,11 +473,23 @@ export function shapeProposals(source) {
 // So this resolves the hero honestly or not at all. A metric the board cannot compute comes back
 // as `{ defined: false }` and the screen says so. It never renders a zero, because a zero here is
 // a claim about somebody's week.
+// A zero is not a small number here, it is a claim: "your repeating work costs you nothing".
+// Rendered in the largest type on the screen, off a ledger with no readable rows in it.
+//
+// It happened: an empty `tasks:` list, or one row whose `times_per_week` would not parse, produced
+// `0 hours a week` and - worse - `$0 a week at the rate you set`, which is the exact
+// this-time-is-free claim the cost field refuses to make and got in through the back door.
+function usableHours(ledger) {
+  return ledger && Number.isFinite(ledger.hoursPerWeek) && ledger.hoursPerWeek > 0
+}
+
 export const HERO_METRICS = {
   'hours-a-week': (ledger) =>
-    ledger ? { value: ledger.hoursPerWeek, unit: 'hours a week', caption: 'what your repeating work costs you' } : null,
+    usableHours(ledger)
+      ? { value: ledger.hoursPerWeek, unit: 'hours a week', caption: 'what your repeating work costs you' }
+      : null,
   'cost-a-week': (ledger) =>
-    ledger && !ledger.unpriced
+    usableHours(ledger) && !ledger.unpriced
       ? { value: ledger.costPerWeek, unit: 'a week', money: true, caption: 'at the rate you set' }
       : null
 }
@@ -483,11 +509,14 @@ export function shapeHero(tiles, ledger) {
 
   const resolved = resolve(ledger)
   if (!resolved) {
-    return {
-      metric,
-      defined: false,
-      why: ledger ? `"${metric}" needs a number your ledger does not carry` : 'there is no ledger.yml yet'
-    }
+    const why = !ledger
+      ? 'there is no ledger.yml yet'
+      : ledger.unreadable > 0
+        ? `${ledger.unreadable} row${ledger.unreadable === 1 ? '' : 's'} in your ledger could not be read as hours`
+        : !usableHours(ledger)
+          ? 'your ledger has no hours in it yet'
+          : `"${metric}" needs a number your ledger does not carry`
+    return { metric, defined: false, why }
   }
 
   return { metric, defined: true, ...resolved }
@@ -734,12 +763,35 @@ export default async function handler(request, response) {
     const stack = shapeStack(stackSource ? parseSimpleYaml(stackSource) : null, paths)
     const memory = shapeMemory(paths, sizes)
     const onboarding = parseOnboardingState(onboardingSource)
+    const routinesKnown = snapshot.usable && !snapshot.stale
     const claimedRoutines = new Set(
       workflows.filter((workflow) => workflow.routineId).map((workflow) => routineNameKey(workflow.name))
     )
-    const orphanRoutines = (snapshot.routines ?? [])
-      .filter((routine) => !claimedRoutines.has(routineNameKey(routine?.name)))
-      .map((routine) => ({ id: routine?.id ?? null, name: routine?.name ?? '(unnamed)' }))
+    // Only from a snapshot the board has agreed to trust. A stale one turned every correctly armed
+    // routine into a reported orphan, underneath a banner saying the data was not to be trusted.
+    const orphanRoutines = routinesKnown
+      ? (snapshot.routines ?? [])
+          .filter((routine) => !claimedRoutines.has(routineNameKey(routine?.name)))
+          .map((routine) => ({ id: routine?.id ?? null, name: routine?.name ?? '(unnamed)' }))
+      : []
+
+    // Two alarm clocks for one job both fire and both are billed, and the second was invisible.
+    // Two files with one name both reported ARMED on the same routine id - twice as much running
+    // as there is, and a second route by which a job nothing fires gets a next-run time.
+    const routineProblems = []
+    const countBy = (values) => {
+      const seen = new Map()
+      for (const value of values) if (value) seen.set(value, (seen.get(value) ?? 0) + 1)
+      return seen
+    }
+    if (routinesKnown) {
+      for (const [name, count] of countBy((snapshot.routines ?? []).map((r) => routineNameKey(r?.name)))) {
+        if (count > 1) routineProblems.push(`${count} routines share the name "${name}" - they will all fire, and the spend is multiplied`)
+      }
+    }
+    for (const [name, count] of countBy(workflows.map((workflow) => routineNameKey(workflow.name)))) {
+      if (count > 1) routineProblems.push(`${count} workflow files share the name "${name}", so a routine cannot be matched to one of them`)
+    }
 
     const ledger = shapeLedger(ledgerSource)
     const proposals = shapeProposals(proposalsSource)
@@ -771,7 +823,9 @@ export default async function handler(request, response) {
         stale: snapshot.stale ?? false,
         why: snapshot.why,
         count: snapshot.routines.length,
-        orphans: orphanRoutines
+        known: routinesKnown,
+        orphans: orphanRoutines,
+        problems: routineProblems
       },
       setup,
       generatedAt: new Date(now).toISOString()

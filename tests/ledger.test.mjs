@@ -147,3 +147,42 @@ test('no hero named in tiles.yml means no hero, not a broken one', () => {
   assert.equal(shapeHero({}, shapeLedger(LEDGER)), null)
   assert.equal(shapeHero(null, shapeLedger(LEDGER)), null)
 })
+
+/* ---------- the hero can never be a number it cannot source ------------------------------------ */
+
+/* These three all produced a giant "0" on the front of the board, and the money one produced
+   "$0 a week at the rate you set" — the exact this-time-is-free claim the cost field refuses to
+   make, arriving through the back door. A zero here is a claim about somebody's week. */
+
+test('a ledger with no tasks has no hero, rather than a hero of zero', () => {
+  const empty = shapeLedger('owner_type: business\nhourly_value: 150\ntasks:\n')
+  const hero = shapeHero({ hero: 'hours-a-week' }, empty)
+  assert.equal(hero.defined, false)
+  assert.equal(hero.value, undefined)
+  assert.match(hero.why, /no hours/)
+})
+
+test('a ledger whose numbers will not parse says so, rather than reporting zero', () => {
+  const broken = shapeLedger('owner_type: business\nhourly_value: 150\ntasks:\n  - task: X\n    words: "w"\n    times_per_week: abc\n    minutes_each: 30\n')
+  assert.equal(broken.unreadable, 1, 'the unreadable row is counted, not silently dropped')
+  assert.equal(broken.complete, false)
+  const hero = shapeHero({ hero: 'hours-a-week' }, broken)
+  assert.equal(hero.defined, false)
+  assert.match(hero.why, /could not be read/)
+})
+
+test('a money hero off an empty ledger is refused, never rendered as $0', () => {
+  const empty = shapeLedger('owner_type: business\nhourly_value: 150\ntasks:\n')
+  assert.equal(shapeHero({ hero: 'cost-a-week' }, empty).defined, false)
+})
+
+test('a partly readable ledger still reports its readable hours, and says one row was not', () => {
+  const partial = shapeLedger(
+    'owner_type: business\nhourly_value: 150\ntasks:\n' +
+    '  - task: Good\n    words: "w"\n    times_per_week: 5\n    minutes_each: 40\n' +
+    '  - task: Bad\n    words: "w"\n    times_per_week: abc\n    minutes_each: 30\n'
+  )
+  assert.equal(Math.round(partial.hoursPerWeek * 100) / 100, 3.33)
+  assert.equal(partial.unreadable, 1)
+  assert.equal(partial.complete, false, 'a total with a hole in it is not a statement about their week')
+})
