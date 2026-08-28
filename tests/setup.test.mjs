@@ -41,15 +41,17 @@ test('with an onboarding record, the ladder believes it over repo shape', () => 
     runtimes: [],
     tiles: null,
     runs: [],
-    onboarding: { brief: true, access: false, training: false, workflows: false, oversight: false }
+    onboarding: { brief: true, access: false, training: false, workflows: false, oversight: false, improvement: false }
   })
   const byRung = Object.fromEntries(setup.map((rung) => [rung.rung, rung.pass]))
   assert.equal(byRung.brief, true)
   assert.equal(byRung.training, false, 'shipped skills do not fake a finished Training stage')
   assert.equal(byRung.workflows, false, 'a pending Workflows stage shows as pending, whatever ran')
   assert.equal(byRung.oversight, false, 'shipped fire buttons do not fake a finished Oversight stage')
-  assert.deepEqual(setup.map((rung) => rung.label), ['Brief', 'Access', 'Training', 'Workflows', 'Oversight'],
-    'ladder labels match the five course stage names')
+  assert.equal(byRung.improvement, false, 'a pending Improvement stage shows as pending')
+  assert.deepEqual(setup.map((rung) => rung.label),
+    ['Brief', 'Access', 'Training', 'Workflows', 'Oversight', 'Improvement'],
+    'ladder labels match the six course stage names, in order')
 })
 
 test('a fresh staffed clone with no runs passes zero achievement rungs', () => {
@@ -93,4 +95,62 @@ test('a scheduled workflow whose runs stopped is still quiet', () => {
   const workflows = shapeWorkflows(FRESH_WORKFLOW, runs, {}, Date.now())
   assert.equal(workflows[0].state, 'quiet')
   assert.equal(shapeGoneQuiet([], workflows).length, 1)
+})
+
+/* The board showed five rungs while the course named six stages everywhere — in the pre-work
+   drill, in the shift talk, in the installer's twelve phases, and now in Lesson 18. Improvement
+   was taught and then invisible on the one screen students look at daily. The CSS was the same
+   bug in another place: `.ladder` was `repeat(5, 1fr)`, so a sixth rung had nowhere to render. */
+
+test('the ladder has one rung per stage the course teaches, Improvement last', () => {
+  const setup = shapeSetup({
+    brain: [], skills: [], workflows: [], runtimes: [], tiles: null, runs: []
+  })
+  assert.deepEqual(
+    setup.map((rung) => rung.rung),
+    ['brief', 'access', 'training', 'workflows', 'oversight', 'improvement'],
+    'the six stages, in the order the course climbs them'
+  )
+})
+
+test('Improvement is the one rung no repo shape can fake', () => {
+  // Everything else can be inferred from files the template already ships. A verdict exists
+  // only because the owner said what they did with a piece of work.
+  const base = {
+    brain: [], skills: ['scan-market'], runtimes: [], tiles: null,
+    workflows: [{ schedule: 'daily 06:30', fire: true, lastRun: null }],
+    runs: [{ trigger: 'schedule', started_at: new Date().toISOString() }]
+  }
+  const without = shapeSetup(base).find((rung) => rung.rung === 'improvement')
+  assert.equal(without.pass, false, 'a busy repo with no verdicts has not started Improvement')
+  assert.match(without.detail, /quality\//, 'the detail should say where the verdicts go')
+
+  const with_one = shapeSetup({ ...base, verdicts: 1 }).find((rung) => rung.rung === 'improvement')
+  assert.equal(with_one.pass, true, 'one filed verdict starts the stage')
+  assert.equal(with_one.detail, '1 verdict filed', 'singular at one — this line is read on quiet weeks')
+
+  const with_many = shapeSetup({ ...base, verdicts: 4 }).find((rung) => rung.rung === 'improvement')
+  assert.equal(with_many.detail, '4 verdicts filed')
+})
+
+test('an onboarding record decides Improvement too, not just the first five stages', () => {
+  const setup = shapeSetup({
+    brain: [], skills: [], workflows: [], runtimes: [], tiles: null, runs: [],
+    onboarding: { brief: true, access: true, training: true, workflows: true, oversight: true, improvement: true }
+  })
+  const improvement = setup.find((rung) => rung.rung === 'improvement')
+  assert.equal(improvement.pass, true, 'the install record is believed for Improvement as well')
+})
+
+test('the ladder grid is not pinned to a fixed number of columns', async () => {
+  // `repeat(5, 1fr)` is why a sixth rung had nowhere to go, and `repeat(6, ...)` would just
+  // move the same bug one place along. Same lesson as seven nav tabs in a six-column grid.
+  const { readFile } = await import('node:fs/promises')
+  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8')
+  const ladder = html.match(/\.ladder \{[^}]*\}/)
+  assert.ok(ladder, 'no .ladder rule found')
+  assert.ok(
+    !/repeat\(\s*\d+\s*,/.test(ladder[0]),
+    `.ladder pins a fixed column count: ${ladder[0]}`
+  )
 })

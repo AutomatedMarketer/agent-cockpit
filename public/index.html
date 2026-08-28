@@ -83,7 +83,9 @@
   .screen.active { display: block; }
 
   /* Setup ladder */
-  .ladder { display: grid; grid-template-columns: repeat(5, 1fr); gap: .35rem; padding: .7rem .8rem .8rem; }
+  /* auto-fit, never a fixed count: this was repeat(5, 1fr) while the course taught six
+     stages, so Improvement had nowhere to render. Same bug as seven nav tabs in six columns. */
+  .ladder { display: grid; grid-template-columns: repeat(auto-fit, minmax(5.25rem, 1fr)); gap: .35rem .5rem; padding: .7rem .8rem .8rem; }
   .rung { text-align: center; font-size: .6875rem; color: var(--muted); }
   .rung .bar { height: .3rem; border-radius: 999px; background: var(--chip); margin-bottom: .35rem; }
   .rung.pass .bar { background: var(--ok); }
@@ -1502,7 +1504,13 @@ function render() {
   repoBranch = data.repo.branch || 'main'
   el('repo-link').innerHTML = `<a href="${escapeHtml(data.repo.url)}" rel="noreferrer noopener">${escapeHtml(data.repo.owner)}/${escapeHtml(data.repo.repo)}</a>`
   const working = data.agents.filter((agent) => agent.state === 'working').length
-  el('strap').textContent = `${working} of ${data.agents.length} agents working · ${data.workflows.length} workflows · ${data.overnight.length} runs in the last day.`
+  // "1 runs in the last day" was on the front page. The count is usually plural, so the bug
+  // only shows on the quietest days — which are exactly the days somebody is looking closely.
+  const plural = (count, one, many = one + 's') => `${count} ${count === 1 ? one : many}`
+  el('strap').textContent =
+    `${working} of ${data.agents.length} agents working · ` +
+    `${plural(data.workflows.length, 'workflow')} · ` +
+    `${plural(data.overnight.length, 'run')} in the last day.`
   renderToday()
   renderLedger()
   renderTeam()

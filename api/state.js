@@ -1,5 +1,5 @@
-// One request from the browser, one JSON payload back — enough to draw all five screens:
-// Today, Team, Workflows, Memory, Connections.
+// One request from the browser, one JSON payload back — enough to draw all seven screens:
+// Today, Ledger, Team, Workflows, Skills, Memory, Connections.
 //
 // The cockpit reads the team repo and nothing else. There is no database, no Anthropic
 // API call, and no run-history endpoint to reverse-engineer — Routines does not publish
@@ -333,7 +333,9 @@ export function shapeMemory(paths, treeSizes = {}) {
   return { files, indexes, truncated: files.length === MAX_MEMORY_FILES }
 }
 
-// The five rungs of the Hiring Ladder, each judged from what the repo actually contains.
+// The six rungs of the Hiring Ladder - one per stage the course teaches - each judged from
+// what the repo actually contains. This said "five" and returned five while the course named
+// six everywhere, so Improvement was taught, drilled in pre-work, and invisible on the board.
 // These are approximations of the executable rung tests that live in the template — the
 // dashboard can only see git, so anything needing a live probe is judged by its footprint.
 // The onboarding installer commits its state file into the student's repo. When it is
@@ -353,7 +355,7 @@ export function parseOnboardingState(source) {
   return sawRow ? stages : null
 }
 
-export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, onboarding = null, now = Date.now() }) {
+export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, verdicts = 0, onboarding = null, now = Date.now() }) {
   // The Shift rung is behavioral either way: it asks whether anything actually ran on a
   // schedule this week, which no install record can answer.
   const shiftOk = workflows.some(
@@ -376,7 +378,8 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, on
       { rung: 'access', label: 'Access', pass: pass('access'), detail: detail('access', 'Tools connected') },
       { rung: 'training', label: 'Training', pass: pass('training'), detail: detail('training', 'Skills built and verified') },
       { rung: 'workflows', label: 'Workflows', pass: pass('workflows'), detail: workflowsDetail },
-      { rung: 'oversight', label: 'Oversight', pass: pass('oversight'), detail: detail('oversight', 'Dashboard deployed, dispatched from the phone') }
+      { rung: 'oversight', label: 'Oversight', pass: pass('oversight'), detail: detail('oversight', 'Dashboard deployed, dispatched from the phone') },
+      { rung: 'improvement', label: 'Improvement', pass: pass('improvement'), detail: detail('improvement', 'Verdicts filed, and the rules they became') }
     ]
   }
 
@@ -394,12 +397,17 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, on
 
   const oversightOk = used && workflows.some((workflow) => workflow.fire)
 
+  // Improvement is the one stage no repo shape can fake: a verdict only exists because the
+  // owner said what they did with a piece. Lesson 18.
+  const improvementOk = verdicts > 0
+
   return [
     { rung: 'brief', label: 'Brief', pass: briefOk, detail: briefOk ? 'Business brain filled in' : 'Business brain files missing or still have empty fields' },
     { rung: 'access', label: 'Access', pass: accessOk, detail: accessOk ? 'Tools connected' : 'No connections or runtimes registered yet' },
     { rung: 'training', label: 'Training', pass: trainingOk, detail: trainingOk ? `${skills.length} skill${skills.length === 1 ? '' : 's'} defined` : used ? 'No skills in the repo yet' : 'No runs yet — the repo has not been used' },
     { rung: 'workflows', label: 'Workflows', pass: shiftOk, detail: shiftOk ? 'Something ran on a schedule this week' : 'Nothing has run on a schedule in the last 7 days' },
-    { rung: 'oversight', label: 'Oversight', pass: oversightOk, detail: oversightOk ? 'Fire buttons registered' : used ? 'No workflow has fire: true yet' : 'No runs yet — the repo has not been used' }
+    { rung: 'oversight', label: 'Oversight', pass: oversightOk, detail: oversightOk ? 'Fire buttons registered' : used ? 'No workflow has fire: true yet' : 'No runs yet — the repo has not been used' },
+    { rung: 'improvement', label: 'Improvement', pass: improvementOk, detail: improvementOk ? `${verdicts} verdict${verdicts === 1 ? '' : 's'} filed` : 'No verdicts in quality/ yet — nothing has told the team what you did with its work' }
   ]
 }
 
@@ -706,6 +714,9 @@ export default async function handler(request, response) {
     const runPaths = paths.filter((path) => /^runs\/\d{4}-\d{2}\/.+\.json$/.test(path))
     const workflowPaths = paths.filter((path) => /^workflows\/[^/]+\.ya?ml$/.test(path))
     const taskPaths = paths.filter((path) => /^tasks\/[^/]+\.md$/.test(path))
+    // One file per verdict the owner gave. Counted, never read: the Improvement rung only
+    // needs to know somebody closed the loop, and the contents are the owner's own words.
+    const verdictPaths = paths.filter((path) => /^quality\/verdicts\/.+\.md$/.test(path))
     const skillPaths = paths.filter((path) => /^(?:\.claude\/)?skills\/[^/]+\/(?:SKILL|skill)\.md$/.test(path))
     const skillSlugs = [...new Set(skillPaths.map((path) => path.split('/').at(-2)))]
     const hasRuntimes = paths.includes('runtimes.yml')
@@ -841,7 +852,7 @@ export default async function handler(request, response) {
     const ledger = shapeLedger(ledgerSource)
     const proposals = shapeProposals(proposalsSource)
     const hero = shapeHero(tiles, ledger)
-    const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, onboarding, now })
+    const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, verdicts: verdictPaths.length, onboarding, now })
 
     response.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
     response.status(200).json({

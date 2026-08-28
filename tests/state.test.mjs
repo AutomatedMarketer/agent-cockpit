@@ -267,15 +267,16 @@ test('the memory browser gets every markdown page and knows its index files', as
   assert.equal(index.size, 2048)
 })
 
-test('the setup ladder judges all five rungs from the repo', async () => {
+test('the setup ladder judges all six rungs from the repo', async () => {
   const { body } = await run()
   const byRung = Object.fromEntries(body.setup.map((rung) => [rung.rung, rung]))
-  assert.equal(body.setup.length, 5)
+  assert.equal(body.setup.length, 6, 'one rung per stage the course teaches')
   assert.equal(byRung.brief.pass, false, 'fill markers remain, so Brief fails')
   assert.equal(byRung.access.pass, true, 'runtimes and tiles are registered')
   assert.equal(byRung.training.pass, true, 'three skills exist')
   assert.equal(byRung.workflows.pass, true, 'a scheduled workflow ran this week')
   assert.equal(byRung.oversight.pass, true, 'a fire button is registered')
+  assert.equal(byRung.improvement.pass, false, 'no verdicts in quality/, so Improvement has not started')
 })
 
 test('gone-quiet lists agents and workflows that stopped, and nothing that is fine', async () => {
