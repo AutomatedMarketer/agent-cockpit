@@ -54,6 +54,50 @@ test('with an onboarding record, the ladder believes it over repo shape', () => 
     'ladder labels match the six course stage names, in order')
 })
 
+/* The Access rung has TWO code paths and the first version of this fix only reached one.
+   With an onboarding record the ladder believes the record, and that branch had a hardcoded
+   'Tools connected' detail that never looked at connections/register.yml. Every student who
+   runs /onboard gets that branch -- so the path the fix reached was the path a student never
+   takes. Found by a verifier reading a grep the log had truncated. */
+
+test('with an onboarding record, the Access detail still names what is actually connected', () => {
+  const setup = shapeSetup({
+    brain: [],
+    skills: [],
+    workflows: [],
+    runtimes: [],
+    tiles: null,
+    runs: [],
+    connections: [
+      { name: 'Gmail', proved: true },
+      { name: 'Stripe', proved: false }
+    ],
+    onboarding: { brief: true, access: true, training: false, workflows: false, oversight: false, improvement: false }
+  })
+  const access = setup.find((rung) => rung.rung === 'access')
+  assert.equal(access.pass, true, 'the install record still decides pass/fail')
+  assert.match(access.detail, /Gmail connected and proved/,
+    'the detail must come from the register, not a hardcoded string')
+  assert.doesNotMatch(access.detail, /Stripe/, 'an unproved line is not something to boast about')
+})
+
+test('an onboarding record claiming Access with an empty register says so', () => {
+  const setup = shapeSetup({
+    brain: [],
+    skills: [],
+    workflows: [],
+    runtimes: [],
+    tiles: null,
+    runs: [],
+    connections: [],
+    onboarding: { brief: true, access: true, training: false, workflows: false, oversight: false, improvement: false }
+  })
+  const access = setup.find((rung) => rung.rung === 'access')
+  assert.equal(access.pass, true, 'the record decides pass, exactly as rung 4 does')
+  assert.match(access.detail, /nothing is registered in connections\/register\.yml/,
+    'a stage ticked off with no evidence behind it is worth seeing')
+})
+
 test('a fresh staffed clone with no runs passes zero achievement rungs', () => {
   // The template ships with skills and fire: true workflows out of the box; only evidence
   // of use may light those rungs up when no onboarding record exists.

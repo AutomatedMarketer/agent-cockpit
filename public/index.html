@@ -1422,12 +1422,49 @@ async function submitWorkflowRequest() {
 
 /* ---------- Connections ---------- */
 
+// Two rails, and they answer different questions. Connections are what the team can reach on
+// the owner's behalf — Gmail, a calendar, a CRM — read from connections/register.yml, which
+// /connect writes after a tool has answered with the owner's own data. Runtimes are machines
+// with a URL the owner wants one tap away.
+//
+// This screen used to render runtimes only, while being called Connections. A student who did
+// Lesson 4, connected Gmail and ran /connect saw "No runtimes registered" and a suggestion to
+// add Hermes or OpenClaw — neither of which they have or need.
 function renderConnections() {
-  if (!data.runtimes.length) {
-    el('connections').innerHTML = `<div class="panel empty">No runtimes registered. Add an entry to <code>runtimes.yml</code> in your team repo — Hermes, OpenClaw, anything with a URL — and it appears here.</div>`
+  const connections = data.connections ?? []
+  const runtimes = data.runtimes ?? []
+
+  if (!connections.length && !runtimes.length) {
+    el('connections').innerHTML = `<div class="panel empty">Nothing connected yet. Run <code>/connect</code> in your team repo and it will wire one tool, prove it by reading your own data back to you, and register it here.</div>`
     return
   }
-  const rows = data.runtimes.map((runtime) => `
+
+  const connectionRows = connections.map((connection) => {
+    const proof = connection.proved
+      ? `<span class="chip ok">Proved ${escapeHtml(connection.verified)}</span>`
+      : `<span class="chip warn">Unproven</span>`
+    const detail = connection.proved
+      ? escapeHtml(connection.proof)
+      : 'No verified date and proof in the register, so this is a claim rather than a connection. Run <code>/connect</code> to prove it.'
+    const scopes = connection.scopes.length ? `<span class="chip">${escapeHtml(connection.scopes.join(', '))}</span>` : ''
+    const usedBy = connection.usedBy.length
+      ? `<span class="small muted">used by ${escapeHtml(connection.usedBy.join(', '))}</span>`
+      : `<span class="small muted">no workflow depends on it yet</span>`
+    return `
+    <div class="conn ${connection.proved ? 'live' : 'attention'}">
+      <div class="row between">
+        <span class="row"><span class="dot"></span><span class="title">${escapeHtml(connection.name)}</span><span class="chip">${escapeHtml(connection.kind)}</span>${scopes}</span>
+        ${proof}
+      </div>
+      <p class="small" style="margin:.35rem 0 .25rem">${detail}</p>
+      <div class="row between">
+        ${usedBy}
+        ${connection.account ? `<span class="small muted">${escapeHtml(connection.account)}</span>` : ''}
+      </div>
+    </div>`
+  }).join('')
+
+  const runtimeRows = runtimes.map((runtime) => `
     <div class="conn ${runtime.status}">
       <div class="row between">
         <span class="row"><span class="dot"></span><span class="title">${escapeHtml(runtime.name)}</span><span class="chip">${escapeHtml(runtime.kind)}</span></span>
@@ -1438,7 +1475,11 @@ function renderConnections() {
         ${runtime.url ? `<a href="${escapeHtml(runtime.url)}" rel="noreferrer noopener">Open &rarr;</a>` : ''}
       </div>
     </div>`).join('')
-  el('connections').innerHTML = `<div class="panel">${rows}</div>`
+
+  const panels = []
+  if (connectionRows) panels.push(`<div class="panel">${connectionRows}</div>`)
+  if (runtimeRows) panels.push(`<h3 class="sub">Runtimes</h3><div class="panel">${runtimeRows}</div>`)
+  el('connections').innerHTML = panels.join('')
 }
 
 /* ---------- skills ---------- */

@@ -262,6 +262,38 @@ export function shapeWorkflows(workflowFiles, runs, known, now = Date.now(), rou
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
+// Everything the team can reach, from connections/register.yml. The register's own rule is
+// that a line without a `verified` date and a `proof` is a claim, not a connection — so that
+// distinction is carried here rather than flattened, and the rail shows it.
+//
+// This function exists because the Access rung used to read `runtimes.length > 0 ||
+// chosenTiles.length > 0` while its own failure line said "No connections or runtimes
+// registered yet". It named a file nobody read. A student could connect Gmail, run /connect,
+// get a proved entry written into the register, and still be told Access had not happened.
+export function shapeConnections(register) {
+  const entries = Array.isArray(register?.connections) ? register.connections : []
+  return entries
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry) => {
+      const verified = typeof entry.verified === 'string' ? entry.verified : null
+      const proof = typeof entry.proof === 'string' && entry.proof.trim() ? entry.proof : null
+      return {
+        name: String(entry.name ?? entry.slug ?? 'unnamed'),
+        slug: typeof entry.slug === 'string' ? entry.slug : null,
+        kind: String(entry.kind ?? 'connector'),
+        account: typeof entry.account === 'string' ? entry.account : null,
+        scopes: Array.isArray(entry.scopes) ? entry.scopes.map(String) : [],
+        usedBy: Array.isArray(entry.used_by) ? entry.used_by.map(String) : [],
+        verified,
+        proof,
+        // Proved means it answered with the owner's own data and someone wrote down what it
+        // returned. Both halves, or it is a claim.
+        proved: Boolean(verified && proof)
+      }
+    })
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
 export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
   const entries = Array.isArray(registry?.runtimes) ? registry.runtimes : []
   return entries
@@ -355,7 +387,20 @@ export function parseOnboardingState(source) {
   return sawRow ? stages : null
 }
 
-export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, verdicts = 0, onboarding = null, now = Date.now() }) {
+// Name what is actually reachable rather than saying "Tools connected", so a passing rung
+// still tells the owner which tools it is passing on.
+function accessDetail(provedConnections, runtimes) {
+  const parts = []
+  if (provedConnections.length) {
+    parts.push(provedConnections.length === 1
+      ? `${provedConnections[0].name} connected and proved`
+      : `${provedConnections.length} connections proved`)
+  }
+  if (runtimes.length) parts.push(`${runtimes.length} runtime${runtimes.length === 1 ? '' : 's'}`)
+  return parts.length ? parts.join(' · ') : 'Tools connected'
+}
+
+export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, connections = [], verdicts = 0, onboarding = null, now = Date.now() }) {
   // The Shift rung is behavioral either way: it asks whether anything actually ran on a
   // schedule this week, which no install record can answer.
   const shiftOk = workflows.some(
@@ -365,6 +410,12 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, ve
       (daysSince(workflow.lastRun.started_at, now) ?? 99) <= 7
   ) || runs.some((run) => run.trigger === 'schedule' && (daysSince(run.started_at, now) ?? 99) <= 7)
 
+  // A connection only counts once it has answered with the owner's own data. An unproved
+  // line in the register is a claim, and claims must not light a rung. Computed before the
+  // onboarding branch because BOTH rung paths need it -- the first version of this fix only
+  // reached the heuristic fallback, which is the path a student never takes.
+  const provedConnections = connections.filter((connection) => connection.proved)
+
   if (onboarding) {
     const pass = (stage) => onboarding[stage] === true
     const detail = (stage, doneText) => pass(stage) ? doneText : 'Not finished in /onboard yet'
@@ -373,9 +424,17 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, ve
     const workflowsDetail = pass('workflows')
       ? shiftOk ? 'Workflows built — something ran on a schedule this week' : 'Workflows built — nothing has run on a schedule in the last 7 days'
       : 'Not finished in /onboard yet'
+    // Rung 2 is Access, and it takes the same shape. A record saying Access is done while
+    // connections/register.yml is empty is the difference between a tool that was connected
+    // and one that was ticked off, so it says which.
+    const accessOnboardDetail = pass('access')
+      ? (provedConnections.length || runtimes.length)
+        ? accessDetail(provedConnections, runtimes)
+        : 'Marked done in /onboard, but nothing is registered in connections/register.yml'
+      : 'Not finished in /onboard yet'
     return [
       { rung: 'brief', label: 'Brief', pass: pass('brief'), detail: detail('brief', 'Business brain filled in') },
-      { rung: 'access', label: 'Access', pass: pass('access'), detail: detail('access', 'Tools connected') },
+      { rung: 'access', label: 'Access', pass: pass('access'), detail: accessOnboardDetail },
       { rung: 'training', label: 'Training', pass: pass('training'), detail: detail('training', 'Skills built and verified') },
       { rung: 'workflows', label: 'Workflows', pass: pass('workflows'), detail: workflowsDetail },
       { rung: 'oversight', label: 'Oversight', pass: pass('oversight'), detail: detail('oversight', 'Dashboard deployed, dispatched from the phone') },
@@ -391,7 +450,7 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, ve
     brain.length > 0 && brain.every((file) => file.present && file.missing.length === 0)
 
   const chosenTiles = Array.isArray(tiles?.chosen) ? tiles.chosen : []
-  const accessOk = runtimes.length > 0 || chosenTiles.length > 0
+  const accessOk = provedConnections.length > 0 || runtimes.length > 0 || chosenTiles.length > 0
 
   const trainingOk = used && skills.length > 0
 
@@ -403,7 +462,7 @@ export function shapeSetup({ brain, skills, workflows, runtimes, tiles, runs, ve
 
   return [
     { rung: 'brief', label: 'Brief', pass: briefOk, detail: briefOk ? 'Business brain filled in' : 'Business brain files missing or still have empty fields' },
-    { rung: 'access', label: 'Access', pass: accessOk, detail: accessOk ? 'Tools connected' : 'No connections or runtimes registered yet' },
+    { rung: 'access', label: 'Access', pass: accessOk, detail: accessOk ? accessDetail(provedConnections, runtimes) : 'No connections or runtimes registered yet' },
     { rung: 'training', label: 'Training', pass: trainingOk, detail: trainingOk ? `${skills.length} skill${skills.length === 1 ? '' : 's'} defined` : used ? 'No skills in the repo yet' : 'No runs yet — the repo has not been used' },
     { rung: 'workflows', label: 'Workflows', pass: shiftOk, detail: shiftOk ? 'Something ran on a schedule this week' : 'Nothing has run on a schedule in the last 7 days' },
     { rung: 'oversight', label: 'Oversight', pass: oversightOk, detail: oversightOk ? 'Fire buttons registered' : used ? 'No workflow has fire: true yet' : 'No runs yet — the repo has not been used' },
@@ -720,6 +779,8 @@ export default async function handler(request, response) {
     const skillPaths = paths.filter((path) => /^(?:\.claude\/)?skills\/[^/]+\/(?:SKILL|skill)\.md$/.test(path))
     const skillSlugs = [...new Set(skillPaths.map((path) => path.split('/').at(-2)))]
     const hasRuntimes = paths.includes('runtimes.yml')
+    const CONNECTION_REGISTER = 'connections/register.yml'
+    const hasConnections = paths.includes(CONNECTION_REGISTER)
     const hasTiles = paths.includes('tiles.yml')
     const hasStack = paths.includes('stack.yml')
     const hasLedger = paths.includes('ledger.yml')
@@ -729,7 +790,7 @@ export default async function handler(request, response) {
     const ONBOARDING_STATE = '.agent-team/onboarding-state.md'
     const hasOnboarding = paths.includes(ONBOARDING_STATE)
 
-    const [agentFiles, runFiles, brainFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource] =
+    const [agentFiles, runFiles, brainFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
@@ -738,6 +799,7 @@ export default async function handler(request, response) {
         Promise.all(taskPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(skillPaths.map(async (path) => [path, await rawFile(settings, path)])),
         hasRuntimes ? rawFile(settings, 'runtimes.yml') : null,
+        hasConnections ? rawFile(settings, CONNECTION_REGISTER) : null,
         hasTiles ? rawFile(settings, 'tiles.yml') : null,
         hasOnboarding ? rawFile(settings, ONBOARDING_STATE) : null,
         hasStack ? rawFile(settings, 'stack.yml') : null,
@@ -802,6 +864,7 @@ export default async function handler(request, response) {
       })
     )
     const runtimes = shapeRuntimes(registry, heartbeats, now)
+    const connections = shapeConnections(connectionsSource ? parseSimpleYaml(connectionsSource) : { connections: [] })
 
     const tiles = tilesSource ? parseSimpleYaml(tilesSource) : null
     const skills = shapeSkills(skillFiles, workflows)
@@ -852,7 +915,7 @@ export default async function handler(request, response) {
     const ledger = shapeLedger(ledgerSource)
     const proposals = shapeProposals(proposalsSource)
     const hero = shapeHero(tiles, ledger)
-    const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, verdicts: verdictPaths.length, onboarding, now })
+    const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, connections, verdicts: verdictPaths.length, onboarding, now })
 
     response.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
     response.status(200).json({
@@ -867,6 +930,7 @@ export default async function handler(request, response) {
       brain,
       workflows,
       runtimes,
+      connections,
       skills,
       stack,
       memory,

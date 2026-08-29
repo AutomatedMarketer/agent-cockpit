@@ -37,6 +37,7 @@ const TREE = {
     { type: 'blob', path: 'tasks/2026-08-19-draft-post.md' },
     { type: 'blob', path: 'tasks/2026-08-18-call-supplier.md' },
     { type: 'blob', path: 'runtimes.yml' },
+    { type: 'blob', path: 'connections/register.yml' },
     { type: 'blob', path: 'tiles.yml' },
     { type: 'blob', path: 'stack.yml' },
     { type: 'blob', path: 'wiki/INDEX.md', size: 2048 },
@@ -95,6 +96,8 @@ const FILES = {
   'tasks/2026-08-18-call-supplier.md': '# Call the supplier\n\nNo frontmatter on purpose.\n',
   'runtimes.yml':
     'runtimes:\n  - name: Hermes\n    kind: agent-runtime\n    url: http://hermes.tail.ts.net:8080\n    heartbeat: runs/heartbeat/hermes.json\n  - name: OpenClaw\n    kind: gateway\n    url: http://openclaw.tail.ts.net:3000\n    heartbeat: runs/heartbeat/openclaw.json\n',
+  'connections/register.yml':
+    'connections:\n  - name: Gmail\n    slug: gmail\n    kind: connector\n    account: owner@example.com\n    scopes: [read, draft]\n    verified: 2026-08-20\n    proof: \"Read the subjects of the three most recent messages\"\n    used_by: [inbox-triage]\n  - name: Stripe\n    slug: stripe\n    kind: connector\n    account: acct_live\n    verified: 2026-08-21\n',
   'tiles.yml': 'hero: pipeline-value\nchosen: [inbox, calendar]\n',
   'skills/pull-calendar/SKILL.md': '---\nname: pull-calendar\ndescription: Reads the next seven days of the calendar.\n---\n# Pull calendar\n',
   'skills/write-brief/SKILL.md': '---\nname: write-brief\ndescription: Writes the brief.\n---\n',
@@ -253,6 +256,61 @@ test('the connections rail reads runtimes.yml and judges each heartbeat', async 
   assert.equal(hermes.url, 'http://hermes.tail.ts.net:8080')
   const openclaw = body.runtimes.find((runtime) => runtime.name === 'OpenClaw')
   assert.equal(openclaw.status, 'silent', 'a three-hour-old heartbeat is silent')
+})
+
+/* Lesson 4 is the Access stage: the student connects Gmail and a calendar. `/connect` writes
+   what it proved into connections/register.yml, and the register's own header says a line
+   without a `verified` date and a `proof` is a claim, not a connection.
+
+   The rail rendered runtimes.yml only, while being called Connections, and the Access rung read
+   `runtimes.length > 0 || chosenTiles.length > 0` while its failure line said "No connections or
+   runtimes registered yet" - naming a file nothing read. A student could do the Access lesson
+   perfectly and be told Access had not happened.
+   Found 2026-08-28 walking Lesson 4 as a student. */
+
+test('the connections rail reads connections/register.yml, not just runtimes', async () => {
+  const { body } = await run()
+  assert.equal(body.connections.length, 2, 'both register entries are returned')
+
+  const gmail = body.connections.find((connection) => connection.name === 'Gmail')
+  assert.equal(gmail.proved, true)
+  assert.equal(gmail.verified, '2026-08-20')
+  assert.equal(gmail.account, 'owner@example.com')
+  assert.deepEqual(gmail.scopes, ['read', 'draft'])
+  assert.deepEqual(gmail.usedBy, ['inbox-triage'])
+
+  const stripe = body.connections.find((connection) => connection.name === 'Stripe')
+  assert.equal(stripe.proved, false, 'a verified date with no proof is still a claim')
+})
+
+test('a proved connection lights the Access rung on its own', async () => {
+  // Drop runtimes.yml and tiles.yml, or this passes on the old runtimes-only rule and proves
+  // nothing. The whole point is that a connection alone is enough.
+  const { body } = await run({}, { dropPaths: ['runtimes.yml', 'tiles.yml'] })
+  assert.deepEqual(body.runtimes, [], 'the fixture must not be able to pass this rung another way')
+  const access = body.setup.find((rung) => rung.rung === 'access')
+  assert.equal(access.pass, true, 'a proved Gmail connection is Access, with no runtime and no tile')
+  assert.match(access.detail, /Gmail connected and proved/,
+    'a passing rung should name what it is passing on')
+})
+
+test('an unproved connection cannot light the Access rung', async () => {
+  const { body } = await run({}, {
+    dropPaths: ['runtimes.yml', 'tiles.yml'],
+    overrideFiles: {
+      'connections/register.yml':
+        'connections:\n  - name: Gmail\n    kind: connector\n    account: owner@example.com\n'
+    }
+  })
+  const access = body.setup.find((rung) => rung.rung === 'access')
+  assert.equal(access.pass, false,
+    'a register line with no verified date and no proof is a claim, and claims must not pass a rung')
+  assert.equal(body.connections[0].proved, false)
+})
+
+test('a repo with no register at all still renders', async () => {
+  const { body } = await run({}, { dropPaths: ['connections/register.yml'] })
+  assert.deepEqual(body.connections, [], 'an older repo without the file is not an error')
 })
 
 test('the memory browser gets every markdown page and knows its index files', async () => {
