@@ -28,7 +28,10 @@ test('every fixed dispatch slug is named in the deploy instructions', async () =
   }
   // A slug is "fixed" when the code indexes the trigger map with something the user did not type.
   const fixed = new Set()
-  for (const m of source.matchAll(/triggers\s*\[\s*([A-Za-z_$][\w$]*|['"][a-z0-9-]+['"])\s*\]/g)) {
+  // `?.` is allowed because this file uses optional chaining heavily; a lookup written
+  // `triggers?.['x']` is the same lookup. Alias chains (`const m = triggers; m['x']`) are
+  // still not followed - recorded in the lesson log rather than claimed away.
+  for (const m of source.matchAll(/triggers\s*\??\.?\s*\[\s*([A-Za-z_$][\w$]*|['"][a-z0-9-]+['"])\s*\]/g)) {
     const key = m[1]
     if (/^['"]/.test(key)) fixed.add(key.slice(1, -1))
     else if (constants.has(key)) fixed.add(constants.get(key))
