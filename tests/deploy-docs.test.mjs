@@ -18,8 +18,22 @@ test('every fixed dispatch slug is named in the deploy instructions', async () =
   const source = await readFile(join(root, 'api/fire.js'), 'utf8')
   const readme = await readFile(join(root, 'README.md'), 'utf8')
 
-  const fixed = [...source.matchAll(/^const\s+\w*SLUG\w*\s*=\s*'([a-z0-9-]+)'/gm)].map((m) => m[1])
-  assert.ok(fixed.length > 0, 'no fixed dispatch slug found in api/fire.js - this test has gone hollow')
+  /* Resolve what the code LOOKS UP, not how the constant was spelled. The first version of this
+     matched /^const\s+\w*SLUG\w*\s*=\s*'...'/ and missed four undocumented slugs at once: a name
+     without "SLUG" in it, a double-quoted value, an indented declaration, and a camelCase name.
+     Every one of those would have shipped the same 404 this test exists to prevent. */
+  const constants = new Map()
+  for (const m of source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*['"]([a-z0-9][a-z0-9-]*)['"]/g)) {
+    constants.set(m[1], m[2])
+  }
+  // A slug is "fixed" when the code indexes the trigger map with something the user did not type.
+  const fixed = new Set()
+  for (const m of source.matchAll(/triggers\s*\[\s*([A-Za-z_$][\w$]*|['"][a-z0-9-]+['"])\s*\]/g)) {
+    const key = m[1]
+    if (/^['"]/.test(key)) fixed.add(key.slice(1, -1))
+    else if (constants.has(key)) fixed.add(constants.get(key))
+  }
+  assert.ok(fixed.size > 0, 'no fixed dispatch slug found in api/fire.js - this test has gone hollow')
 
   for (const slug of fixed) {
     assert.ok(
