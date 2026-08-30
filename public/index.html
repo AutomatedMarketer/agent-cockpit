@@ -66,10 +66,13 @@
   .working .dot, .live .dot { background: var(--ok); }
   .quiet .dot, .attention .dot, .silent .dot { background: var(--warn); }
   .never-run .dot, .no-heartbeat .dot { background: var(--bad); }
+  /* Not in use is a decision, not a fault - so it reads muted rather than red. */
+  .not-in-use .dot { background: var(--muted); }
   .state { font-size: .75rem; font-weight: 600; color: var(--muted); }
   .working .state, .live .state { color: var(--ok); }
   .quiet .state, .attention .state, .silent .state { color: var(--warn); }
   .never-run .state, .no-heartbeat .state { color: var(--bad); }
+  .not-in-use .state { color: var(--muted); }
   .muted { color: var(--muted); }
   .small { font-size: .8125rem; }
   .empty { padding: 1rem; color: var(--muted); font-size: .875rem; }
@@ -361,6 +364,7 @@ const TITLES = { today: 'Today', ledger: 'Ledger', team: 'Team', workflows: 'Wor
 const SCREENS = Object.keys(TITLES)
 const STATE_LABEL = {
   working: 'Working', quiet: 'Gone quiet', 'never-run': 'Never run', attention: 'Needs a look',
+  'not-in-use': 'Not in use',
   live: 'Live', silent: 'Silent', 'no-heartbeat': 'No heartbeat'
 }
 
@@ -1545,11 +1549,14 @@ function render() {
   repoBranch = data.repo.branch || 'main'
   el('repo-link').innerHTML = `<a href="${escapeHtml(data.repo.url)}" rel="noreferrer noopener">${escapeHtml(data.repo.owner)}/${escapeHtml(data.repo.repo)}</a>`
   const working = data.agents.filter((agent) => agent.state === 'working').length
+  // An agent switched off on purpose is not a shortfall, so it leaves the denominator too.
+  // "2 of 8 working" read as four missing agents when two of them were never wanted.
+  const inUse = data.agents.filter((agent) => agent.state !== 'not-in-use').length
   // "1 runs in the last day" was on the front page. The count is usually plural, so the bug
   // only shows on the quietest days — which are exactly the days somebody is looking closely.
   const plural = (count, one, many = one + 's') => `${count} ${count === 1 ? one : many}`
   el('strap').textContent =
-    `${working} of ${data.agents.length} agents working · ` +
+    `${working} of ${inUse} agents working · ` +
     `${plural(data.workflows.length, 'workflow')} · ` +
     `${plural(data.overnight.length, 'run')} in the last day.`
   renderToday()

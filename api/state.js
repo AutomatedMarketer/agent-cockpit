@@ -16,6 +16,7 @@ import {
   parseFrontmatter,
   daysSince,
   stateFor,
+  notInUse,
   fillMarkers,
   sortRunsNewestFirst,
   runsSince,
@@ -32,6 +33,13 @@ import { parseSimpleYaml } from './yaml-lite.js'
 const GITHUB = 'https://api.github.com'
 const AGENT_DIR = '.claude/agents'
 const BRAIN_FILES = ['shared/about-me.md', 'shared/business-brain.md', 'shared/writing-rules.md']
+// The two agents that usually never apply to someone with a job rather than a company. Their
+// knowledge file is where that decision is written down, so it is the only place the board can
+// learn it. Two extra fetches, in parallel with the ones already happening.
+const KNOWLEDGE_FILES = {
+  sales: 'agents/sales/knowledge/offer-sheet.md',
+  'customer-service': 'agents/customer-service/knowledge/faq.md'
+}
 const MAX_RUNS_RETURNED = 50
 const MAX_MEMORY_FILES = 2000
 
@@ -790,11 +798,12 @@ export default async function handler(request, response) {
     const ONBOARDING_STATE = '.agent-team/onboarding-state.md'
     const hasOnboarding = paths.includes(ONBOARDING_STATE)
 
-    const [agentFiles, runFiles, brainFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource] =
+    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(BRAIN_FILES.map(async (path) => [path, await rawFile(settings, path)])),
+        Promise.all(Object.entries(KNOWLEDGE_FILES).map(async ([slug, path]) => [slug, await rawFile(settings, path)])),
         Promise.all(workflowPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(taskPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(skillPaths.map(async (path) => [path, await rawFile(settings, path)])),
@@ -831,7 +840,7 @@ export default async function handler(request, response) {
         lastStatus: mine[0]?.status ?? null,
         runsThisWeek: mine.filter((run) => (daysSince(run.started_at, now) ?? 99) <= 7).length,
         totalRuns: mine.length,
-        state: stateFor(mine, now)
+        state: stateFor(mine, now, notInUse(Object.fromEntries(knowledgeFiles)[slug]))
       }
     })
 

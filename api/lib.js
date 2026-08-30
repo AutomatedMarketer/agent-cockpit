@@ -69,10 +69,28 @@ export function minutesSince(iso, now = Date.now()) {
   return (now - parsed) / 60000
 }
 
+// An agent switched off on purpose and one nobody has got to yet both had no runs, so both read
+// "Never run" on the Team screen and both counted against "N of 8 agents working". They are not
+// the same thing: sales and customer-service usually never apply to someone who works for the
+// business rather than owning it, and the course says so on day one.
+//
+// The signal is the knowledge file having been ANSWERED with a refusal - no fill markers left,
+// AND a first-person negation. Both halves are needed: the shipped template quotes "I do not
+// sell" inside its own guidance paragraph, so matching the phrase alone marks every fresh clone
+// as not in use.
+const NOT_IN_USE = /\b(?:i|we)\s+do\s+not\s+(?:sell|deal\s+with\s+customers|have\s+customers)\b/i
+
+export function notInUse(knowledgeBody) {
+  if (typeof knowledgeBody !== 'string' || !knowledgeBody) return false
+  if (fillMarkers(knowledgeBody).length) return false
+  return NOT_IN_USE.test(knowledgeBody)
+}
+
 // runs must be newest first. States match the Team screen: working / attention / quiet /
-// never-run. "Quiet" is the one that matters — an agent that silently stopped is worse
-// than no agent, because you were counting on it.
-export function stateFor(runs, now = Date.now()) {
+// never-run / not-in-use. "Quiet" is the one that matters — an agent that silently stopped is
+// worse than no agent, because you were counting on it.
+export function stateFor(runs, now = Date.now(), isNotInUse = false) {
+  if (isNotInUse) return 'not-in-use'
   if (!runs.length) return 'never-run'
   const age = daysSince(runs[0].started_at, now)
   if (age !== null && age > STALE_AFTER_DAYS) return 'quiet'
