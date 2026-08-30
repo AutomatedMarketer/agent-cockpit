@@ -190,18 +190,41 @@ export function armStateFor(workflow, routines, routinesKnown = true) {
 // OFF and explained nothing - a student who typed the wrong kind of true saw a job quietly not
 // running and no reason anywhere. The template refuses all three of these; the board should at
 // least be able to say so.
+//
+// KEEP IN SYNC with scripts/lib/arm.mjs `validateArming` in the team repo. Mirrored by hand, not
+// imported - there is no import path between a student's repo and a deployed app. The shared
+// contract is tests/fixtures/arming-parity.json, the same bytes in both repos, and both sides run
+// it. Until that fixture existed this function had drifted twice with nothing to catch it.
+function textOf(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 export function armingProblems(workflow) {
   const problems = []
   const name = workflow?.name || workflow?.slug || 'a workflow'
   const armed = workflow?.armedRaw
+  const schedule = textOf(workflow?.schedule)
 
   if (armed !== undefined && typeof armed !== 'boolean') {
     problems.push(`${name}: trigger.armed must be true or false`)
   }
-  if (armed !== true && !workflow?.reason) {
+
+  // Some jobs have no clock. A webhook is fired by an inbound request; a `fire: true` job is fired
+  // by a button on this board, which is the same registered trigger URL a webhook posts to -
+  // api/fire.js posts to exactly that. Neither is ever "off" in the sense these rules mean, and
+  // neither has a schedule to declare.
+  //
+  // The board had NO exemption at all, not even the webhook one the template shipped first, and
+  // line ~258 was not even passing it the fields it would need to have one. So a student who
+  // wired Lesson 10's webhook - or Lesson 12's button - read PASS from check:arming and a red
+  // problem on this board about the same job. Two answers on one screen, which is the exact
+  // failure this file's own comments say it exists to catch.
+  const clockless = schedule === '' && (workflow?.webhook === true || workflow?.fire === true)
+
+  if (armed !== true && !clockless && !textOf(workflow?.reason)) {
     problems.push(`${name}: is not armed and carries no reason - say what would have to change for it to be worth a run`)
   }
-  if (armed === true && !workflow?.schedule) {
+  if (armed === true && !clockless && schedule === '') {
     problems.push(`${name}: is armed but declares no schedule - there is nothing for a routine to fire on`)
   }
   return problems
@@ -255,7 +278,7 @@ export function shapeWorkflows(workflowFiles, runs, known, now = Date.now(), rou
         fire: workflow.trigger?.fire === true,
         webhook: workflow.trigger?.webhook === true,
         output: typeof workflow.output === 'string' ? workflow.output : null,
-        problems: [...problems, ...armingProblems({ name, slug, schedule, reason, armedRaw: workflow.trigger?.armed })],
+        problems: [...problems, ...armingProblems({ name, slug, schedule, reason, armedRaw: workflow.trigger?.armed, fire: workflow.trigger?.fire === true, webhook: workflow.trigger?.webhook === true })],
         lastRun: last
           ? { started_at: last.started_at, status: last.status, summary: last.summary ?? '', session_url: last.session_url ?? null }
           : null,
