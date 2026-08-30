@@ -74,6 +74,10 @@ export function minutesSince(iso, now = Date.now()) {
 // the same thing: sales and customer-service usually never apply to someone who works for the
 // business rather than owning it, and the course says so on day one.
 //
+// KEEP IN SYNC with agent-team-template's scripts/lib/knowledge.mjs, which makes the same
+// judgement for check:arming and the matcher. Mirrored rather than imported because the two repos
+// deploy separately; if this regex changes, change it there in the same breath.
+//
 // The signal is the knowledge file having been ANSWERED with a refusal - no fill markers left,
 // AND a first-person negation. Both halves are needed: the shipped template quotes "I do not
 // sell" inside its own guidance paragraph, so matching the phrase alone marks every fresh clone
