@@ -604,3 +604,83 @@ test('the step chain wraps instead of being cut off mid-word', () => {
   assert.ok(!rule.includes('nowrap'), 'the chain is clipped again, and the last step is the one that names the job')
   assert.ok(!rule.includes('overflow-x'), 'the chain is behind a sideways scroll again')
 })
+
+/* Twenty-five skills in one alphabetical run, five thousand pixels of it, and the single most
+   useful distinction on the screen - a skill some job already runs for you versus one that only
+   happens if you ask - was a three-word grey label scattered through it. Somebody wanting to know
+   what they can ask for had to read all twenty-five to find the seven. "sessions only" was also
+   two undefined words carrying the whole idea. */
+
+const skill = (slug, usedBy = []) => ({ slug, path: `.claude/skills/${slug}/SKILL.md`, description: `what ${slug} does`, usedBy })
+
+test('skills are split into the ones you ask for and the ones a job already runs', () => {
+  const drawn = render({
+    ...base,
+    skills: [skill('capture-verdict'), skill('triage-inbox', ['inbox-triage']), skill('token-saver')]
+  }).get('skills').innerHTML
+
+  assert.match(drawn, /Not a step in any job &middot; 2|Not a step in any job · 2/)
+  assert.match(drawn, /Listed as a step in a job &middot; 1|Listed as a step in a job · 1/)
+  assert.ok(
+    drawn.indexOf('Not a step in any job') < drawn.indexOf('Listed as a step in a job'),
+    'the ones no job lists are the ones nobody would otherwise find, so they go first'
+  )
+  assert.ok(!drawn.includes('sessions only'), 'the undefined two-word label is still there')
+})
+
+test('a group with nothing in it does not print an empty heading', () => {
+  const allScheduled = render({
+    ...base,
+    skills: [skill('triage-inbox', ['inbox-triage']), skill('scan-market', ['morning-intel'])]
+  }).get('skills').innerHTML
+  assert.ok(!allScheduled.includes('Not a step in any job'), 'an empty group printed its heading')
+  assert.match(allScheduled, /Listed as a step in a job/)
+
+  const noneScheduled = render({ ...base, skills: [skill('capture-verdict')] }).get('skills').innerHTML
+  assert.ok(!noneScheduled.includes('Listed as a step in a job'), 'an empty group printed its heading')
+  assert.match(noneScheduled, /Not a step in any job/)
+})
+
+test('a skill a job runs still names the job', () => {
+  const drawn = render({ ...base, skills: [skill('triage-inbox', ['inbox-triage', 'gone-cold'])] }).get('skills').innerHTML
+  assert.match(drawn, /used by inbox-triage, gone-cold/)
+})
+
+/* The headings on this screen may say only what `usedBy` proves - membership of a workflow's
+   `steps:` list. Two earlier wordings claimed more and both were false against the real repo:
+
+     "A job already runs these for you" - every workflow ships armed: false, so in a fresh repo
+     nothing runs any of them. That is precisely the claim the Workflows screen was rebuilt to stop
+     making, reintroduced one screen along.
+
+     "Only happen if you ask" - run-log sits in that group because it is nobody's step, and its own
+     description says "use at the end of every agent run, scheduled or manual".
+
+   So this asserts the absence of the claim, not the presence of a heading. */
+
+test('the skills screen never claims a job is currently running anything', () => {
+  const drawn = render({
+    ...base,
+    workflows: [workflow({ slug: 'inbox-triage', name: 'Inbox Triage', owner: 'email', schedule: 'daily 06:30', arm: 'declared' })],
+    skills: [
+      skill('triage-inbox', ['inbox-triage']),
+      { slug: 'run-log', path: '.claude/skills/run-log/SKILL.md', usedBy: [], description: 'Use at the end of every agent run, scheduled or manual, before committing.' }
+    ]
+  }).get('skills').innerHTML
+
+  for (const lie of [/already runs these/i, /runs these for you/i, /only happen if you ask/i, /nothing runs these/i]) {
+    assert.ok(!lie.test(drawn), `the screen asserts something the data does not prove: ${lie}`)
+  }
+  // And it must point at the screen that DOES know whether anything rings.
+  assert.match(drawn, /the Workflows screen is the one that says which jobs ring/)
+})
+
+test('a skill nothing lists is not described as ask-only, because some run themselves', () => {
+  const drawn = render({
+    ...base,
+    skills: [{ slug: 'run-log', path: '.claude/skills/run-log/SKILL.md', usedBy: [], description: 'Use at the end of every agent run, scheduled or manual, before committing.' }]
+  }).get('skills').innerHTML
+
+  assert.match(drawn, /Some of these run themselves as part of other work/)
+  assert.match(drawn, /use at the end of every agent run/i, 'the skill\'s own description still shows')
+})

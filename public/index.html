@@ -194,6 +194,9 @@
      tall. Anything on this page that is meant to be tapped gets the thumb target. */
   a.title[data-open] { display: inline-flex; align-items: center; min-height: 2.75rem; }
 
+  h3.group { margin: 1.1rem 0 .1rem; font-size: .95rem; }
+  .group-note { margin: 0 0 .45rem; }
+
   /* Team */
   .agent { padding: .85rem .9rem; border-bottom: 1px solid var(--line); }
   .agent:last-child { border-bottom: 0; }
@@ -1577,19 +1580,50 @@ function renderSkills() {
       ${entry.verify ? `<p class="small muted" style="margin:0"><strong>Check it:</strong> ${escapeHtml(entry.verify)}</p>` : ''}
     </div>`
   }).join('')
-  const skillRows = skills.map((skill) => `
+  // Split rather than one alphabetical run of twenty-five, because the one useful distinction on
+  // this screen was a three-word grey label - "sessions only" - scattered through five thousand
+  // pixels, and two undefined words were carrying the whole idea.
+  //
+  // The headings say ONLY what `usedBy` proves, which is membership of a workflow's `steps:` list
+  // and nothing else. Two earlier wordings claimed more than that and both were false:
+  //
+  //   "A job already runs these for you" - every workflow ships `armed: false`, so in a fresh repo
+  //   nothing runs any of them. That is the exact claim the Workflows screen was hardened against
+  //   ("the schedule chip alone said 'daily 06:30' and looked exactly like a fact"), reintroduced
+  //   one screen along. Arm state lives on that screen and this one points at it instead.
+  //
+  //   "Only happen if you ask" - `run-log` is in this group because it is nobody's step, and its
+  //   own description, rendered two lines below the heading, says "use at the end of every agent
+  //   run, scheduled or manual". A heading contradicted by the text under it is worse than no
+  //   heading.
+  const skillRow = (skill) => `
     <div class="agent">
       <div class="row between">
         <a href="#" data-open="${escapeHtml(skill.path)}" class="title">${escapeHtml(skill.slug)}</a>
-        <span class="small muted">${skill.usedBy.length ? `used by ${skill.usedBy.map(escapeHtml).join(', ')}` : 'sessions only'}</span>
+        ${skill.usedBy.length ? `<span class="small muted">used by ${skill.usedBy.map(escapeHtml).join(', ')}</span>` : ''}
       </div>
       <p class="small" style="margin:.3rem 0 0">${escapeHtml(skill.description)}</p>
-    </div>`).join('')
+    </div>`
+  const onAsk = skills.filter((skill) => !skill.usedBy.length)
+  const onSchedule = skills.filter((skill) => skill.usedBy.length)
+  const skillGroup = (heading, note, list) => list.length
+    ? `<h3 class="group">${heading} &middot; ${list.length}</h3>
+       <p class="small muted group-note">${note}</p>
+       <div class="panel">${list.map(skillRow).join('')}</div>`
+    : ''
   el('skills').innerHTML = `
     <h2>Starter stack &middot; ${stack.length}</h2>
     ${stack.length ? `<div class="panel">${stackCards}</div>` : '<div class="panel empty">No <code>stack.yml</code> in this repo yet. Run <code>/install-stack</code> and it appears here.</div>'}
     <h2>This team's skills &middot; ${skills.length}</h2>
-    ${skills.length ? `<div class="panel">${skillRows}</div>` : `<div class="panel empty"><b>No skills yet.</b>
+    ${skills.length ? skillGroup(
+        'Not a step in any job',
+        'Some of these run themselves as part of other work; the rest only happen when you ask for them. Each one says which, in its own line below.',
+        onAsk
+      ) + skillGroup(
+        'Listed as a step in a job',
+        'Whether that job actually runs is a separate question - the Workflows screen is the one that says which jobs ring.',
+        onSchedule
+      ) : `<div class="panel empty"><b>No skills yet.</b>
       <span class="small">Skills are the single tasks your jobs are built from. Run <code>/onboard</code>
       to get the starter set, or ask your team for one in plain words &mdash; you never write the file
       yourself.</span></div>`}`
