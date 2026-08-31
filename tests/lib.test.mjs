@@ -256,6 +256,14 @@ const QUOTABLE = {
   'after a label and a dash on the same line': 'Quick answer - ' + REFUSAL,
   'after an aside opening with a plus': '+1 on this: ' + REFUSAL,
   'after a few words of prose on the same line': 'As I said, ' + REFUSAL,
+  // A lead-in whose punctuation touches the refusal with NO space. An earlier rule walked back
+  // over any mark touching it, so "(Quick answer)I do not sell..." was shown as
+  // ")I do not sell - Ray handles it." - an orphaned bracket opening a quote, with nothing on
+  // screen it could have belonged to. Only a wrapper that actually closes comes along now.
+  'after a label and a colon with no space': 'Quick answer:' + REFUSAL,
+  'after a label and a dash with no space': 'Quick answer-' + REFUSAL,
+  'after a bracketed label with no space': '(Quick answer)' + REFUSAL,
+  'after an opening mark that never closes': '*' + REFUSAL,
   'as a nested bullet under a lead-in': '- Reasons\n  - ' + REFUSAL,
   'as a bullet under a lead-in inside a quote': '> Notes\n> - ' + REFUSAL,
   'below a fenced example': '```\nexample: I do not sell.\n```\n\n' + REFUSAL,
@@ -290,7 +298,7 @@ const VERBATIM = {
   'italicised by the owner': '*I do not sell* - Ray handles it.',
   'bolded by the owner': '**I do not sell** - Ray handles it.',
   'in quotation marks': '"I do not sell" - Ray handles it.',
-  'opening with a dash and no space': '-I do not sell- is the short version, Ray handles it.'
+  'in single quotes': "'I do not sell' - Ray handles it."
 }
 
 for (const [shape, body] of Object.entries(QUOTABLE)) {
@@ -358,4 +366,31 @@ test('a refusal broken mid-phrase by a quote marker is missed, and misses safely
   const body = '# FAQ\n\n> I do not\n> sell - Ray handles it.\n'
   assert.equal(notInUse(body), false, 'if this ever starts detecting, the note above is out of date')
   assert.equal(notInUseBecause(body), null, 'nothing may be quoted when nothing was detected')
+})
+
+/* TWO SHAPES THAT ARE NOT DETECTED AT ALL, recorded as decisions rather than left to be found.
+
+   Both are notInUse's doing, not the extractor's. notInUse is the judgement mirrored in
+   agent-team-template and pinned by knowledge-parity.json, so changing it means changing a
+   contract on both sides at once - and neither of these is worth that.
+
+   Both fail SAFE: the agent reads "never run" instead of "not in use". Wrong, but the honest kind
+   of wrong. Nothing is invented and nobody is quoted. */
+
+test('a refusal broken mid-phrase by a quote marker is missed, and misses safely', () => {
+  // "I do not" / "> sell" - the gap holds a marker as well as a newline, and the pattern allows
+  // only whitespace between the words.
+  const body = '# FAQ\n\n> I do not\n> sell - Ray handles it.\n'
+  assert.equal(notInUse(body), false, 'if this starts detecting, the note above is out of date')
+  assert.equal(notInUseBecause(body), null, 'nothing may be quoted when nothing was detected')
+})
+
+test('a refusal opening with underscore emphasis is missed, and misses safely', () => {
+  // `_I do not sell_` - an underscore is a WORD character, so there is no word boundary between it
+  // and the "I" the pattern needs to anchor on. An asterisk is not a word character, which is why
+  // *I do not sell* is detected and this is not. Nothing in the shipped guidance writes it this
+  // way, and the fix would be a two-repo contract change.
+  const body = '# FAQ\n\n_I do not sell_ - Ray handles it.\n'
+  assert.equal(notInUse(body), false, 'if this starts detecting, the note above is out of date')
+  assert.equal(notInUseBecause(body), null)
 })

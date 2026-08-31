@@ -269,13 +269,23 @@ export function notInUseBecause(knowledgeBody) {
     // not a guess about what a colon means: NOT_IN_USE already matches at "I" or "We", which is
     // the start of the clause, so the clause is the quote.
     //
-    // Punctuation touching that clause with no space between comes along, or "*I do not sell*"
-    // would lose its opening mark and be shown as "I do not sell*" - the corruption fixed in an
-    // earlier round, reintroduced from the other end.
+    // A mark touching that clause comes along ONLY if it is a wrapper that actually closes later
+    // in the sentence. Without this, "*I do not sell*" loses its opening mark and is shown as
+    // "I do not sell*". With "any punctuation touching it", the tail of a lead-in written without
+    // a space comes along instead, and "(Quick answer)I do not sell..." was displayed as
+    // ")I do not sell - Ray handles it." - an orphaned bracket opening a quote, with nothing it
+    // could have belonged to anywhere on screen.
+    //
+    // The set is the marks that genuinely wrap text. A dash is not one of them, whatever it looks
+    // like: markdown emphasis is `*` and `_`, and a dash is the commonest separator there is -
+    // the shipped refusal itself reads "I do not sell - I work for this business".
+    const WRAPPERS = new Set(['*', '_', '`', '"', "'"])
     const sentence = sentences[at]
     const found = NOT_IN_USE.exec(sentence)
     let from = found ? found.index : 0
-    while (from > 0 && /[^\s\w]/.test(sentence[from - 1])) from -= 1
+    while (from > 0 && WRAPPERS.has(sentence[from - 1]) && sentence.includes(sentence[from - 1], found.index)) {
+      from -= 1
+    }
     const taken = [sentence.slice(from)]
 
     // Reach forward only while the sentence is unfinished, and only as far as it needs: a
