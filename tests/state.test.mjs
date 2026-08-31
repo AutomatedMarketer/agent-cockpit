@@ -2,7 +2,7 @@
 // a network, a token, or a live account.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import handler from '../api/state.js'
+import handler, { isTaskCard } from '../api/state.js'
 
 // This suite covers the endpoint's data logic, not the view gate - that has its own
 // suite in gate.test.mjs. Opting out here keeps every case from carrying a key header.
@@ -34,6 +34,7 @@ const TREE = {
     { type: 'blob', path: 'skills/pull-calendar/SKILL.md' },
     { type: 'blob', path: 'skills/write-brief/SKILL.md' },
     { type: 'blob', path: 'skills/scan-inbox/SKILL.md' },
+    { type: 'blob', path: 'tasks/README.md' },
     { type: 'blob', path: 'tasks/2026-08-19-draft-post.md' },
     { type: 'blob', path: 'tasks/2026-08-18-call-supplier.md' },
     { type: 'blob', path: 'runtimes.yml' },
@@ -94,6 +95,10 @@ const FILES = {
   'tasks/2026-08-19-draft-post.md':
     '---\nstatus: doing\nfor: email\n---\n\n# Draft the launch post\n\nHalf-written.\n',
   'tasks/2026-08-18-call-supplier.md': '# Call the supplier\n\nNo frontmatter on purpose.\n',
+  // The folder's own README, which the template ships in every repo. It is not a to-do, and it
+  // must never reach the board - it did, as a card titled "tasks/ - your to-do column", counted
+  // in the To-do badge, in every repo ever created from the template.
+  'tasks/README.md': '# tasks/ - your to-do column\n\nDrop a card here and the team picks it up.\n',
   'runtimes.yml':
     'runtimes:\n  - name: Hermes\n    kind: agent-runtime\n    url: http://hermes.tail.ts.net:8080\n    heartbeat: runs/heartbeat/hermes.json\n  - name: OpenClaw\n    kind: gateway\n    url: http://openclaw.tail.ts.net:3000\n    heartbeat: runs/heartbeat/openclaw.json\n',
   'connections/register.yml':
@@ -349,7 +354,7 @@ test('the board ships in the payload with its four columns filled from the repo'
   assert.deepEqual(body.board.todo, [
     { slug: '2026-08-18-call-supplier', title: 'Call the supplier', for: null, doing: false },
     { slug: '2026-08-19-draft-post', title: 'Draft the launch post', for: 'email', doing: true }
-  ])
+  ], 'tasks/README.md is in this fixture on purpose and must not appear here as a card')
   // Up Next: the two-hour sweep is always inside the 48-hour window; the weekly brief
   // only lands here on the right days, so the sweep is the one deterministic member.
   const sweep = body.board.upNext.find((card) => card.slug === 'hourly-sweep')
@@ -483,4 +488,41 @@ test('two workflow files sharing a name are reported as a problem', async () => 
     body.routines.problems.some((problem) => /workflow files share the name/.test(problem)),
     `expected a duplicate-workflow problem, got ${JSON.stringify(body.routines.problems)}`
   )
+})
+
+/* The board listed `tasks/README.md` as a to-do card. It is the file that explains the folder, it
+   ships in the template, and its first heading is "tasks/ — your to-do column" - so every repo
+   created from the template had a phantom task on its board from the moment it existed, and the
+   To-do count was one too high forever.
+
+   The team's own side already got this right: work-the-tasks/SKILL.md says "Read every .md file in
+   tasks/ (skip README.md)". The sweep ignored it, the board did not, and the two disagreed about
+   the same folder - which is the shape of most of what has been found on this board. */
+
+test('the folder README is not somebody\'s to-do', () => {
+  assert.equal(isTaskCard('tasks/README.md'), false, 'the template ships this in every repo')
+  assert.equal(isTaskCard('tasks/readme.md'), false, 'case should not decide it')
+  assert.equal(isTaskCard('tasks/2026-08-20-chase-acme-invoice.md'), true, 'a real card was dropped')
+})
+
+test('only markdown directly inside tasks/ is a card', () => {
+  for (const path of [
+    'tasks/2026-08-20-a-card.md',
+    'tasks/no-date-prefix.md',
+    'tasks/README-of-something-else.md'
+  ]) {
+    assert.equal(isTaskCard(path), true, `${path} should be a card`)
+  }
+  for (const path of [
+    'tasks/README.md',
+    'tasks/.gitkeep',
+    'tasks/notes.txt',
+    'tasks/archive/2026-08-20-old.md',
+    'runs/2026-08/a.md',
+    'README.md',
+    '',
+    null
+  ]) {
+    assert.equal(isTaskCard(path), false, `${path} should not be a card`)
+  }
 })

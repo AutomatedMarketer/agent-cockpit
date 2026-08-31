@@ -761,6 +761,15 @@ export function shapeBoard(workflows, runs, tasks = [], now = Date.now()) {
   return { todo, upNext, running, done }
 }
 
+// Which files in tasks/ are somebody's cards. Exported so the suite can hit it directly rather
+// than reasoning about a regex inside the handler. Kept deliberately narrow: only the folder's own
+// README is excluded, because a card a student names oddly is still their card and dropping it
+// silently would be worse than showing it.
+export function isTaskCard(path) {
+  const match = /^tasks\/([^/]+)\.md$/.exec(String(path ?? ''))
+  return match !== null && match[1].toLowerCase() !== 'readme'
+}
+
 export function shapeGoneQuiet(agents, workflows) {
   const quiet = []
   for (const agent of agents) {
@@ -803,7 +812,15 @@ export default async function handler(request, response) {
     const agentPaths = paths.filter((path) => path.startsWith(`${AGENT_DIR}/`) && path.endsWith('.md'))
     const runPaths = paths.filter((path) => /^runs\/\d{4}-\d{2}\/.+\.json$/.test(path))
     const workflowPaths = paths.filter((path) => /^workflows\/[^/]+\.ya?ml$/.test(path))
-    const taskPaths = paths.filter((path) => /^tasks\/[^/]+\.md$/.test(path))
+    // `tasks/README.md` explains the folder; it is not somebody's to-do. It matched this filter,
+    // so it arrived on the board as a card titled "tasks/ — your to-do column", counted in the
+    // To-do badge, and it ships in the template - meaning every repo had one phantom task from the
+    // moment it was created, and the count was wrong by one forever.
+    //
+    // The team's own side already gets this right: work-the-tasks/SKILL.md says "Read every .md
+    // file in tasks/ (skip README.md)". So the sweep ignored it and the board did not, and they
+    // disagreed about the same folder.
+    const taskPaths = paths.filter((path) => isTaskCard(path))
     // One file per verdict the owner gave. Counted, never read: the Improvement rung only
     // needs to know somebody closed the loop, and the contents are the owner's own words.
     const verdictPaths = paths.filter((path) => /^quality\/verdicts\/.+\.md$/.test(path))
@@ -949,6 +966,10 @@ export default async function handler(request, response) {
     const hero = shapeHero(tiles, ledger)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, connections, verdicts: verdictPaths.length, onboarding, now })
 
+    // A CDN cache in front of a board that reads GitHub. `generatedAt` below is stamped from the
+    // `now` captured at the top of this handler, so it is baked into the body BEFORE the cache
+    // sees it: somebody served a stale copy reads a truthful "N min ago" rather than a fresh-
+    // looking timestamp on old data. The staleness is disclosed, which is what makes it fine.
     response.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
     response.status(200).json({
       repo: { owner, repo, branch, url: `https://github.com/${owner}/${repo}` },
