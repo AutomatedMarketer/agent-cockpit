@@ -749,7 +749,7 @@ test('every top-level folder in the repo gets its own filter chip', () => {
   for (const label of ['all', '(root)', 'runs', 'shared']) {
     assert.ok(nodes.includes(`>${label}</span>`), `no filter chip for ${label}`)
   }
-  assert.match(nodes, /Search 4 pages/)
+  assert.match(nodes, /Search 4 page names/)
 })
 
 /* ---------- Connections ------------------------------------------------------------------------
@@ -1273,3 +1273,49 @@ test('a skills payload with no stalled field at all still renders', () => {
   assert.ok(drawn.includes('sync'), 'the screen failed to draw at all')
   assert.ok(!drawn.includes('cannot run as written'))
 })
+
+/* WHAT THE MEMORY SEARCH ACTUALLY SEARCHES.
+
+   The box matches file.path and nothing else. Searching for a word that IS written in the vault -
+   a client's name, a phrase somebody remembers typing - answered "No pages match." The page is
+   there; its NAME does not contain the word, and nothing on screen said that was the difference.
+
+   Not made true, said. The payload carries the list of pages and their sizes, never their contents,
+   and a page is fetched only when it is opened - searching inside them would be fifty-odd fetches
+   per keystroke. So the box has to describe itself, in the moment the difference matters. */
+
+const memoryPayload = {
+  ...base,
+  memory: {
+    files: [
+      { path: 'shared/business-brain.md', size: 2348 },
+      { path: 'shared/about-me.md', size: 805 },
+      { path: 'runs/2026-08-30-research.md', size: 1200 }
+    ],
+    indexes: [],
+    truncated: false
+  }
+}
+
+test('the search box says it searches names, before anybody types', () => {
+  const drawn = render(memoryPayload).get('memory').innerHTML
+  assert.match(drawn, /Search 3 page names/, 'the box promises to search pages, and searches names')
+})
+
+test('an empty vault still says something plain, with no search term to quote', () => {
+  const empty = render({ ...memoryPayload, memory: { files: [], indexes: [], truncated: false } })
+    .get('memory').innerHTML
+  assert.match(empty, /No pages match\./)
+  assert.ok(!empty.includes('page NAME contains'), 'it quoted a search term nobody typed')
+})
+
+/* The behaviour itself - typing a word and being told the difference - is NOT tested here, and
+   saying so is the point. This harness's DOM shim has addEventListener as a no-op, so the page's
+   own input handler never runs and `memoryQuery` can never be anything but empty. A test that
+   pretended otherwise would be asserting around the thing it claims to check, which is a habit that
+   has already put two inert tests into this repo.
+
+   What holds it instead: the source assertion in tests/screens.test.mjs that both branches exist and
+   differ, and a real browser at 390px, where searching "roofing" - a word written inside
+   shared/business-brain.md and in no file name - now returns the sentence naming the difference
+   rather than "No pages match." */

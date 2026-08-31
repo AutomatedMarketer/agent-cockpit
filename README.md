@@ -28,7 +28,7 @@ window, not the engine.
 | **Team** | Every agent: model, last run, and whether it is working, quiet or never run |
 | **Workflows** | Every job, and whether it is **armed, declared, unapproved or off** |
 | **Skills** | What this team can actually do, and which jobs use each skill |
-| **Memory** | Your vault, browsable and searchable |
+| **Memory** | Your vault, browsable and searchable **by page name** |
 | **Connections** | Every runtime in `runtimes.yml` — alive or silent, from its own heartbeat |
 
 ---
@@ -114,7 +114,7 @@ Locally:
 npm test
 ```
 
-462 tests, no dependencies to install. They cover the data logic, the fire endpoint's auth, and —
+465 tests, no dependencies to install. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output.
 

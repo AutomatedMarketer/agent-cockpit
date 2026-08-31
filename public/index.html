@@ -1232,7 +1232,23 @@ function memoryTreeHtml() {
     if (memoryQuery && !file.path.toLowerCase().includes(memoryQuery)) return false
     return true
   })
-  if (!files.length) return `<div class="panel empty">No pages match.</div>`
+  if (!files.length) {
+    // "No pages match" was a false statement, and quietly so. This box matches file.path and
+    // nothing else, so searching for a word that IS written in the vault - a client's name, a
+    // phrase somebody remembers typing - answered "No pages match." The page is there. Its NAME
+    // just does not contain the word, and nothing on screen said that was the difference.
+    //
+    // Said here rather than made true: the payload carries the list of pages and their sizes, not
+    // their contents, and a page is fetched only when it is opened. Searching inside them would be
+    // fifty-odd fetches on every keystroke. So the honest fix is for the box to describe what it
+    // does, in the moment the difference matters.
+    return memoryQuery
+      ? `<div class="panel empty"><b>No page NAME contains &ldquo;${escapeHtml(memoryQuery)}&rdquo;.</b>
+         <span class="small">This searches page names, not the words written inside them &mdash; the
+         board holds the list of your pages and only opens one when you ask for it. If you know
+         roughly where it lives, use the folder buttons above instead.</span></div>`
+      : `<div class="panel empty">No pages match.</div>`
+  }
   const folders = new Map()
   for (const file of files) {
     const top = file.path.includes('/') ? file.path.slice(0, file.path.indexOf('/')) : '(root)'
@@ -1261,7 +1277,7 @@ function renderMemory() {
     `<span class="chip ${memorySource === top ? 'on' : ''}" data-source="${escapeHtml(top)}">${escapeHtml(top || 'all')}</span>`
   ).join('')
   el('memory').innerHTML = `
-    <input type="search" id="memory-search" placeholder="Search ${data.memory.files.length} pages&hellip;" value="${escapeHtml(memoryQuery)}" />
+    <input type="search" id="memory-search" placeholder="Search ${data.memory.files.length} page names&hellip;" value="${escapeHtml(memoryQuery)}" />
     <div class="filters" id="memory-filters">${chips}</div>
     <div id="memory-tree">${memoryTreeHtml()}</div>
     ${data.memory.truncated ? '<p class="small muted">Showing the first pages only — this vault is very large.</p>' : ''}`

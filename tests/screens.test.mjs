@@ -145,3 +145,28 @@ test('every class this page uses to mark a warning actually colours it', () => {
     'nothing gives a bare .bad element its colour, so every warning renders as ordinary text'
   )
 })
+
+test('the memory search tells the difference between no such name and no such page', () => {
+  // The box matches file.path and nothing else, and answered "No pages match." for a word that was
+  // written in the vault - a false statement about somebody's own notes. The render harness cannot
+  // drive the input (its DOM shim ignores listeners), so this asserts the two branches exist and
+  // differ at source; the behaviour was checked in a browser.
+  assert.match(page, /page NAME contains/, 'the empty state does not distinguish a missing NAME')
+  assert.match(page, /searches page names, not the words written inside them/)
+  assert.match(page, /Search \$\{data\.memory\.files\.length\} page names/, 'the box still promises to search pages')
+
+  // Both branches, not one replacing the other: an empty vault has no search term to quote back.
+  assert.match(page, /No pages match\./, 'the plain empty state is gone')
+  const emptyBranch = page.slice(
+    page.indexOf('function memoryTreeHtml'),
+    page.indexOf('const folders = new Map()')
+  )
+  assert.ok(
+    emptyBranch.includes('return memoryQuery'),
+    'the empty state no longer branches on whether anything was typed'
+  )
+  assert.ok(
+    emptyBranch.includes('No pages match.') && emptyBranch.includes('page NAME contains'),
+    'both empty states must live in this branch, or one of the two cases lost its wording'
+  )
+})
