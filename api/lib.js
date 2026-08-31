@@ -250,6 +250,59 @@ function proseBlocks(knowledgeBody) {
 // So this finds the line the refusal BEGINS on, takes the sentence from there, and only reaches
 // forward for more when that sentence has not ended. Nothing before it can be dragged in, because
 // nothing before it is ever looked at.
+// Where does the sentence end? This is the whole difficulty of quoting somebody accurately, and it
+// gets its own function because getting it wrong is what put words in an owner's mouth four
+// separate times during review.
+//
+// A full stop is not always the end of a sentence. It is also an abbreviation, a decimal point, and
+// part of every email address and filename ever written. "sell. Ray handles it" and "sell - Dr. Ray
+// handles it" are the same five characters. Telling those apart in general needs a list of every
+// abbreviation in English, and a list like that is wrong the first time somebody writes "Ste.".
+//
+// So this does not try to be right. It tries to be sure, and says so when it is not. Only the FIRST
+// stop is examined: if that one is not certainly the end, there is no quote at all, because
+// stepping over it to find a later one is how you end up quoting two sentences as though they were
+// one. Three things all have to hold:
+//
+// `whole` says whether this text is everything there is, or only as much of it as has been read so
+// far. It matters: when nothing follows the stop but closing marks, that is the end of a sentence
+// only if it is also the end of the text. Mid-read, "I do not sell - Dr." at a line break looks
+// exactly as finished as "I do not sell - Ray handles it." does, and it is not.
+//
+// When nothing follows a stop in the whole text, it is the end and there is nothing to weigh -
+// there is no next sentence for it to belong to. When something DOES follow, all three must hold:
+//
+//   what follows      a space, then a new sentence opening on a capital. Kills "handles it.He is
+//                     at ray@example.com" (a missing space after a stop, the commonest typo there
+//                     is, which put a stranger's email inside the quote), "handles it.</p>",
+//                     "ray@example.com instead." and "call Ray on ext. 204" - a digit does not
+//                     open a sentence.
+//   how long the word is
+//                     one letter is an initial, not a word. Kills "e.g." and "5 p.m.".
+//   how it is spelt   a word with a capital in it, mid-paragraph, is a name or an abbreviation
+//                     rather than the end of a sentence. Kills "Dr.", "Mr.", "Mrs." and "St.".
+//
+// The last one also refuses a sentence that genuinely ends on a name and is followed by another
+// sentence - "that is handled by Ray. He is upstairs." - so that shape gets no quote. That is the
+// trade, made deliberately: the agent still reads as switched off, the student opens the file to
+// see why, which is where they were before this existed. A quote nobody wrote is worse than none.
+//
+// Returns null if there is no stop at all (nothing to be unsure about), { ok: false } if the first
+// stop is not certainly an end, and { ok: true, at } with the index of the last character to keep.
+function firstEnd(text, whole) {
+  for (const hit of String(text).matchAll(/[.!?]/g)) {
+    const tail = text.slice(hit.index + 1)
+    const closing = tail.match(/^[)\]"'*_`]*/)[0]
+    const after = tail.slice(closing.length)
+    const end = { ok: true, at: hit.index + closing.length }
+    if (!after) return whole ? end : { ok: false }
+    if (!/^\s+["'(\[]*[A-Z]/.test(after)) return { ok: false }
+    const word = text.slice(0, hit.index).split(/\s/).pop()
+    return word.length > 1 && word === word.toLowerCase() ? end : { ok: false }
+  }
+  return null
+}
+
 export function notInUseBecause(knowledgeBody) {
   if (!notInUse(knowledgeBody)) return null
 
@@ -257,17 +310,13 @@ export function notInUseBecause(knowledgeBody) {
     const start = block.findIndex((line) => NOT_IN_USE.test(line))
     if (start === -1) continue
 
-    // The refusal may sit mid-line, after other sentences on the same line.
-    const sentences = block[start].split(/(?<=[.!?])\s+/)
-    const at = sentences.findIndex((sentence) => NOT_IN_USE.test(sentence))
-    // Only the matching sentence, not the rest of its line: a paragraph written on one line can
-    // carry the refusal in the middle of it, and what follows is a different sentence.
+    // Where the quote STARTS is not in doubt: NOT_IN_USE matches at "I" or "We", which is the start
+    // of the clause, so the clause is the quote. That handles a label sharing the line - "Quick
+    // answer: I do not sell - Ray handles it." - and a whole earlier sentence sharing it, without
+    // guessing what a colon or a dash means. Nothing before the match is ever looked at.
     //
-    // And within that sentence, the quote starts where the REFUSAL starts, not where the sentence
-    // does. A label can share the line - "Quick answer: I do not sell - Ray handles it." - and
-    // sentence-splitting cannot see it, because a colon and a dash are not sentence ends. This is
-    // not a guess about what a colon means: NOT_IN_USE already matches at "I" or "We", which is
-    // the start of the clause, so the clause is the quote.
+    // Where it ENDS is the hard half, and there is no splitting on full stops here any more. See
+    // the gate at the bottom for why.
     //
     // A mark touching that clause comes along ONLY if it is a wrapper that actually closes later
     // in the sentence. Without this, "*I do not sell*" loses its opening mark and is shown as
@@ -279,61 +328,48 @@ export function notInUseBecause(knowledgeBody) {
     // The set is the marks that genuinely wrap text. A dash is not one of them, whatever it looks
     // like: markdown emphasis is `*` and `_`, and a dash is the commonest separator there is -
     // the shipped refusal itself reads "I do not sell - I work for this business".
-    // A mark only comes along if it opens something. Two things have to be true. It must not be
-    // glued to a word - in "Note*I do not sell", that asterisk belongs to "Note", and carrying it
-    // put an unrelated word's punctuation inside the quote. And there must still be one of it left
-    // later in the sentence to close it, counted rather than merely looked for: "***I do not
-    // sell**" is three marks where only two close, and blind walking took all three.
+    // A mark only comes along if it opens something, and each one is judged on its own rather than
+    // the whole run at once. It must not be glued to a word - in "Note*I do not sell", that
+    // asterisk belongs to "Note". And there must still be one of it left later to close it,
+    // counted rather than merely looked for: "***I do not sell**" is three marks where only two
+    // close, and blind walking took all three. Judging them one at a time matters: in
+    // "word*'I do not sell'", the asterisk is glued and the quote mark is not, and disqualifying
+    // the run together threw away a mark that genuinely closes.
     const WRAPPERS = new Set(['*', '_', '`', '"', "'"])
-    const sentence = sentences[at]
-    const found = NOT_IN_USE.exec(sentence)
+    const line = block[start]
+    const found = NOT_IN_USE.exec(line)
     const opens = found ? found.index : 0
+    const rest = line.slice(opens)
+    const carried = []
     let from = opens
-    let runStart = opens
-    while (runStart > 0 && WRAPPERS.has(sentence[runStart - 1])) runStart -= 1
-    if (runStart === 0 || !/\w/.test(sentence[runStart - 1])) {
-      const rest = sentence.slice(opens)
-      const carried = []
-      for (let i = opens - 1; i >= runStart; i -= 1) {
-        const mark = sentence[i]
-        const closes = rest.split(mark).length - 1
-        if (carried.filter((seen) => seen === mark).length >= closes) break
-        carried.push(mark)
-        from = i
-      }
+    for (let i = opens - 1; i >= 0; i -= 1) {
+      const mark = line[i]
+      if (!WRAPPERS.has(mark)) break
+      if (i > 0 && /\w/.test(line[i - 1])) break
+      const closes = rest.split(mark).length - 1
+      if (carried.filter((seen) => seen === mark).length >= closes) break
+      carried.push(mark)
+      from = i
     }
-    const taken = [sentence.slice(from)]
+    const taken = [line.slice(from)]
 
-    // Reach forward only while the sentence is unfinished, and only as far as it needs: a
-    // continuation line can carry the end of this sentence AND the start of the next one, and the
-    // next one is not part of the quote.
-    const finished = (text) => /[.!?]["')\]]?$/.test(text.trim())
-    for (let i = start + 1; i < block.length && !finished(taken.at(-1)); i += 1) {
-      taken.push(block[i].split(/(?<=[.!?])\s+/)[0])
+    // Reach forward while nothing has ended the sentence yet - a refusal can be wrapped across
+    // lines. Whole lines, not first-sentences-of-lines: cutting a continuation line at a full stop
+    // is the same mistake as cutting the first one, and firstEnd is what decides either way.
+    // Keep pulling while the sentence has not certainly ended - including while the stop we can see
+    // is an uncertain one. "I do not sell - Dr." at a line end looks finished and is not; the line
+    // after it is what shows that, and refusing on the whole thing beats quoting the fragment.
+    const assembled = () => taken.join(' ').replace(/\s+/g, ' ').trim()
+    for (let i = start + 1; i < block.length && !firstEnd(assembled(), false)?.ok; i += 1) {
+      taken.push(block[i])
     }
     const quote = taken.join(' ').replace(/\s+/g, ' ').trim()
     if (!quote) return null
 
-    // Last gate, and the one that matters most. Everything above splits sentences on a full stop,
-    // and a full stop is not always the end of a sentence. It is also an abbreviation, a decimal
-    // point, and part of every email address and filename ever written. Nothing in the character
-    // itself says which, so where the stops are ambiguous we say nothing at all.
-    //
-    // What that saves us from, all of it real and reproducible before this gate existed:
-    //   "...Ray handles it.He is at ray@example.com"   a missing space after a full stop - the
-    //                                                  commonest typo there is - put a stranger's
-    //                                                  email on the Team screen inside the quote
-    //   "<p>I do not sell - Ray handles it.</p>"       the closing tag came along
-    //   "I do not sell, e.g. tickets, Ray does"        cut at the abbreviation, and displayed the
-    //                                                  fragment "I do not sell, e.g." as a quote
-    //
-    // So: the first stop must also be the last thing in the quote, give or take the marks that
-    // close it. Anything else and there is no quote. The agent still reads as switched off - the
-    // student just has to open the file to see why, which is where they were before this existed.
-    // A quote nobody wrote is worse than no quote.
-    const stop = quote.search(/[.!?]/)
-    if (stop === -1) return quote // no stop at all, so nothing to be ambiguous about
-    return /^[.!?][)\]"'*_`]*$/.test(quote.slice(stop)) ? quote : null
+    // firstEnd carries the whole reasoning; see it for why a full stop is not a sentence end.
+    const end = firstEnd(quote, true)
+    if (end === null) return quote // no stop anywhere, so nothing to be unsure about
+    return end.ok ? quote.slice(0, end.at + 1) : null
   }
   return null
 }

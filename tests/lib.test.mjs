@@ -292,7 +292,25 @@ const MUST_REFUSE = {
     'I do not sell - Ray handles it.He is at ray@example.com or call the office.',
   'wrapped in inline HTML': '<p>I do not sell - Ray handles it.</p>',
   'carrying an abbreviation': 'I do not sell, e.g. tickets or merchandise, Ray does that.',
-  'carrying an email address': 'I do not sell - write to ray@example.com instead.'
+  'carrying an email address': 'I do not sell - write to ray@example.com instead.',
+
+  // These four are the same failure again, and they slipped past a first version of the gate that
+  // ran AFTER the sentence-splitting instead of replacing it. "e.g." was caught only because it
+  // happens to carry a SECOND full stop; a one-stop abbreviation leaves a fragment that looks
+  // exactly like a finished sentence, so "I do not sell - Dr." was displayed as the whole reason.
+  // These are commoner in ordinary business writing than "e.g." is.
+  'carrying a title': 'I do not sell - Dr. Ray handles enquiries.',
+  'carrying another title': 'I do not sell - Mrs. Ray handles enquiries.',
+  'carrying a street abbreviation': 'I do not sell - visit the shop on Main St. for that.',
+  'carrying a phone extension': 'I do not sell - call Ray on ext. 204 for that.',
+  'carrying a time of day': 'I do not sell after 5 p.m. - Ray covers evenings.',
+  // And the same thing with a line break where the space was. Mid-read, this looks as finished as
+  // a real sentence does - which is why the check has to know whether it is seeing all the text.
+  'carrying a title split across two lines': 'I do not sell - Dr.\nRay handles enquiries.',
+  // A single letter before a stop is an initial or a lettered item, not the end of a sentence. This
+  // one is the reason the length check exists; without this row the rule was decorative - dropping
+  // it broke no test, which is not the same as it being safe to drop.
+  'carrying a lettered clause': 'I do not sell - see clause b. Ray signs those.'
 }
 
 // Marks the owner put ON the refusal itself, which must survive byte for byte. A `*` or `-` with
@@ -313,6 +331,26 @@ const VERBATIM = {
 
 // The other half of that rule: a mark only comes along if it OPENS something. Both of these were
 // found by review, and both had the mark carried in when it should not have been.
+test('an abbreviation at the very end of the text is kept, because nothing follows it', () => {
+  // The mirror of the rows above. There, the stop was mid-paragraph and could not be trusted. Here
+  // there is no next sentence for it to belong to, so there is nothing to be unsure about and the
+  // owner's words come back whole. Refusing this too would be caution with nothing behind it.
+  assert.equal(
+    notInUseBecause('# FAQ\n\nI do not sell - ask at Main St.\n'),
+    'I do not sell - ask at Main St.'
+  )
+})
+
+test('the sentence after the refusal is left behind, not dragged in', () => {
+  // The reason this is not solved by "refuse whenever anything follows": a refusal in the middle of
+  // a paragraph is an ordinary way to write, and the pinned rows above cover it. What makes the cut
+  // safe here is the word "it" - lowercase, more than one letter, followed by a capital.
+  assert.equal(
+    notInUseBecause('# FAQ\n\nI do not sell - Ray handles it. He is at ray@example.com.\n'),
+    'I do not sell - Ray handles it.'
+  )
+})
+
 test('a mark glued to the word before it belongs to that word, not to the refusal', () => {
   // The asterisk is part of "Note", not emphasis around the refusal. Carrying it printed an
   // unrelated word's punctuation as the first character of somebody's quote.
