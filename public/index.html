@@ -216,8 +216,21 @@
     width: 100%; font: inherit; color: var(--ink); background: var(--panel);
     border: 1px solid var(--line); border-radius: var(--radius); padding: .65rem .8rem;
   }
-  .filters { display: flex; gap: .4rem; overflow-x: auto; padding: .6rem 0; -webkit-overflow-scrolling: touch; }
-  .filters .chip { cursor: pointer; border: 1px solid transparent; }
+  /* Wraps rather than scrolling sideways. At 390px this row is 804px of chips in 358px, so SEVEN
+     of the twelve filters sat off-screen - including `shared`, which holds the business brain and
+     18 of this repo's 59 pages. Worse than the step chain on the Workflows screen, which at least
+     stopped mid-word: a chip boundary happens to land near the edge, so the row looks finished. A
+     horizontal scroller inside a page that scrolls down is missed by a thumb either way. */
+  .filters { display: flex; flex-wrap: wrap; gap: .4rem; padding: .6rem 0; }
+  /* A folder name too wide for one row has to break INSIDE the chip. The base .chip rule sets
+     `white-space: nowrap`, and a flex item does not shrink below its content, so without this a
+     single long folder name pushed straight out of the row - and since the wrap fix above removed
+     `overflow-x: auto`, that overflow was no longer contained and the WHOLE PAGE gained a sideways
+     scrollbar. The old scrolling version was locally bad; losing this made it globally bad.
+     Measured: a 69-character folder name took the document to 490px against a 390px viewport.
+     This is the same safeguard the step chain on the Workflows screen already uses, which is the
+     precedent the wrap fix cites - it was cited without being copied. */
+  .filters .chip { cursor: pointer; border: 1px solid transparent; white-space: normal; overflow-wrap: anywhere; }
   .filters .chip.on { border-color: var(--accent); color: var(--accent); }
   details.folder { border-bottom: 1px solid var(--line); }
   details.folder:last-child { border-bottom: 0; }

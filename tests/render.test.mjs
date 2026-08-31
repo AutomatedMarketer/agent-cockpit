@@ -684,3 +684,66 @@ test('a skill nothing lists is not described as ask-only, because some run thems
   assert.match(drawn, /Some of these run themselves as part of other work/)
   assert.match(drawn, /use at the end of every agent run/i, 'the skill\'s own description still shows')
 })
+
+/* ---------- the Memory filters -----------------------------------------------------------------
+
+   These were a flex row with `overflow-x: auto` and the base chip's `nowrap`. At 390px that is
+   804px of chips in 358px, so SEVEN of twelve sat off-screen - `shared` among them, which holds
+   the business brain and 18 of a real repo's 59 pages. A chip boundary lands near the screen edge,
+   so unlike the step chain on the Workflows screen there was not even a mid-word cut to hint at it.
+
+   Wrapping alone was NOT enough, and the first attempt shipped a worse bug than it fixed: with the
+   overflow container gone and `.chip` still `nowrap`, one long folder name pushed straight out of
+   the row and took the WHOLE PAGE sideways. Measured in a browser: a 69-character folder name gave
+   a 490px document against a 390px viewport, where the old scrolling version stayed at 390. Local
+   badness turned into global badness. `.filters .chip` therefore has to break internally, which is
+   the same safeguard the Workflows step chain already used - cited as precedent and not copied.
+
+   BE HONEST ABOUT WHAT THESE TESTS ARE. The suite renders through a DOM shim with no layout engine,
+   so nothing here can measure a pixel or catch an overflow. These are source-shape guards: they
+   fail if somebody removes the rules, and that is all they do. The evidence that the fix WORKS is a
+   real browser at 390px, recorded in the commit: 0 of 12 chips off-screen, and document scrollWidth
+   375 with the safeguard against 490 without it. */
+
+test('the memory filters wrap instead of running off the side of the phone', () => {
+  const page = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+  const rule = page.match(/\n\s*\.filters \{[^}]*\}/)[0]
+  assert.ok(!rule.includes('overflow-x'), 'the filters are behind a sideways scroll again')
+  assert.ok(!rule.includes('nowrap'), 'the filters cannot wrap, so most of them are off-screen')
+  assert.match(rule, /flex-wrap:\s*wrap/, 'the filters no longer wrap')
+})
+
+test('a long folder name breaks inside its chip rather than taking the page sideways', () => {
+  const page = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+  const rule = page.match(/\n\s*\.filters \.chip \{[^}]*\}/)[0]
+  assert.match(rule, /overflow-wrap:\s*anywhere/,
+    'without this a long folder name overflows the row, and with no overflow-x to contain it that ' +
+      'reaches the whole document - a 69-character name measured 490px against a 390px viewport')
+  assert.match(rule, /white-space:\s*normal/,
+    'the base .chip rule sets nowrap, so overflow-wrap alone cannot break anything')
+})
+
+/* This one is NOT evidence for the CSS fix above - it passes with or without it, because chip
+   generation was never what broke. It is a guard on the list of folders being complete, which is
+   worth having on its own and is labelled as that rather than borrowed as proof of something else. */
+
+test('every top-level folder in the repo gets its own filter chip', () => {
+  const nodes = render({
+    ...base,
+    memory: {
+      files: [
+        { path: 'shared/about-me.md', size: 100 },
+        { path: 'shared/business-brain.md', size: 100 },
+        { path: 'runs/2026-08/a.json', size: 100 },
+        { path: 'top-level.md', size: 100 }
+      ],
+      indexes: [],
+      truncated: false
+    }
+  }).get('memory').innerHTML
+
+  for (const label of ['all', '(root)', 'runs', 'shared']) {
+    assert.ok(nodes.includes(`>${label}</span>`), `no filter chip for ${label}`)
+  }
+  assert.match(nodes, /Search 4 pages/)
+})
