@@ -2,7 +2,7 @@
 // a network, a token, or a live account.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import handler, { isTaskCard } from '../api/state.js'
+import handler, { isTaskCard, shapeHero } from '../api/state.js'
 
 // This suite covers the endpoint's data logic, not the view gate - that has its own
 // suite in gate.test.mjs. Opting out here keeps every case from carrying a key header.
@@ -525,4 +525,28 @@ test('only markdown directly inside tasks/ is a card', () => {
   ]) {
     assert.equal(isTaskCard(path), false, `${path} should not be a card`)
   }
+})
+
+/* shapeHero: an unchosen hero is a step not yet reached, not a broken metric name. */
+
+test('an unfilled hero says what to do, not what the file literally contains', () => {
+  const hero = shapeHero({ hero: '<!-- fill: hero-metric -->' }, null)
+  assert.equal(hero.defined, false)
+  assert.ok(!hero.why.includes('fill:'), 'the reason quotes the raw marker back at the student')
+  assert.ok(!hero.why.includes('tiles.yml asks for'), 'it reads as a fault rather than an unfinished step')
+  assert.match(hero.why, /nobody has chosen yours/)
+})
+
+test('a hero that is a real but unknown metric name still says so plainly', () => {
+  const hero = shapeHero({ hero: 'deals-closed' }, null)
+  assert.equal(hero.defined, false)
+  assert.match(hero.why, /deals-closed/, 'the owner needs to see which name did not resolve')
+})
+
+test('a hero the board can compute is unaffected', () => {
+  const hero = shapeHero(
+    { hero: 'hours-a-week' },
+    { ownerType: 'business', hoursPerWeek: 3, costPerWeek: 450, unpriced: false, unreadable: 0, complete: true, tasks: [] }
+  )
+  assert.equal(hero.defined, true)
 })

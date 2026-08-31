@@ -648,9 +648,30 @@ export const HERO_METRICS = {
       : null
 }
 
+// Every `why` below is a FINISHED SENTENCE, capital letter and full stop, and that is deliberate.
+// The panel prints it straight after "No hero number yet.", so a lowercase fragment started that
+// sentence with a lowercase letter in every state. The first fix capitalised it in the renderer,
+// which was worse: one of these reasons legitimately begins with the filename `tiles.yml`, and the
+// panel started printing `Tiles.yml` - a file that does not exist - on the screen the course tells
+// students to bookmark on day one. A view layer cannot tell an English word from a filename, so
+// the sentences are written correctly here instead.
 export function shapeHero(tiles, ledger) {
   const metric = typeof tiles?.hero === 'string' ? tiles.hero.trim() : ''
   if (!metric) return null
+
+  // The shipped tiles.yml carries `hero: <!-- fill: hero-metric -->`, and the owner chooses their
+  // number in onboarding phase 10 - near the end. So for most of a student's first week the hero
+  // IS that marker, and it fell through to the "nothing computes it yet" branch below, which
+  // quotes the metric back at them: `tiles.yml asks for "<!-- fill: hero-metric -->"`. Raw internal
+  // markup, printed at the top of the screen they were told to bookmark on day one, describing a
+  // step they have not reached yet as though something were broken.
+  if (fillMarkers(metric).length) {
+    return {
+      metric,
+      defined: false,
+      why: 'This board can carry one number at the top and nobody has chosen yours. /onboard asks which, or just say what it should be.'
+    }
+  }
 
   // `HERO_METRICS[metric]` with an unvalidated key reaches the prototype chain. From a tiles.yml:
   // `hero: constructor` resolved to Object, spread a truthy result and rendered NaN; `hero:
@@ -661,26 +682,26 @@ export function shapeHero(tiles, ledger) {
     return {
       metric,
       defined: false,
-      why: `tiles.yml asks for "${metric}" and nothing computes it yet`
+      why: `Nothing computes "${metric}", which is what tiles.yml asks for.`
     }
   }
 
   const resolved = resolve(ledger)
   if (!resolved) {
     const why = !ledger
-      ? 'there is no ledger.yml yet'
+      ? 'There is no ledger.yml yet.'
       : ledger.unreadable > 0
-        ? `${ledger.unreadable} row${ledger.unreadable === 1 ? '' : 's'} in your ledger could not be read as hours`
+        ? `${ledger.unreadable} row${ledger.unreadable === 1 ? '' : 's'} in your ledger could not be read as hours.`
         : !usableHours(ledger)
-          ? 'your ledger has no hours in it yet'
-          : `"${metric}" needs a number your ledger does not carry`
+          ? 'Your ledger has no hours in it yet.'
+          : `Your ledger does not carry the number "${metric}" needs.`
     return { metric, defined: false, why }
   }
 
   // Last gate, on the number itself. `minutes_each: 1e308` survives every earlier check - the
   // hours are finite and positive - and only the product overflows, so the hero rendered "$Infinity".
   if (!Number.isFinite(resolved.value)) {
-    return { metric, defined: false, why: `"${metric}" came out as a number nobody can read` }
+    return { metric, defined: false, why: `"${metric}" produced a number nobody can read.` }
   }
 
   return { metric, defined: true, ...resolved }

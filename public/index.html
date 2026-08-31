@@ -648,7 +648,14 @@ function boardHtml(board) {
 function heroHtml(hero) {
   if (!hero) return ''
   if (!hero.defined) {
-    return `<div class="panel empty"><b>No hero number yet.</b> <span class="small">${escapeHtml(hero.why ?? '')}. Nothing is shown rather than a zero, because a zero here would be a claim about your week.</span></div>`
+    // `hero.why` arrives as a finished sentence, ending with its own full stop. It used to be a
+    // lowercase fragment dropped after "No hero number yet.", which started that sentence with a
+    // lowercase letter in every state. Capitalising it HERE was the first fix and it was worse:
+    // one of those reasons begins with the filename `tiles.yml`, so the panel started printing
+    // `Tiles.yml`, a file that does not exist, on the screen students are told to bookmark. A view
+    // layer cannot tell an English word from a filename. The sentences are written correctly at
+    // source instead - see shapeHero in api/state.js.
+    return `<div class="panel empty"><b>No hero number yet.</b> <span class="small">${escapeHtml(hero.why ?? '')} Nothing is shown rather than a zero, because a zero here would be a claim about your week.</span></div>`
   }
   const value = hero.money
     ? '$' + Math.round(hero.value).toLocaleString('en-US')

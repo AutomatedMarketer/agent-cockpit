@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { shapeHero } from '../api/state.js'
 
 /* Every other test in this repo checks the API, or greps the page source for a string. None of
    them has ever RENDERED a screen. A verifier had to build its own DOM shim to find that the week
@@ -837,4 +838,113 @@ test('an unproved connection is escaped too, not just a proved one', () => {
 
   assert.ok(!drawn.includes('<img src=x'), 'the unproved branch renders its name unescaped')
   assert.match(drawn, /&lt;img src=x/)
+})
+
+/* The shipped tiles.yml carries `hero: <!-- fill: hero-metric -->` and the owner picks their number
+   in onboarding phase 10, near the end. So for most of a student's first week the hero IS that
+   marker - and the board quoted it back at them: `tiles.yml asks for "<!-- fill: hero-metric -->"
+   and nothing computes it yet`. Raw internal markup, at the top of the screen the course tells
+   them to bookmark on day one, describing a step they have not reached as though it were a fault.
+
+   Nobody saw it because the owner fixture had already chosen a hero. It took building a student
+   who is only part way through. */
+
+test('a student who has not picked their number yet is not shown the raw marker', () => {
+  const drawn = render({
+    ...base,
+    // the REAL shaped hero, not a hand-written copy of what it is assumed to say
+    hero: shapeHero({ hero: '<!-- fill: hero-metric -->' }, null)
+  }).get('today').innerHTML
+
+  assert.ok(!drawn.includes('fill:'), 'the board printed a fill marker at a student')
+  assert.ok(!drawn.includes('&lt;!--'), 'the board printed raw markup at a student')
+  assert.match(drawn, /No hero number yet/)
+  assert.match(drawn, /nobody has chosen yours/)
+})
+
+test('no screen ever renders a raw fill marker', () => {
+  const midOnboarding = {
+    ...base,
+    hero: shapeHero({ hero: '<!-- fill: hero-metric -->' }, null),
+    brain: [{ path: 'shared/about-me.md', missing: ['full-name', 'role'] }],
+    ledger: null,
+    proposals: null
+  }
+  const nodes = render(midOnboarding)
+  for (const screen of SCREENS) {
+    const drawn = nodes.get(screen).innerHTML
+    assert.ok(!drawn.includes('&lt;!-- fill:'), `${screen} printed a raw fill marker`)
+    assert.ok(!drawn.includes('<!-- fill:'), `${screen} printed a raw fill marker`)
+  }
+})
+
+/* The panel prints `hero.why` straight after "No hero number yet.", so a lowercase fragment began
+   that sentence with a lowercase letter in every state. The FIRST fix capitalised it in the
+   renderer, and that was worse: one of these reasons legitimately begins with the filename
+   `tiles.yml`, so the panel printed `Tiles.yml` - a file that does not exist - on the screen the
+   course tells students to bookmark on day one. A wrong filename is a worse failure than an
+   uncapitalised sentence, and a view layer cannot tell a word from a filename.
+
+   My test for that first fix checked only that A capital appeared, never WHAT was capitalised, so
+   its own fixture data contained the bug and it still went green. These check the thing itself. */
+
+// Every state shapeHero can return WITHOUT a number. Named and counted, because the first version
+// of this test used a fixture with usable hours, which returns defined: true and silently dropped
+// out of the list - leaving the "N rows could not be read" sentence unchecked while the test was
+// called "every state the board can be in". Its `>= 5` threshold then matched what actually ran
+// rather than what it promised. Exact count here so a state cannot go missing quietly again.
+const HERO_STATES = {
+  'no number chosen yet': () => shapeHero({ hero: '<!-- fill: hero-metric -->' }, null),
+  'a metric nothing computes': () => shapeHero({ hero: 'deals-closed' }, null),
+  'no ledger at all': () => shapeHero({ hero: 'hours-a-week' }, null),
+  'rows that could not be read': () => shapeHero({ hero: 'hours-a-week' }, { ownerType: 'job', hoursPerWeek: 0, costPerWeek: null, unpriced: true, unreadable: 2, complete: false, tasks: [] }),
+  'a ledger with no hours': () => shapeHero({ hero: 'hours-a-week' }, { ownerType: 'job', hoursPerWeek: 0, costPerWeek: null, unpriced: true, unreadable: 0, complete: false, tasks: [] }),
+  'a ledger missing what the metric needs': () => shapeHero({ hero: 'cost-a-week' }, { ownerType: 'job', hoursPerWeek: 3, costPerWeek: null, unpriced: true, unreadable: 0, complete: true, tasks: [] }),
+  'a number too large to read': () => shapeHero({ hero: 'cost-a-week' }, { ownerType: 'business', hourlyValue: Number.MAX_VALUE, hoursPerWeek: 10, costPerWeek: Infinity, unpriced: false, unreadable: 0, complete: true, tasks: [] })
+}
+
+test('the hero reason is a finished sentence in every state the board can be in', () => {
+  const reasons = Object.entries(HERO_STATES).map(([label, build]) => [label, build()])
+
+  for (const [label, hero] of reasons) {
+    assert.equal(hero.defined, false, `"${label}" no longer reaches a state without a number - the fixture stopped exercising it`)
+    assert.match(hero.why, /^[A-Z0-9"]/, `"${label}" does not start a sentence: ${hero.why}`)
+    assert.match(hero.why, /\.$/, `"${label}" has no full stop: ${hero.why}`)
+  }
+  assert.equal(reasons.length, 7, 'a hero state was added or removed without being covered here')
+})
+
+test('every hero reason renders into the panel as a whole sentence', () => {
+  for (const [label, build] of Object.entries(HERO_STATES)) {
+    const drawn = render({ ...base, hero: build() }).get('today').innerHTML
+    assert.ok(!drawn.includes('..'), `"${label}" produced a doubled full stop`)
+    assert.ok(!drawn.includes('fill:'), `"${label}" leaked a raw marker`)
+    assert.ok(!drawn.includes('undefined'), `"${label}" rendered undefined`)
+    assert.match(drawn, /Nothing is shown rather than a zero/, `"${label}" lost the rest of the sentence`)
+  }
+})
+
+test('a filename in a hero reason keeps its real casing', () => {
+  const why = shapeHero({ hero: 'deals-closed' }, null).why
+  assert.match(why, /tiles\.yml/, 'the reason no longer names the file the owner has to edit')
+  assert.ok(!why.includes('Tiles.yml'), 'the panel names a file that does not exist')
+
+  const drawn = render({ ...base, hero: shapeHero({ hero: 'deals-closed' }, null) }).get('today').innerHTML
+  assert.match(drawn, /tiles\.yml/)
+  assert.ok(!drawn.includes('Tiles.yml'), 'the rendered panel names a file that does not exist')
+})
+
+test('the renderer no longer tries to fix the sentence itself', () => {
+  const page = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+  assert.ok(
+    !/why\[0\]\.toUpperCase/.test(page),
+    'the view layer is capitalising again, which is what turned tiles.yml into Tiles.yml'
+  )
+})
+
+test('the hero panel reads as one sentence, with no doubled or missing full stop', () => {
+  const drawn = render({ ...base, hero: shapeHero({ hero: '<!-- fill: hero-metric -->' }, null) }).get('today').innerHTML
+  assert.ok(!drawn.includes('..'), 'a doubled full stop')
+  assert.match(drawn, /nobody has chosen yours\. \/onboard asks which/)
+  assert.match(drawn, /it should be\. Nothing is shown rather than a zero/)
 })
