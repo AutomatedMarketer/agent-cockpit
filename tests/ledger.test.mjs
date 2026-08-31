@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { shapeLedger, shapeProposals, shapeHero } from '../api/state.js'
+import { readFileSync, existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { shapeLedger, shapeProposals, shapeHero, isParked } from '../api/state.js'
 
 /* The first numbers on this board that come from the owner rather than from the team's own
    activity. Everything else here counts what the agents did; these count what the week costs, in
@@ -231,55 +233,75 @@ test('a finite but enormous week still refuses rather than printing infinity', (
   assert.match(hero.why, /nobody can read/)
 })
 
-/* A parked row is one the owner deliberately did not hand over, because nobody was named to act
-   on the result. `check:ledger` prints those under their own Parked heading with the reason. This
-   screen showed them in What eats it looking exactly like every other row, so the question the
-   screen invites - why did four of these get a proposal and two not? - had no answer on it. */
+/* ---------- which rows are parked must not drift from the check ------------------------------
 
-test('a parked row carries the reason it was parked', () => {
+   A parked row is work the owner deliberately did not hand over, because nobody was named to act
+   on the result. check:ledger prints those under their own Parked heading. This screen showed them
+   in What eats it looking identical to every other row, so the question the screen invites - why
+   did four of these get a proposal and two not? - had no answer anywhere on it.
+
+   The first fix keyed on `parked_because` having text. That invented a SECOND, narrower rule: the
+   ledger format lets an owner park a row without typing a reason, check:ledger still calls that
+   parked, and those rows carried on rendering as live work. Two definitions of the same word, one
+   per repo, which is the third time this pair has done that.
+
+   tests/fixtures/parked-parity.json is the shared contract - the same bytes in both repos, run by
+   both sides. Change one implementation alone and that side fails here. */
+
+const parkedFixtureUrl = new URL('./fixtures/parked-parity.json', import.meta.url)
+const parkedFixture = JSON.parse(readFileSync(parkedFixtureUrl, 'utf8'))
+
+for (const testCase of parkedFixture.cases) {
+  test(`parked parity: ${testCase.label}`, () => {
+    assert.equal(isParked(testCase.row), testCase.parked)
+  })
+}
+
+test('the two repos hold the same parked contract, byte for byte', (t) => {
+  const sibling = fileURLToPath(
+    new URL('../../agent-team-template/tests/fixtures/parked-parity.json', import.meta.url)
+  )
+  if (!existsSync(sibling)) {
+    t.skip('agent-team-template is not checked out beside this repo')
+    return
+  }
+  assert.equal(
+    readFileSync(sibling, 'utf8'),
+    readFileSync(parkedFixtureUrl, 'utf8'),
+    'the shared contract has been edited on one side only - that is the drift, one level up'
+  )
+})
+
+test('the reason rides along with the row, and its absence does not unpark it', () => {
   const ledger = shapeLedger([
     'owner_type: business',
-    'hourly_value: 100',
     'tasks:',
-    '  - task: Sorting the inbox',
-    '    words: "the inbox eats my morning"',
-    '    times_per_week: 5',
-    '    minutes_each: 12',
-    '    confirmed: twice',
-    '    hands_off: "I read each one and send it"',
-    '  - task: Weekly numbers',
-    '    words: "nobody reads them"',
+    '  - task: With a reason',
+    '    words: "a"',
     '    times_per_week: 1',
     '    minutes_each: 60',
     '    confirmed: twice',
     '    hands_off: ""',
-    '    parked_because: "Nobody reads the numbers I send round on Monday."'
-  ].join('\n'))
-
-  const [handed, parked] = ledger.tasks
-  assert.equal(handed.parkedBecause, null, 'a live row was marked parked')
-  assert.equal(
-    parked.parkedBecause,
-    'Nobody reads the numbers I send round on Monday.',
-    'a parked row reached the screen with no sign it was parked, and no reason'
-  )
-})
-
-test('an empty or missing parked reason is not a parked row', () => {
-  const ledger = shapeLedger([
-    'owner_type: business',
-    'tasks:',
-    '  - task: A',
-    '    words: "a"',
-    '    times_per_week: 1',
-    '    minutes_each: 60',
-    '    parked_because: ""',
-    '  - task: B',
+    '    parked_because: "Nobody reads them."',
+    '  - task: Without a reason',
     '    words: "b"',
     '    times_per_week: 1',
-    '    minutes_each: 60'
+    '    minutes_each: 60',
+    '    confirmed: twice',
+    '    hands_off: ""',
+    '  - task: Handed over',
+    '    words: "c"',
+    '    times_per_week: 1',
+    '    minutes_each: 60',
+    '    confirmed: twice',
+    '    hands_off: "I read it and send it."'
   ].join('\n'))
-  for (const task of ledger.tasks) {
-    assert.equal(task.parkedBecause, null, `${task.task} was treated as parked`)
-  }
+
+  const [withReason, withoutReason, handed] = ledger.tasks
+  assert.equal(withReason.parked, true)
+  assert.equal(withReason.parkedBecause, 'Nobody reads them.')
+  assert.equal(withoutReason.parked, true, 'a parked row with no reason typed was shown as live work')
+  assert.equal(withoutReason.parkedBecause, null)
+  assert.equal(handed.parked, false)
+  assert.equal(handed.parkedBecause, null)
 })

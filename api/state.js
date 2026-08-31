@@ -524,6 +524,18 @@ function positiveNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
 }
 
+// Rule 5, decision-readiness: a row confirmed twice with nobody named to act on its output is
+// PARKED, not buildable. A fill marker left in the answer counts as no answer.
+//
+// KEEP IN SYNC with classify() in agent-team-template's scripts/lib/ledger.mjs. That one returns
+// note | parked | candidate; this only needs to know which rows are parked, so it is the same two
+// conditions and nothing else. tests/fixtures/parked-parity.json holds the shared cases.
+export function isParked(row) {
+  if (row?.confirmed !== 'twice') return false
+  const handsOff = typeof row?.hands_off === 'string' ? row.hands_off.trim() : ''
+  return handsOff === '' || /<!--\s*fill:/.test(handsOff)
+}
+
 export function shapeLedger(source) {
   if (!source) return null
   const parsed = parseSimpleYaml(source)
@@ -545,10 +557,21 @@ export function shapeLedger(source) {
       words: typeof row?.words === 'string' ? row.words : '',
       confirmed: row?.confirmed ?? null,
       // A parked row is one the owner deliberately did not hand over, because nobody was named to
-      // act on the result. `check:ledger` prints those under their own "Parked" heading with the
-      // reason; this screen showed them in What eats it looking exactly like every other row, so
-      // the one question the screen invites - why did four of these get a proposal and two not? -
-      // had no answer on it. `parked_because` is the ledger's own field for the reason.
+      // act on the result. `check:ledger` prints those under their own "Parked" heading; this
+      // screen showed them in What eats it looking exactly like every other row, so the one
+      // question the screen invites - why did four of these get a proposal and two not? - had no
+      // answer anywhere on it.
+      //
+      // KEEP IN SYNC with agent-team-template's classify() in scripts/lib/ledger.mjs, mirrored by
+      // hand for the same reason as the arming and switched-off rules: no import path between a
+      // student's repo and a deployed web app. tests/fixtures/parked-parity.json is the shared
+      // contract, the same bytes in both repos.
+      //
+      // The reason is NOT the signal. A first attempt keyed on `parked_because` having text, which
+      // invented a second, narrower definition: the ledger format lets an owner park a row without
+      // typing a reason, and check:ledger still calls that parked, so those rows kept rendering as
+      // live. What decides it is rule 5 - confirmed twice, and nobody named to act on the output.
+      parked: isParked(row),
       parkedBecause:
         typeof row?.parked_because === 'string' && row.parked_because.trim()
           ? row.parked_because.trim()

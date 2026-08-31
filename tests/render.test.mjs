@@ -217,7 +217,7 @@ test('hostile text from the repo is escaped everywhere it lands', () => {
     ledger: {
       ownerType: 'business', hourlyValue: 150, hoursPerWeek: 3, costPerWeek: 450,
       unpriced: false, unreadable: 0, complete: true,
-      tasks: [{ task: nasty, words: nasty, confirmed: 'twice', hoursPerWeek: 3 }]
+      tasks: [{ task: nasty, words: nasty, confirmed: 'twice', parked: true, parkedBecause: nasty, hoursPerWeek: 3 }]
     },
     proposals: {
       proposals: [{ task: nasty, item: nasty, why: nasty, words: nasty, number: nasty }],
@@ -411,4 +411,52 @@ test('a skill name is a link that opens a file, so it gets a thumb target too', 
   // happened to be looked at first.
   assert.match(html, /a\.title\[data-open\]\s*\{[^}]*min-height/,
     'the link that opens a skill file has no minimum height')
+})
+
+/* The board's own headline printed "1 hours a week" - the same defect numberCitation had one repo
+   along, on the very screen that fix was found from. Every ledger fixture in this file used
+   hoursPerWeek: 3, so nothing had ever rendered a week rounding to exactly one hour, which is what
+   a first light week looks like. */
+
+test('a one-hour week reads as one hour on the Ledger screen', () => {
+  const drawn = render({
+    ...base,
+    ledger: { ownerType: 'business', hourlyValue: null, hoursPerWeek: 1, costPerWeek: null, unpriced: true, unreadable: 0, complete: true, tasks: [] }
+  }).get('ledger').innerHTML
+
+  assert.match(drawn, /<b>1<\/b> hour a week/, 'the headline said "1 hours a week"')
+  assert.ok(!/<b>1<\/b> hours a week/.test(drawn))
+})
+
+test('every other week keeps its plural', () => {
+  for (const hours of [0.5, 1.5, 2, 12.9]) {
+    const drawn = render({
+      ...base,
+      ledger: { ownerType: 'business', hourlyValue: null, hoursPerWeek: hours, costPerWeek: null, unpriced: true, unreadable: 0, complete: true, tasks: [] }
+    }).get('ledger').innerHTML
+    assert.match(drawn, new RegExp(`<b>${hours}</b> hours a week`), `${hours} lost its plural`)
+  }
+})
+
+/* A parked row is decided by rule 5 - confirmed twice, nobody named to act on the output - and NOT
+   by whether the owner typed a reason. The board's first version keyed on the reason, which is a
+   narrower rule than check:ledger's, so a parked row with no reason rendered as live work. */
+
+test('a parked row is marked whether or not a reason was typed', () => {
+  const drawn = render({
+    ...base,
+    ledger: {
+      ownerType: 'business', hourlyValue: null, hoursPerWeek: 3, costPerWeek: null,
+      unpriced: true, unreadable: 0, complete: true,
+      tasks: [
+        { task: 'With a reason', words: 'a', confirmed: 'twice', parked: true, parkedBecause: 'Nobody reads them.', hoursPerWeek: 1 },
+        { task: 'Without a reason', words: 'b', confirmed: 'twice', parked: true, parkedBecause: null, hoursPerWeek: 1 },
+        { task: 'Handed over', words: 'c', confirmed: 'twice', parked: false, parkedBecause: null, hoursPerWeek: 1 }
+      ]
+    }
+  }).get('ledger').innerHTML
+
+  assert.equal((drawn.match(/>parked</g) ?? []).length, 2, 'a parked row with no reason was shown as live work')
+  assert.match(drawn, /Parked: Nobody reads them\./)
+  assert.match(drawn, /Parked: nobody is named to act on the result yet/)
 })

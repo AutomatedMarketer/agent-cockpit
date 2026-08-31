@@ -662,8 +662,12 @@ function renderLedger() {
        <code>ledger.yml</code> and re-run <code>npm run check:ledger</code>.</p>`
     : ''
 
+  // Same defect as numberCitation had one repo along: round to a decimal, then print a bare number
+  // in front of a hardcoded "hours". Somebody whose whole week rounds to exactly one hour - a
+  // light week, which is most first weeks - read "1 hours a week" as the headline of this screen.
+  const roundedHours = Math.round(ledger.hoursPerWeek * 10) / 10
   const weekHtml = hoursKnown
-    ? `<div class="panel"><div class="gap"><b>${(Math.round(ledger.hoursPerWeek * 10) / 10)}</b> hours a week &middot; ${money}</div>
+    ? `<div class="panel"><div class="gap"><b>${roundedHours}</b> hour${roundedHours === 1 ? '' : 's'} a week &middot; ${money}</div>
        ${unreadableNote}
        <p class="small muted">Your numbers, from <code>ledger.yml</code>. Disagree with any of it and the
        answer is to change that file - nothing here is a recommendation.</p></div>`
@@ -676,9 +680,17 @@ function renderLedger() {
         `<div class="gap"><b>${escapeHtml(task.task)}</b>
           <span class="small">${task.hoursPerWeek === null ? '' : (Math.round(task.hoursPerWeek * 10) / 10) + 'h'}</span>
           ${task.confirmed === 'once' ? '<span class="chip">said once</span>' : ''}
-          ${task.parkedBecause ? '<span class="chip">parked</span>' : ''}
+          ${task.parked ? '<span class="chip">parked</span>' : ''}
           <div class="small muted">&ldquo;${escapeHtml(task.words)}&rdquo;</div>
-          ${task.parkedBecause ? `<div class="small muted">Parked: ${escapeHtml(task.parkedBecause)}</div>` : ''}</div>`
+          ${
+            task.parked
+              ? `<div class="small muted">Parked: ${
+                  task.parkedBecause
+                    ? escapeHtml(task.parkedBecause)
+                    : 'nobody is named to act on the result yet'
+                }</div>`
+              : ''
+          }</div>`
       ).join('')}</div>`
     : `<div class="panel empty"><b>Your ledger names no tasks yet.</b> <span class="small">Run
        <code>/ledger</code> again and tell it what you actually repeat each week &mdash; everything
