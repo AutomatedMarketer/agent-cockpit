@@ -1553,7 +1553,10 @@ function renderConnections() {
   }).join('')
 
   const runtimeRows = runtimes.map((runtime) => `
-    <div class="conn ${runtime.status}">
+    <!-- status is escaped even though shapeRuntimes only ever emits live | silent | no-heartbeat
+         today. Nothing stops that changing, and the connection row two blocks up already guards
+         its own class the same way. -->
+    <div class="conn ${escapeHtml(runtime.status)}">
       <div class="row between">
         <span class="row"><span class="dot"></span><span class="title">${escapeHtml(runtime.name)}</span><span class="chip">${escapeHtml(runtime.kind)}</span></span>
         <span class="state">${escapeHtml(STATE_LABEL[runtime.status] ?? runtime.status)}</span>

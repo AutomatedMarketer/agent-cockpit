@@ -804,3 +804,37 @@ test('a runtime that has gone quiet does not read the same as one that is runnin
   assert.match(never, /no heartbeat file yet/, 'a runtime that never checked in showed a blank instead of saying so')
   assert.notEqual(live, silent, 'a running box and a stopped one render identically')
 })
+
+/* The generic "hostile text is escaped everywhere it lands" test builds its payload into ledger,
+   proposals, workflows and routines - never connections or runtimes. So this was the one screen in
+   the repo where a dropped escapeHtml() sailed through: proved by stripping it off connection.name
+   and watching all 352 tests still pass. Every field here comes out of somebody's register.yml. */
+
+test('hostile text in a connection or a runtime is escaped', () => {
+  const nasty = '<script>alert(1)</script>"\'&'
+  const drawn = render({
+    ...base,
+    connections: [connection({
+      name: nasty, kind: nasty, account: nasty, scopes: [nasty], usedBy: [nasty],
+      verified: nasty, proof: nasty
+    })],
+    runtimes: [runtime({ name: nasty, kind: nasty, url: nasty, status: 'silent' })]
+  }).get('connections').innerHTML
+
+  assert.ok(!drawn.includes('<script>'), 'raw script tag reached the Connections screen')
+  assert.match(drawn, /&lt;script&gt;/, 'the hostile text was dropped rather than escaped')
+  // Every field it was fed has to come back escaped, not just the first one.
+  assert.equal((drawn.match(/&lt;script&gt;/g) ?? []).length >= 7, true,
+    'some fields on this screen are escaped and others are not')
+})
+
+test('an unproved connection is escaped too, not just a proved one', () => {
+  const nasty = '<img src=x onerror=alert(1)>'
+  const drawn = render({
+    ...base,
+    connections: [connection({ name: nasty, verified: null, proof: null, proved: false })]
+  }).get('connections').innerHTML
+
+  assert.ok(!drawn.includes('<img src=x'), 'the unproved branch renders its name unescaped')
+  assert.match(drawn, /&lt;img src=x/)
+})
