@@ -1053,9 +1053,14 @@ test('a week with no rate is counted in hours and never in money', () => {
   assert.match(drawn, /No rate recorded/)
   // Scoped to the app's OWN money markup. A real ledger can quote "$500 in review requests" in
   // somebody's own words, and both `includes('$')` and /\$\d/ fail on that - the second one was
-  // committed with a comment claiming it did not, which was wrong and unrun. The computed cost is
-  // the only place this page emits `<b>$`, and escapeHtml means repo text can never produce a
-  // literal <b>, so this matches the figure and nothing a person wrote.
+  // committed with a comment claiming it did not, which was wrong and unrun.
+  //
+  // `<b>$` is the cost LINE's markup specifically, not every money figure on the board: the hero
+  // renders its own money inside `.hero-value` with no <b>. That one is not this assertion's job
+  // and is not left unguarded - shapeHero refuses to build a money hero at all when the ledger is
+  // unpriced, so an unpriced ledger structurally cannot carry one, and that is enforced and tested
+  // upstream in api/state.js. escapeHtml means repo text can never produce a literal <b>, so this
+  // matches the cost line and nothing a person wrote.
   assert.ok(!/<b>\$/.test(drawn), 'a money figure appeared for somebody who gave no rate')
   assert.ok(!drawn.includes('at the rate you set'), 'it claimed a rate that was never given')
 })
