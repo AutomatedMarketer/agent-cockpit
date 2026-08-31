@@ -230,10 +230,10 @@ test('a finite but enormous week still refuses rather than printing infinity', (
   const wide = { ownerType: 'business', hourlyValue: Number.MAX_VALUE, hoursPerWeek: 10, costPerWeek: Infinity, unpriced: false, unreadable: 0, complete: true, tasks: [] }
   const hero = shapeHero({ hero: 'cost-a-week' }, wide)
   assert.equal(hero.defined, false)
-  assert.match(hero.why, /cannot be read/)
+  assert.match(hero.why, /nobody can read/)
   // Every hero reason is a finished sentence, because the panel prints it after one - see the
   // note above shapeHero for why capitalising in the renderer instead was the wrong answer.
-  assert.match(hero.why, /^[A-Z]/)
+  assert.match(hero.why, /^[A-Z0-9"]/, "a reason may open with a quoted metric name, but never lowercase prose")
   assert.match(hero.why, /\.$/)
 })
 
