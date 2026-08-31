@@ -1004,11 +1004,33 @@ const populated = () => ({
 test('no screen assumes the reader owns a business, empty or populated', () => {
   const fixtures = { empty: render(base), populated: render(populated()) }
 
-  // The populated fixture has to actually populate. This is the assertion the first version of
-  // this test needed and did not have.
+  // The populated fixture has to actually populate, and this has to be checked by looking for
+  // something only the populated branch can draw. A length threshold does not do it: six of the
+  // seven screens clear 200 characters on their EMPTY state alone - Today's empty state is 3,042 -
+  // so `length > 200` measured "did anything render at all", which another test already covers,
+  // while reading like it measured "did the populated branch run".
+  // One marker per POPULATED BRANCH, not one per screen. The first version used a single marker
+  // for the Ledger, "Chasing documents" - which appears both in ledger.tasks and in the proposal
+  // built from it, so emptying either one alone still left the marker behind and the guard passed.
+  // Each branch that has to render needs its own string that only it can draw.
+  const ONLY_WHEN_POPULATED = {
+    today: ['Chase the certificate', 'Checked the portals'],
+    ledger: ['Keeping certificates current', 'skill:draft-chase-messages', 'reads a requirements list back'],
+    team: ['Looks something up'],
+    workflows: ['Morning Intel', 'Off until there is something to read'],
+    skills: ['triage-inbox', 'capture-verdict', 'context7'],
+    memory: ['about-me.md'],
+    connections: ['Read the subject lines', 'Studio box']
+  }
   for (const screen of SCREENS) {
     const drawn = fixtures.populated.get(screen).innerHTML
-    assert.ok(drawn.length > 200, `the populated fixture leaves ${screen} empty, so it sweeps nothing there`)
+    for (const marker of ONLY_WHEN_POPULATED[screen]) {
+      assert.ok(
+        drawn.includes(marker),
+        `the populated fixture leaves part of ${screen} on its empty state ("${marker}" is missing), ` +
+          'so the sweep below reads nothing there'
+      )
+    }
   }
 
   for (const [label, nodes] of Object.entries(fixtures)) {
@@ -1029,9 +1051,11 @@ test('a week with no rate is counted in hours and never in money', () => {
 
   assert.match(drawn, /10\.3<\/b> hours a week/)
   assert.match(drawn, /No rate recorded/)
-  // Scoped to a money FIGURE, not any dollar sign anywhere on the panel: a real ledger.yml can
-  // legitimately quote "$500 in review requests" in somebody's own words, and this test would then
-  // fail for a reason unrelated to the thing it guards.
-  assert.ok(!/\$\d/.test(drawn), 'a money figure appeared for somebody who gave no rate')
+  // Scoped to the app's OWN money markup. A real ledger can quote "$500 in review requests" in
+  // somebody's own words, and both `includes('$')` and /\$\d/ fail on that - the second one was
+  // committed with a comment claiming it did not, which was wrong and unrun. The computed cost is
+  // the only place this page emits `<b>$`, and escapeHtml means repo text can never produce a
+  // literal <b>, so this matches the figure and nothing a person wrote.
+  assert.ok(!/<b>\$/.test(drawn), 'a money figure appeared for somebody who gave no rate')
   assert.ok(!drawn.includes('at the rate you set'), 'it claimed a rate that was never given')
 })
