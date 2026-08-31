@@ -229,6 +229,13 @@ const QUOTABLE = {
   'as a numbered item with a bracket': '2) ' + REFUSAL,
   'as an indented bullet': '   - ' + REFUSAL,
   'in a quote with no space after the marker': '>' + REFUSAL,
+  // Every marker row above is one line. The ordinary way to write a WRAPPED quote repeats the `>`
+  // down the left, and closing a block on each of those lines split one sentence into orphaned
+  // fragments - this came back as "I do not sell - Ray", cut mid-clause and shown as the whole
+  // quote. A list marker starts a new item; a quote marker continues the same quote.
+  'in a quote wrapped over two lines': '> I do not sell - Ray\n> handles it.',
+  'in a quote wrapped over three lines': '> I do not sell -\n> Ray handles\n> it.',
+  'as a bullet with an indented continuation': '- I do not sell - Ray\n  handles it.',
   'as a nested bullet under a lead-in': '- Reasons\n  - ' + REFUSAL,
   'as a bullet under a lead-in inside a quote': '> Notes\n> - ' + REFUSAL,
   'below a fenced example': '```\nexample: I do not sell.\n```\n\n' + REFUSAL,
@@ -306,4 +313,25 @@ test('nothing at all gives nothing back', () => {
   for (const body of ['', null, undefined, '# FAQ\n\nnothing here\n']) {
     assert.equal(notInUseBecause(body), null)
   }
+})
+
+/* A KNOWN LIMIT, written down rather than left to be rediscovered.
+
+   If the line break falls inside the phrase itself - "I do not" on one line, "sell" on the next,
+   with a `>` between them - the agent is not detected as switched off AT ALL. That is notInUse's
+   doing, not this extractor's: notInUse reads the raw file, where the gap between "not" and "sell"
+   contains a quote marker as well as a newline, and its pattern allows only whitespace there.
+
+   It fails SAFE. The agent reads as "never run" rather than "not in use", which is wrong but is
+   the honest kind of wrong - nothing is fabricated and nobody is quoted.
+
+   Fixing it means changing notInUse, which is the judgement mirrored in agent-team-template and
+   pinned by tests/fixtures/knowledge-parity.json, so it would have to change on both sides at
+   once. Not worth that for a line break in the middle of a four-word phrase - but it should be a
+   decision on the record rather than a surprise. */
+
+test('a refusal broken mid-phrase by a quote marker is missed, and misses safely', () => {
+  const body = '# FAQ\n\n> I do not\n> sell - Ray handles it.\n'
+  assert.equal(notInUse(body), false, 'if this ever starts detecting, the note above is out of date')
+  assert.equal(notInUseBecause(body), null, 'nothing may be quoted when nothing was detected')
 })

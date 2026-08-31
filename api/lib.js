@@ -216,7 +216,15 @@ function proseBlocks(knowledgeBody) {
       close()
       continue
     }
-    if (MARKERS.test(line)) close()
+    // A LIST marker starts a new block, so a lead-in cannot run into the item beneath it. A quote
+    // marker does not: `>` repeated down the left is how a wrapped quote is written, one quote
+    // continuing, and closing on each of those lines split a single sentence into orphaned
+    // fragments - "> I do not sell - Ray" / "> handles it." came back as "I do not sell - Ray",
+    // cut mid-clause and shown as the whole quote.
+    //
+    // A bullet inside a quote (`> - ...`) still starts a new block, because that is a new item.
+    const marker = line.match(MARKERS)
+    if (marker && /[*+\-\d]/.test(marker[0])) close()
     const text = line.replace(MARKERS, '').trim()
     if (text) current.push(text)
   }
