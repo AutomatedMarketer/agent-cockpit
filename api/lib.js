@@ -250,57 +250,48 @@ function proseBlocks(knowledgeBody) {
 // So this finds the line the refusal BEGINS on, takes the sentence from there, and only reaches
 // forward for more when that sentence has not ended. Nothing before it can be dragged in, because
 // nothing before it is ever looked at.
-// Where does the sentence end? This is the whole difficulty of quoting somebody accurately, and it
-// gets its own function because getting it wrong is what put words in an owner's mouth four
-// separate times during review.
+// Where does the sentence end? This is the whole difficulty of quoting somebody accurately, and
+// getting it wrong put words in an owner's mouth six separate times across ten rounds of review.
 //
 // A full stop is not always the end of a sentence. It is also an abbreviation, a decimal point, and
 // part of every email address and filename ever written. "sell. Ray handles it" and "sell - Dr. Ray
-// handles it" are the same five characters. Telling those apart in general needs a list of every
-// abbreviation in English, and a list like that is wrong the first time somebody writes "Ste.".
+// handles it" are the same five characters.
 //
-// So this does not try to be right. It tries to be sure, and says so when it is not. Only the FIRST
-// stop is examined: if that one is not certainly the end, there is no quote at all, because
-// stepping over it to find a later one is how you end up quoting two sentences as though they were
-// one. Three things all have to hold:
+// Five versions of this tried to tell them apart from what sits around the stop, and each one was
+// beaten by an ordinary sentence somebody might actually write:
 //
-// `whole` says whether this text is everything there is, or only as much of it as has been read so
-// far. It matters: when nothing follows the stop but closing marks, that is the end of a sentence
-// only if it is also the end of the text. Mid-read, "I do not sell - Dr." at a line break looks
-// exactly as finished as "I do not sell - Ray handles it." does, and it is not.
+//   handles it.He is at ray@example.com    a missing space after a stop - the commonest typo there
+//                                          is - put a stranger's email inside the quote
+//   Ray handles it.</p>                    the closing tag came along
+//   I do not sell, e.g. tickets            cut at the abbreviation: "I do not sell, e.g."
+//   I do not sell - Dr. Ray handles it     cut at the title: "I do not sell - Dr."
+//                                          and the same for Mr., Mrs., St. and ext.
+//   I do not sell items etc. Ray handles   cut at the abbreviation again: "I do not sell items etc."
+//     the overflow                         and the same for approx., vs., misc., dept., admin.
 //
-// When nothing follows a stop in the whole text, it is the end and there is nothing to weigh -
-// there is no next sentence for it to belong to. When something DOES follow, all three must hold:
+// The last of those is what settled it. A capital letter after the stop does not mean a new sentence
+// - "etc. Ray" and "it. Ray" are identical in every respect a rule can see. Length does not separate
+// them either: "etc" and "Ray" are the same size. What is left is a list of every abbreviation in
+// English, which is wrong the first time somebody writes "Ste." or "qty.".
 //
-//   what follows      a space, then a new sentence opening on a capital. Kills "handles it.He is
-//                     at ray@example.com" (a missing space after a stop, the commonest typo there
-//                     is, which put a stranger's email inside the quote), "handles it.</p>",
-//                     "ray@example.com instead." and "call Ray on ext. 204" - a digit does not
-//                     open a sentence.
-//   how long the word is
-//                     one letter is an initial, not a word. Kills "e.g." and "5 p.m.".
-//   how it is spelt   a word with a capital in it, mid-paragraph, is a name or an abbreviation
-//                     rather than the end of a sentence. Kills "Dr.", "Mr.", "Mrs." and "St.".
+// So the rule is now the only one that needs no list and no judgement: THE END OF THE TEXT IS THE
+// ONLY END WE TRUST. A stop with nothing after it but closing marks is the end of a sentence,
+// because there is no next sentence for it to belong to. A stop anywhere else means we do not know
+// where the sentence ends, so there is no quote.
 //
-// The last one also refuses a sentence that genuinely ends on a name and is followed by another
-// sentence - "that is handled by Ray. He is upstairs." - so that shape gets no quote. That is the
-// trade, made deliberately: the agent still reads as switched off, the student opens the file to
-// see why, which is where they were before this existed. A quote nobody wrote is worse than none.
+// What that costs, and it is a real cost: a paragraph with more than one sentence in it gets no
+// quote. "I do not sell. Ray handles all of that." shows nothing, and that is an ordinary way to
+// write. The agent still reads as switched off; the student opens the file to see why, which is
+// where they were before this existed. That trade is made deliberately and in one direction only:
+// the alternative was an open-ended list of abbreviations, each one found the same way - by somebody
+// noticing a wrong quote on screen. A quote nobody wrote is worse than no quote.
 //
-// Returns null if there is no stop at all (nothing to be unsure about), { ok: false } if the first
-// stop is not certainly an end, and { ok: true, at } with the index of the last character to keep.
-function firstEnd(text, whole) {
-  for (const hit of String(text).matchAll(/[.!?]/g)) {
-    const tail = text.slice(hit.index + 1)
-    const closing = tail.match(/^[)\]"'*_`]*/)[0]
-    const after = tail.slice(closing.length)
-    const end = { ok: true, at: hit.index + closing.length }
-    if (!after) return whole ? end : { ok: false }
-    if (!/^\s+["'(\[]*[A-Z]/.test(after)) return { ok: false }
-    const word = text.slice(0, hit.index).split(/\s/).pop()
-    return word.length > 1 && word === word.toLowerCase() ? end : { ok: false }
-  }
-  return null
+// Returns the text to show, or null when it cannot be sure.
+function upToSentenceEnd(text) {
+  const stops = [...String(text).matchAll(/[.!?]/g)]
+  if (!stops.length) return text // nothing to be unsure about
+  const closing = text.slice(stops[0].index + 1).match(/^[)\]"'*_`]*/)[0]
+  return stops[0].index + 1 + closing.length === text.length ? text : null
 }
 
 export function notInUseBecause(knowledgeBody) {
@@ -351,25 +342,17 @@ export function notInUseBecause(knowledgeBody) {
       carried.push(mark)
       from = i
     }
-    const taken = [line.slice(from)]
-
-    // Reach forward while nothing has ended the sentence yet - a refusal can be wrapped across
-    // lines. Whole lines, not first-sentences-of-lines: cutting a continuation line at a full stop
-    // is the same mistake as cutting the first one, and firstEnd is what decides either way.
-    // Keep pulling while the sentence has not certainly ended - including while the stop we can see
-    // is an uncertain one. "I do not sell - Dr." at a line end looks finished and is not; the line
-    // after it is what shows that, and refusing on the whole thing beats quoting the fragment.
-    const assembled = () => taken.join(' ').replace(/\s+/g, ' ').trim()
-    for (let i = start + 1; i < block.length && !firstEnd(assembled(), false)?.ok; i += 1) {
-      taken.push(block[i])
-    }
-    const quote = taken.join(' ').replace(/\s+/g, ' ').trim()
+    // Everything from the refusal to the end of the paragraph, and then upToSentenceEnd decides
+    // whether that is quotable. There is no reaching forward line by line any more: a line break is
+    // not a sentence end either, so deciding where to stop reading was the same unanswerable
+    // question in smaller print. The paragraph ends where proseBlocks says it does, and that
+    // boundary is structural - a blank line, a heading, a fence - not a guess about punctuation.
+    const quote = [line.slice(from), ...block.slice(start + 1)]
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
     if (!quote) return null
-
-    // firstEnd carries the whole reasoning; see it for why a full stop is not a sentence end.
-    const end = firstEnd(quote, true)
-    if (end === null) return quote // no stop anywhere, so nothing to be unsure about
-    return end.ok ? quote.slice(0, end.at + 1) : null
+    return upToSentenceEnd(quote)
   }
   return null
 }

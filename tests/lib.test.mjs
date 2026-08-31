@@ -243,12 +243,10 @@ const QUOTABLE = {
   'under a lead-in inside a quote': '> Notes\n> ' + REFUSAL,
   'under a bare lead-in': 'Notes\n' + REFUSAL,
   'under a lead-in ending in a colon': 'Quick answer:\n' + REFUSAL,
-  'in the middle of a wrapped paragraph': 'We bid a lot of work. I do not sell - Ray\nhandles it. I assemble the packs.',
-  // A finished refusal with more prose under it in the same block. Without this row, nothing
-  // noticed when the forward-reach stopped checking whether the sentence had actually ended - the
-  // mutation ran through the rest of the block and every test still passed, because in every other
-  // fixture the refusal happened to be the last line.
-  'with another sentence on the line below it': REFUSAL + '\nRay also picks which jobs we bid.',
+  // A whole sentence BEFORE the refusal on the same line is fine, and always was: the quote starts
+  // where the refusal starts and nothing before it is ever read. What is not fine is a sentence
+  // AFTER it - see the three rows in MUST_REFUSE that used to live here.
+  'after a whole sentence on the same line': 'We bid a lot of work. ' + REFUSAL,
   // A label SHARING the refusal's line. Sentence-splitting cannot see these, because a colon and a
   // dash are not sentence ends - so the two-line rows above passed while the same sentence written
   // on one line glued the label on. The quote starts where the refusal starts.
@@ -268,7 +266,6 @@ const QUOTABLE = {
   'as a bullet under a lead-in inside a quote': '> Notes\n> - ' + REFUSAL,
   'below a fenced example': '```\nexample: I do not sell.\n```\n\n' + REFUSAL,
   'below an indented example': '    example: I do not sell.\n\n' + REFUSAL,
-  'in the middle of a paragraph': 'We bid a lot of work. ' + REFUSAL + ' I assemble the packs.',
   'with no full stop at the end': 'I do not sell - Ray handles it'
 }
 
@@ -310,7 +307,31 @@ const MUST_REFUSE = {
   // A single letter before a stop is an initial or a lettered item, not the end of a sentence. This
   // one is the reason the length check exists; without this row the rule was decorative - dropping
   // it broke no test, which is not the same as it being safe to drop.
-  'carrying a lettered clause': 'I do not sell - see clause b. Ray signs those.'
+  'carrying a lettered clause': 'I do not sell - see clause b. Ray signs those.',
+
+  // These four are lowercase, more than one letter, and followed by a capital - which is to say
+  // they are indistinguishable from "handles it. Ray does the rest" by any rule that does not know
+  // what an abbreviation IS. "etc" and "Ray" are the same length. That is what ended five rounds of
+  // trying to read the stop from its surroundings.
+  'carrying etc': 'I do not sell miscellaneous items etc. Ray handles overflow requests.',
+  'carrying approx': 'I do not sell - Ray handles everything, approx. He also does invoicing.',
+  'carrying vs': 'I do not sell - see the price list vs. Ray will confirm the total.',
+  'carrying misc': 'I do not sell cabling and misc. Ray keeps a separate parts list.',
+
+  // THE THREE ROWS BELOW USED TO BE IN THE QUOTABLE TABLE ABOVE, and moving them is the cost of
+  // closing that gap rather than an oversight. A refusal with another sentence after it in the same
+  // paragraph now gets no quote, because there is no way to tell the stop that ends it from the
+  // stop in "etc." without a list of every abbreviation in English.
+  //
+  // "I do not sell. Ray handles all of that." is an ordinary way to write and shows nothing now.
+  // That is the trade, in one direction only: the agent still reads as switched off and the student
+  // opens the file to see why. The alternative was an open-ended set of wrong quotes, each one
+  // found the same way - by somebody noticing a fabricated sentence on screen.
+  'with a second sentence after it': REFUSAL + ' I assemble the packs.',
+  'with a second sentence on the line below it': REFUSAL + '\nRay also picks which jobs we bid.',
+  'wrapped, with a second sentence after it':
+    'We bid a lot of work. I do not sell - Ray\nhandles it. I assemble the packs.',
+  'written as two short sentences': 'I do not sell. Ray handles all of that.'
 }
 
 // Marks the owner put ON the refusal itself, which must survive byte for byte. A `*` or `-` with
@@ -331,6 +352,20 @@ const VERBATIM = {
 
 // The other half of that rule: a mark only comes along if it OPENS something. Both of these were
 // found by review, and both had the mark carried in when it should not have been.
+test('a mark closing the whole refusal still counts as the end of it', () => {
+  // The stop is not the last character here - the italic mark that closes the sentence is. Without
+  // counting those, a refusal the owner italicised or quoted whole was refused for looking
+  // unfinished. Nothing pinned this until a mutation removed the rule and broke no test.
+  assert.equal(
+    notInUseBecause('# FAQ\n\n*I do not sell - Ray handles it.*\n'),
+    '*I do not sell - Ray handles it.*'
+  )
+  assert.equal(
+    notInUseBecause('# FAQ\n\n"I do not sell - Ray handles it."\n'),
+    '"I do not sell - Ray handles it."'
+  )
+})
+
 test('an abbreviation at the very end of the text is kept, because nothing follows it', () => {
   // The mirror of the rows above. There, the stop was mid-paragraph and could not be trusted. Here
   // there is no next sentence for it to belong to, so there is nothing to be unsure about and the
@@ -341,13 +376,14 @@ test('an abbreviation at the very end of the text is kept, because nothing follo
   )
 })
 
-test('the sentence after the refusal is left behind, not dragged in', () => {
-  // The reason this is not solved by "refuse whenever anything follows": a refusal in the middle of
-  // a paragraph is an ordinary way to write, and the pinned rows above cover it. What makes the cut
-  // safe here is the word "it" - lowercase, more than one letter, followed by a capital.
+test('a sentence after the refusal is never dragged in, and never cut at either', () => {
+  // For five rounds this returned the first sentence, by deciding where it ended. That decision is
+  // the one that kept being wrong, so it is not made any more: nothing is quoted rather than a
+  // guess at half of it. Under the old rule this exact body was correct AND "...items etc. Ray
+  // handles the overflow" was wrong, and no rule separated them.
   assert.equal(
     notInUseBecause('# FAQ\n\nI do not sell - Ray handles it. He is at ray@example.com.\n'),
-    'I do not sell - Ray handles it.'
+    null
   )
 })
 
