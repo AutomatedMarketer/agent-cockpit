@@ -747,3 +747,60 @@ test('every top-level folder in the repo gets its own filter chip', () => {
   }
   assert.match(nodes, /Search 4 pages/)
 })
+
+/* ---------- Connections ------------------------------------------------------------------------
+
+   The whole point of connections/register.yml, in its own words: "a line in here without a
+   verified date and a proof is a claim, not a connection, and the dashboard shows it as unproven."
+   That unproven path had NO test at all, and the Connections screen had none beyond "it draws
+   something". So the one state this file exists to make visible was the one nothing checked - and
+   a scratch repo where everything happens to be proved would never show it either. */
+
+const connection = (over = {}) => ({
+  name: 'Gmail', slug: 'gmail', kind: 'connector', account: 'dana@example.com',
+  scopes: ['read', 'draft'], usedBy: ['inbox-triage'],
+  verified: '2026-08-24', proof: 'Read the subject lines of the three most recent messages',
+  proved: true, ...over
+})
+
+test('a proved connection shows its date and the thing it actually did', () => {
+  const drawn = render({ ...base, connections: [connection()] }).get('connections').innerHTML
+  assert.match(drawn, /Proved 2026-08-24/)
+  assert.match(drawn, /Read the subject lines of the three most recent messages/)
+  assert.ok(!drawn.includes('Unproven'))
+})
+
+test('a connection with no proof is called a claim, not a connection', () => {
+  const drawn = render({
+    ...base,
+    connections: [connection({ verified: null, proof: null, proved: false })]
+  }).get('connections').innerHTML
+
+  assert.match(drawn, /Unproven/, 'an unproved connection was shown as though it were proved')
+  assert.match(drawn, /a claim rather than a connection/)
+  assert.match(drawn, /\/connect/, 'it says it is unproven but not what to do about it')
+  assert.ok(!drawn.includes('Proved'), 'an unproved connection claimed a proof date')
+})
+
+test('a connection nothing depends on says so rather than showing an empty line', () => {
+  const drawn = render({ ...base, connections: [connection({ usedBy: [] })] }).get('connections').innerHTML
+  assert.match(drawn, /no workflow depends on it yet/)
+})
+
+/* A runtime is somebody's own machine. The heartbeat is the only thing that knows whether it is
+   still there, and "an agent that stopped three weeks ago is worse than no agent, because you were
+   counting on it" - so each of the three states has to be distinguishable on sight. */
+
+const runtime = (over = {}) => ({ name: 'Studio box', kind: 'agent-runtime', url: 'http://box.example:8080', heartbeat: 'runs/heartbeat/box.json', status: 'live', lastBeat: new Date().toISOString(), ...over })
+
+test('a runtime that has gone quiet does not read the same as one that is running', () => {
+  const live = render({ ...base, runtimes: [runtime()] }).get('connections').innerHTML
+  const silent = render({ ...base, runtimes: [runtime({ status: 'silent', lastBeat: new Date(Date.now() - 3 * 3600_000).toISOString() })] }).get('connections').innerHTML
+  const never = render({ ...base, runtimes: [runtime({ status: 'no-heartbeat', lastBeat: null })] }).get('connections').innerHTML
+
+  assert.match(live, /Live/)
+  assert.match(silent, /Silent/)
+  assert.match(never, /No heartbeat/)
+  assert.match(never, /no heartbeat file yet/, 'a runtime that never checked in showed a blank instead of saying so')
+  assert.notEqual(live, silent, 'a running box and a stopped one render identically')
+})
