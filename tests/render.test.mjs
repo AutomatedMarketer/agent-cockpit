@@ -507,3 +507,100 @@ test('an agent that has never run says so instead of inviting a tap into nothing
   assert.match(nodes, /1 run logged/, 'a single run was described as "1 runs"')
   assert.ok(!/1 runs logged/.test(nodes))
 })
+
+/* The Workflows screen ran to nearly four thousand pixels on a phone, and most of it was the same
+   sixty words. The explanation of what arming DOES was printed on every card, and every repo ships
+   nine jobs all switched off on purpose, so every repo showed it nine times. Three separate things
+   were wrong on that one screen, and all three are only visible in a picture of it. */
+
+const nineWorkflows = (overrides = {}) =>
+  Array.from({ length: 9 }, (unused, index) => workflow({
+    slug: `job-${index}`, name: `Job ${index}`, owner: 'research',
+    schedule: 'daily 06:30', arm: 'off', reason: 'Off until there is something to read.',
+    ...overrides
+  }))
+
+test('the arming explanation is given once, not on every card', () => {
+  const drawn = render({ ...base, workflows: nineWorkflows() }).get('workflows').innerHTML
+  const times = drawn.split('Arming is what makes a schedule real').length - 1
+  assert.equal(times, 1, `the arming paragraph appears ${times} times on one screen`)
+})
+
+test('the arming explanation disappears when there is nothing left to arm', () => {
+  const drawn = render({ ...base, workflows: nineWorkflows({ arm: 'armed', reason: null }) }).get('workflows').innerHTML
+  assert.ok(!drawn.includes('Arming is what makes a schedule real'))
+})
+
+test('the Workflows screen does not tell you to go to the Workflows screen', () => {
+  const drawn = render({ ...base, workflows: nineWorkflows() }).get('workflows').innerHTML
+  assert.ok(!drawn.includes('see the Workflows screen'), 'the screen pointed at itself')
+  assert.match(drawn, /each one is listed below/)
+})
+
+test('Today still points at the Workflows screen, because from there it is a real direction', () => {
+  const drawn = render({ ...base, workflows: nineWorkflows() }).get('today').innerHTML
+  assert.match(drawn, /see the Workflows screen/)
+})
+
+test('a reason that already begins with Off is not labelled Off twice', () => {
+  const drawn = render({
+    ...base,
+    workflows: [
+      workflow({ slug: 'a', name: 'A', owner: 'research', schedule: 'daily 06:30', arm: 'off', reason: 'Off until there is an inbox.' }),
+      workflow({ slug: 'b', name: 'B', owner: 'research', schedule: 'daily 06:30', arm: 'off', reason: 'Waiting on a decision from Ray.' })
+    ]
+  }).get('workflows').innerHTML
+
+  assert.ok(!/Off:\s*Off /.test(drawn), 'the word Off was printed twice')
+  assert.match(drawn, /Off until there is an inbox\./)
+  assert.match(drawn, /Off: Waiting on a decision from Ray\./, 'a reason that needs the label lost it')
+})
+
+/* The count of jobs that name a time and are fired by nothing was computed once and printed on
+   only ONE of the two branches - the one where nothing rings at all. So the moment a repo armed
+   its first job it fell into the other branch and that count vanished, from Today and from the
+   Workflows screen both. That is the mixed state every real repo is in after week one, and this
+   count is the only guard against a board showing nine jobs as scheduled when one of them rings. */
+
+test('the silent-job count survives a repo that has armed something', () => {
+  const mixed = [
+    workflow({ slug: 'rings', name: 'Rings', owner: 'research', schedule: 'daily 06:30', arm: 'armed', armed: true }),
+    workflow({ slug: 'silent-a', name: 'Silent A', owner: 'research', schedule: 'daily 07:00', arm: 'declared' }),
+    workflow({ slug: 'silent-b', name: 'Silent B', owner: 'research', schedule: 'daily 08:00', arm: 'declared' })
+  ]
+  const nodes = render({ ...base, workflows: mixed })
+
+  for (const screen of ['today', 'workflows']) {
+    const drawn = nodes.get(screen).innerHTML
+    assert.match(
+      drawn,
+      /2 other jobs name a time in their files and nothing fires them/,
+      `the ${screen} screen dropped the silent-job count as soon as one job was armed`
+    )
+    // And it has to come BEFORE the week grid. A caveat read after four columns of a calendar
+    // that looks complete has already lost - which is why the arm state prints before the
+    // schedule chip everywhere else on this page.
+    assert.ok(
+      drawn.indexOf('other jobs name a time') < drawn.indexOf('schedule-scroll'),
+      `on ${screen} the warning sits under the calendar it is there to undermine`
+    )
+  }
+})
+
+test('one silent job is counted in the singular, alongside something that rings', () => {
+  const nodes = render({
+    ...base,
+    workflows: [
+      workflow({ slug: 'rings', name: 'Rings', owner: 'research', schedule: 'daily 06:30', arm: 'armed', armed: true }),
+      workflow({ slug: 'silent', name: 'Silent', owner: 'research', schedule: 'daily 07:00', arm: 'declared' })
+    ]
+  })
+  assert.match(nodes.get('today').innerHTML, /1 other job names a time in its file and nothing fires it/)
+})
+
+test('the step chain wraps instead of being cut off mid-word', () => {
+  const styles = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+  const rule = styles.match(/\n\s*\.steps \{[^}]*\}/)[0]
+  assert.ok(!rule.includes('nowrap'), 'the chain is clipped again, and the last step is the one that names the job')
+  assert.ok(!rule.includes('overflow-x'), 'the chain is behind a sideways scroll again')
+})

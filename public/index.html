@@ -78,7 +78,14 @@
   .empty { padding: 1rem; color: var(--muted); font-size: .875rem; }
   code { background: var(--chip); padding: .1rem .3rem; border-radius: 4px; font-size: .85em; }
   .title { font-size: .975rem; font-weight: 600; margin: 0; }
-  .steps { color: var(--muted); font-size: .8125rem; margin: .3rem 0 .1rem; overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+  /* The chain wraps rather than scrolling sideways. It used to be `nowrap; overflow-x: auto`, so
+     at phone width a three-step chain was cut off mid-word - "review-dr" just stopped - with no
+     ellipsis, no fade, nothing saying it could be swiped. It read as a rendering fault, and a
+     sideways scroller inside a page that scrolls down is missed by a thumb anyway. This is the one
+     screen whose whole job is saying what each job does, so the last step - usually the one that
+     identifies it - is not something to hide. Wrapping costs a variable card height and nothing
+     else. */
+  .steps { color: var(--muted); font-size: .8125rem; margin: .3rem 0 .1rem; overflow-wrap: anywhere; }
   .steps b { color: var(--ink); font-weight: 500; }
 
   /* Screens */
@@ -882,8 +889,11 @@ function ranOnDays(runs, slug) {
 function scheduleStripHtml(workflows, options = {}) {
   const scheduled = workflows.filter((workflow) => workflow.schedule && ringsNow(workflow))
   const silent = workflows.filter((workflow) => workflow.schedule && !ringsNow(workflow))
+  // `here` means this strip is being drawn ON the Workflows screen, where pointing the reader at
+  // the Workflows screen is a sentence that sends them nowhere. The count still belongs; only the
+  // direction changes.
   const silentNote = silent.length
-    ? `<p class="small muted">${silent.length === 1 ? '1 other job names a time in its file and nothing fires it' : silent.length + ' other jobs name a time in their files and nothing fires them'} - see the Workflows screen.</p>`
+    ? `<p class="small muted">${silent.length === 1 ? '1 other job names a time in its file and nothing fires it' : silent.length + ' other jobs name a time in their files and nothing fires them'} - ${options.here ? 'each one is listed below.' : 'see the Workflows screen.'}</p>`
     : ''
   if (!scheduled.length) {
     return silentNote
@@ -938,7 +948,25 @@ function scheduleStripHtml(workflows, options = {}) {
   const key = dates
     ? `<div class="cal-key"><span>&#10003; ran</span><span>&#9679; was due, no run logged</span><span>no mark: still to come</span></div>`
     : ''
+  // silentNote belongs on BOTH branches. It was computed above and then only ever printed on the
+  // "nothing rings at all" branch, so the moment a repo armed its first job it fell into this
+  // branch and the count of jobs that declare a time and are fired by nothing silently vanished -
+  // from Today and from here. That is the exact mixed state every real repo is in after week one,
+  // and this count is the one guard against a board that shows nine jobs "running" when one is.
+  // silentNote goes ABOVE the calendar, not after it. It belongs on both branches - it used to be
+  // printed only on the "nothing rings at all" one, so the moment a repo armed its first job it
+  // fell into this branch and the count of jobs that declare a time and are fired by nothing
+  // silently vanished, from Today and from here. That is the mixed state every real repo is in
+  // after week one, and this count is the one guard against a board that shows nine jobs as
+  // scheduled when one rings.
+  //
+  // First, because this file already works that way everywhere else it has to undermine something
+  // that looks like a fact: the snapshot banner prints before the workflow list, and the arm state
+  // prints before the schedule chip precisely so the chip is never left standing on its own. A
+  // week grid is that same chip at the size of a whole panel, and a caveat read after four columns
+  // of a calendar that looks complete has already lost.
   return `<h2>${escapeHtml(heading)}</h2><div class="panel">
+    ${silentNote}
     <div class="schedule-scroll"><div class="week">${columns}</div></div>
     ${footnotes.length ? `<div class="sched-foot">${footnotes.join(' ')}</div>` : ''}
     ${key}
@@ -1046,7 +1074,10 @@ function renderWorkflows() {
       : workflow.arm === 'unapproved'
         ? `<div class="small bad">A routine is firing for this and the file says it is off. It is spending runs nobody approved.</div>`
         : workflow.arm === 'off' && workflow.reason
-          ? `<div class="small muted">Off: ${escapeHtml(workflow.reason)}</div>`
+          // Every reason the template ships already opens with "Off until ...", so labelling it
+          // "Off:" printed the word twice on all nine cards. The label only earns its place when
+          // the owner's own reason does not already say it.
+          ? `<div class="small muted">${/^off\b/i.test(workflow.reason.trim()) ? '' : 'Off: '}${escapeHtml(workflow.reason)}</div>`
           : ''
     const problems = workflow.problems.length
       ? `<ul class="problems">${workflow.problems.map((problem) => `<li>${escapeHtml(problem)}</li>`).join('')}</ul>`
@@ -1065,12 +1096,13 @@ function renderWorkflows() {
       : ''
     // Arming goes through the general intake, not this workflow's own trigger - a job being armed
     // has no routine yet, so it has no trigger URL of its own to dispatch to.
+    // The explanation of what arming DOES is printed once at the top of this screen, not on every
+    // card. It shipped per-card, so a repo with nine unarmed jobs - which is every repo, because
+    // everything ships off on purpose - showed the same sixty words nine times and the screen ran
+    // to nearly four thousand pixels on the phone it is meant to be read on.
     const armButton = workflow.arm === 'declared' || workflow.arm === 'off'
       ? `<button class="fire" type="button" data-arm="${escapeHtml(workflow.slug)}"
-           title="Asks your team to create a real routine for this job">Arm</button>
-         <div class="small muted">Arming is what makes a schedule real, and it is the point where
-         this job starts spending runs. Your team asks for your run cap first and confirms the
-         routine exists afterwards; it never arms anything silently.</div>`
+           title="Asks your team to create a real routine for this job">Arm</button>`
       : ''
     return `<div class="panel card agent-accent ${workflow.state}"${accentStyle(workflow.owner)}>
       <div class="row between">
@@ -1090,7 +1122,14 @@ function renderWorkflows() {
       ${problems}
     </div>`
   }).join('')
-  el('workflows').innerHTML = snapshotBannerHtml(data.routines) + scheduleStripHtml(data.workflows) + `<div class="stack">${cards}</div>` + routineProblemsHtml(data.routines) + orphanRoutinesHtml(data.routines)
+  // Said once, above the list, rather than on each of nine cards.
+  const armable = data.workflows.some((workflow) => workflow.arm === 'declared' || workflow.arm === 'off')
+  const armingNote = armable
+    ? `<p class="small muted">Arming is what makes a schedule real, and it is the point where a job
+       starts spending runs. Your team asks for your run cap first and confirms the routine exists
+       afterwards; it never arms anything silently.</p>`
+    : ''
+  el('workflows').innerHTML = snapshotBannerHtml(data.routines) + scheduleStripHtml(data.workflows, { here: true }) + armingNote + `<div class="stack">${cards}</div>` + routineProblemsHtml(data.routines) + orphanRoutinesHtml(data.routines)
 }
 
 /* ---------- Memory ---------- */
