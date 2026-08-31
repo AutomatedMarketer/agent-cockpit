@@ -236,6 +236,19 @@ const QUOTABLE = {
   'in a quote wrapped over two lines': '> I do not sell - Ray\n> handles it.',
   'in a quote wrapped over three lines': '> I do not sell -\n> Ray handles\n> it.',
   'as a bullet with an indented continuation': '- I do not sell - Ray\n  handles it.',
+  // A LEAD-IN above the answer. These are the shapes that showed the real mistake: five rounds
+  // were spent moving a block boundary around, and a block boundary is not a sentence boundary.
+  // Close on every marked line and a wrapped quote gets cut in half; stop closing and an unrelated
+  // lead-in glues itself on. The last one has no markdown in it at all and was wrong from round 1.
+  'under a lead-in inside a quote': '> Notes\n> ' + REFUSAL,
+  'under a bare lead-in': 'Notes\n' + REFUSAL,
+  'under a lead-in ending in a colon': 'Quick answer:\n' + REFUSAL,
+  'in the middle of a wrapped paragraph': 'We bid a lot of work. I do not sell - Ray\nhandles it. I assemble the packs.',
+  // A finished refusal with more prose under it in the same block. Without this row, nothing
+  // noticed when the forward-reach stopped checking whether the sentence had actually ended - the
+  // mutation ran through the rest of the block and every test still passed, because in every other
+  // fixture the refusal happened to be the last line.
+  'with another sentence on the line below it': REFUSAL + '\nRay also picks which jobs we bid.',
   'as a nested bullet under a lead-in': '- Reasons\n  - ' + REFUSAL,
   'as a bullet under a lead-in inside a quote': '> Notes\n> - ' + REFUSAL,
   'below a fenced example': '```\nexample: I do not sell.\n```\n\n' + REFUSAL,

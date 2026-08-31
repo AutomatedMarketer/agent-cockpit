@@ -185,7 +185,7 @@ function proseBlocks(knowledgeBody) {
   let current = []
   let inFence = false
   const close = () => {
-    if (current.length) blocks.push(current.join(' '))
+    if (current.length) blocks.push(current)
     current = []
   }
 
@@ -232,11 +232,46 @@ function proseBlocks(knowledgeBody) {
   return blocks
 }
 
+// Start where the refusal starts, and join FORWARD only.
+//
+// Five rounds of this were spent moving a block boundary around, and the mistake underneath all of
+// them was treating a block boundary as a sentence boundary. They are not the same thing, which is
+// why the same bug kept coming back wearing different markdown: close on every marked line and a
+// genuinely wrapped quote gets cut in half; stop closing and an unrelated lead-in glues itself on.
+// Both are wrong, and no rule about markers can separate them, because the difference is not
+// structural. It is that one line CONTINUES the sentence and the other PRECEDES it.
+//
+//   Quick answer:                      <- glued on, and there is no markdown here at all
+//   I do not sell - Ray handles it.
+//
+//   I do not deal with customers -     <- must join, and looks identical to a walker
+//   enquiries go to Ray.
+//
+// So this finds the line the refusal BEGINS on, takes the sentence from there, and only reaches
+// forward for more when that sentence has not ended. Nothing before it can be dragged in, because
+// nothing before it is ever looked at.
 export function notInUseBecause(knowledgeBody) {
   if (!notInUse(knowledgeBody)) return null
+
   for (const block of proseBlocks(knowledgeBody)) {
-    const refusal = block.split(/(?<=[.!?])\s+/).find((sentence) => NOT_IN_USE.test(sentence))
-    if (refusal) return refusal.replace(/\s+/g, ' ').trim() || null
+    const start = block.findIndex((line) => NOT_IN_USE.test(line))
+    if (start === -1) continue
+
+    // The refusal may sit mid-line, after other sentences on the same line.
+    const sentences = block[start].split(/(?<=[.!?])\s+/)
+    const at = sentences.findIndex((sentence) => NOT_IN_USE.test(sentence))
+    // Only the matching sentence, not the rest of its line: a paragraph written on one line can
+    // carry the refusal in the middle of it, and what follows is a different sentence.
+    const taken = [sentences[at]]
+
+    // Reach forward only while the sentence is unfinished, and only as far as it needs: a
+    // continuation line can carry the end of this sentence AND the start of the next one, and the
+    // next one is not part of the quote.
+    const finished = (text) => /[.!?]["')\]]?$/.test(text.trim())
+    for (let i = start + 1; i < block.length && !finished(taken.at(-1)); i += 1) {
+      taken.push(block[i].split(/(?<=[.!?])\s+/)[0])
+    }
+    return taken.join(' ').replace(/\s+/g, ' ').trim() || null
   }
   return null
 }
