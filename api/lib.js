@@ -152,25 +152,78 @@ export function notInUse(knowledgeBody) {
 //   markdown slip that silently makes that line a heading.
 //
 //   BLOCK MARKERS - a `>` quote or a `-` bullet - came back stuck to the front of the sentence.
-function ownProse(knowledgeBody) {
-  return ownWords(knowledgeBody)
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/~~~[\s\S]*?~~~/g, ' ')
-    .replace(/^#{1,6} .*$/gm, ' ')
-    .replace(/^.*\r?\n[=-]{2,}[ \t]*$/gm, ' ')
-    .replace(/^[ \t]{0,3}(?:[>*+-]|\d+[.)])[ \t]+/gm, '')
+// Everything in a knowledge file that is plainly the owner's own prose, split into blocks.
+//
+// This was three rounds of stripping one markdown construct at a time, and each round claimed to
+// have solved "markdown" while only handling what had just been found. The costs are not
+// symmetrical, and that is what decides the design: returning NOTHING is safe - the card still
+// says the agent is switched off, which is the half that matters - while returning the wrong
+// sentence puts words in somebody's mouth on the one field whose whole premise is quoting them
+// accurately. So this is deliberately conservative. When a line is not obviously the owner
+// talking, it is dropped, and if that leaves nothing quotable the answer is null.
+//
+// What gets dropped, and why:
+//   FENCED and INDENTED CODE. Both are examples. The fenced kind returned "``` example: I do not
+//   sell." as the owner's words; the indented kind did the same thing one syntax over, and a
+//   non-technical writer is likelier to indent a pasted example than to type three backticks.
+//   HEADINGS, both ATX and setext. They have no full stop, so a sentence walker runs straight
+//   through them and glues the file's structure onto the answer.
+//   BLOCK MARKERS, repeatedly - `>`, bullets, numbers, and nests of them. One pass left the outer
+//   level of `> >` attached.
+//
+// And the reason blocks exist at all: a line that STARTS a new list item or quote begins a new
+// block, so a lead-in like "- Reasons" cannot run into the item beneath it. Wrapped lines inside
+// one block still join, because a refusal written across two lines is one sentence.
+function proseBlocks(knowledgeBody) {
+  const MARKERS = /^[ \t]{0,3}(?:(?:[>*+-]|\d+[.)])[ \t]*)+/
+  const blocks = []
+  let current = []
+  let inFence = false
+  const close = () => {
+    if (current.length) blocks.push(current.join(' '))
+    current = []
+  }
+
+  for (const line of ownWords(knowledgeBody).split(/\r?\n/)) {
+    if (/^[ \t]{0,3}(?:```|~~~)/.test(line)) {
+      inFence = !inFence
+      close()
+      continue
+    }
+    if (inFence) continue
+    if (/^[ \t]{4,}\S/.test(line)) {
+      close()
+      continue
+    }
+    if (/^[ \t]{0,3}#{1,6}[ \t]/.test(line)) {
+      close()
+      continue
+    }
+    // A setext underline turns the line above it into a heading, so that line goes too.
+    if (/^[ \t]{0,3}[=-]{2,}[ \t]*$/.test(line)) {
+      current.pop()
+      close()
+      continue
+    }
+    if (!line.trim()) {
+      close()
+      continue
+    }
+    if (MARKERS.test(line)) close()
+    const text = line.replace(MARKERS, '').trim()
+    if (text) current.push(text)
+  }
+  close()
+  return blocks
 }
 
 export function notInUseBecause(knowledgeBody) {
   if (!notInUse(knowledgeBody)) return null
-  const refusal = ownProse(knowledgeBody)
-    .split(/(?<=[.!?])\s+/)
-    .find((sentence) => NOT_IN_USE.test(sentence))
-  if (!refusal) return null
-  const cleaned = refusal.replace(/\s+/g, ' ').trim()
-  // A refusal that only exists inside something structural leaves nothing to quote. The card is
-  // built to show "not in use" with no reason rather than invent one - see renderTeam.
-  return cleaned || null
+  for (const block of proseBlocks(knowledgeBody)) {
+    const refusal = block.split(/(?<=[.!?])\s+/).find((sentence) => NOT_IN_USE.test(sentence))
+    if (refusal) return refusal.replace(/\s+/g, ' ').trim() || null
+  }
+  return null
 }
 
 // runs must be newest first. States match the Team screen: working / attention / quiet /

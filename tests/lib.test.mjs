@@ -198,53 +198,87 @@ test('nothing at all gives nothing back', () => {
   }
 })
 
-/* A sentence walker cannot see markdown. Anything structural it walks through gets glued onto the
-   answer, and anything EXAMPLE-shaped it finds gets handed back as though the owner wrote it.
+/* ---------- the reason behind a switched-off agent ---------------------------------------------
 
-   The first version stripped `#` headings only, and its commit said "markdown headings are
-   stripped" - false as a general claim. Three things got through, and one was not cosmetic: a file
-   with an example inside a code fence and the real answer below it returned the EXAMPLE, backticks
-   and all, presented as the owner's own words. Fabricated attribution is worse than no reason. */
+   This took four rounds and every round made the same mistake: fix the markdown construct that was
+   just found, then claim "markdown is handled". A sentence walker cannot see markdown, and there
+   is always another construct.
+
+   The costs are not symmetrical, and that is what settled the design. Returning NOTHING is safe -
+   the card still says the agent is switched off, which is the half that matters. Returning the
+   wrong sentence puts words in somebody's mouth, on the one field whose whole premise is quoting
+   them accurately. Twice this returned an EXAMPLE out of the file - once from a fenced block, once
+   from an indented one - presented as the owner's own words.
+
+   So the extractor is deliberately conservative, and this is a table rather than a handful of
+   cases: every shape it claims to handle is written down, and the two it must REFUSE are written
+   down beside them. */
 
 const REFUSAL = 'I do not sell - Ray handles it.'
 
-test('the owner\'s real answer wins over an example in a code fence', () => {
-  const body = '# FAQ\n\n```\nexample: I do not sell.\n```\n\nI do not sell - the real reason is Ray handles it.\n'
-  assert.equal(notInUseBecause(body), 'I do not sell - the real reason is Ray handles it.')
+const QUOTABLE = {
+  'plain prose': REFUSAL,
+  'under an atx heading': '## What I sell\n' + REFUSAL,
+  'under a setext heading, dashes': 'Title\n-----\n' + REFUSAL,
+  'under a setext heading, equals': 'Section\n======\n' + REFUSAL,
+  'in a blockquote': '> ' + REFUSAL,
+  'in a nested blockquote': '> > ' + REFUSAL,
+  'as a bullet': '- ' + REFUSAL,
+  'as a star bullet': '* ' + REFUSAL,
+  'as a numbered item': '1. ' + REFUSAL,
+  'as a numbered item with a bracket': '2) ' + REFUSAL,
+  'as an indented bullet': '   - ' + REFUSAL,
+  'as a nested bullet under a lead-in': '- Reasons\n  - ' + REFUSAL,
+  'as a bullet under a lead-in inside a quote': '> Notes\n> - ' + REFUSAL,
+  'below a fenced example': '```\nexample: I do not sell.\n```\n\n' + REFUSAL,
+  'below an indented example': '    example: I do not sell.\n\n' + REFUSAL,
+  'in the middle of a paragraph': 'We bid a lot of work. ' + REFUSAL + ' I assemble the packs.',
+  'with no full stop at the end': 'I do not sell - Ray handles it'
+}
+
+const MUST_REFUSE = {
+  'only inside a fenced block': '```\nI do not sell.\n```',
+  'only inside a tilde fence': '~~~\nI do not sell.\n~~~',
+  'only inside an indented block': '    I do not sell.',
+  'only inside a heading': '## I do not sell',
+  // A setext heading is its title line plus the underline beneath it. Without removing that title
+  // line the refusal would be quoted from a heading, which is the one case the pop() in
+  // proseBlocks exists for - and until this row nothing tested it.
+  'only inside a setext heading': 'I do not sell - Ray handles it.\n-----'
+}
+
+for (const [shape, body] of Object.entries(QUOTABLE)) {
+  test(`the reason is quoted cleanly when written ${shape}`, () => {
+    const expected = shape === 'with no full stop at the end' ? 'I do not sell - Ray handles it' : REFUSAL
+    assert.equal(notInUseBecause('# FAQ\n\n' + body + '\n'), expected)
+  })
+}
+
+for (const [shape, body] of Object.entries(MUST_REFUSE)) {
+  test(`nothing is quoted when the refusal is ${shape}`, () => {
+    assert.equal(
+      notInUseBecause('# FAQ\n\n' + body + '\n'),
+      null,
+      'an example was handed back as the owner\'s own words - saying nothing is the safe answer'
+    )
+  })
+}
+
+test('a refusal wrapped across two lines is one sentence, not two', () => {
+  const body = '# FAQ\n\n## Who do you answer\nI do not deal with customers -\nenquiries go to Ray.\n'
+  assert.equal(notInUseBecause(body), 'I do not deal with customers - enquiries go to Ray.')
 })
 
-test('a refusal that exists only inside a code fence is not quoted at all', () => {
-  const body = '# X\n\n```\nI do not sell.\n```\n'
-  assert.equal(notInUseBecause(body), null, 'an example was handed back as the owner\'s own words')
+test('an agent that is in use has no reason to give', () => {
+  assert.equal(notInUseBecause(knowledgeFixture.guidance.sales + '## What I sell\nCommercial landscape design.\n'), null)
 })
 
-test('a tilde fence is a fence too', () => {
-  const body = '# X\n\n~~~\nexample: I do not sell.\n~~~\n\nI do not sell - Ray handles it.\n'
-  assert.equal(notInUseBecause(body), REFUSAL)
+test('the shipped guidance example is never mistaken for an answer', () => {
+  assert.equal(notInUseBecause(knowledgeFixture.guidance.sales), null)
 })
 
-test('markdown structure never ends up glued to the sentence', () => {
-  const around = {
-    'atx heading': '## What I sell\n' + REFUSAL,
-    'setext with dashes': 'Title\n-----\n' + REFUSAL,
-    'setext with equals': 'Section\n======\n' + REFUSAL,
-    'blockquote': '> ' + REFUSAL,
-    'bullet': '- ' + REFUSAL,
-    'star bullet': '* ' + REFUSAL,
-    'numbered': '1. ' + REFUSAL,
-    'numbered with bracket': '2) ' + REFUSAL,
-    'indented bullet': '   - ' + REFUSAL
+test('nothing at all gives nothing back', () => {
+  for (const body of ['', null, undefined, '# FAQ\n\nnothing here\n']) {
+    assert.equal(notInUseBecause(body), null)
   }
-  for (const [shape, body] of Object.entries(around)) {
-    assert.equal(notInUseBecause('# FAQ\n\n' + body + '\n'), REFUSAL, `${shape} leaked into the sentence`)
-  }
-})
-
-test('a refusal with no full stop at the end still comes back whole', () => {
-  assert.equal(notInUseBecause('# X\n\nI do not sell - Ray handles it'), 'I do not sell - Ray handles it')
-})
-
-test('only the refusal comes back, not the paragraph around it', () => {
-  const body = '# X\n\nWe bid a lot of work. I do not sell - Ray handles it. I assemble the packs.\n'
-  assert.equal(notInUseBecause(body), REFUSAL)
 })
