@@ -124,6 +124,28 @@ export function notInUse(knowledgeBody) {
   return NOT_IN_USE.test(ownWords(knowledgeBody))
 }
 
+// The owner's own sentence for WHY this agent is off, so the board can show it.
+//
+// There are three deliberately-off states on this board and the other two both show the reason: a
+// workflow with `armed: false` prints its `reason:`, and a parked ledger row prints its
+// `parked_because:`. This one read the file, took a boolean out of it, and threw the sentence away
+// - so the two agents somebody has switched off looked exactly like two agents nobody had got to,
+// separated only by a small grey label.
+//
+// DISPLAY ONLY. `notInUse` above is the judgement that is mirrored in agent-team-template and held
+// to tests/fixtures/knowledge-parity.json; this is not part of that contract and the template has
+// no need of it.
+export function notInUseBecause(knowledgeBody) {
+  if (!notInUse(knowledgeBody)) return null
+  // Headings are dropped before the split. A markdown heading has no full stop, so a sentence
+  // walker runs straight through it and hands back "## What I sell I do not sell - ...", which is
+  // the file's structure glued onto the owner's answer.
+  const prose = ownWords(knowledgeBody).replace(/^#{1,6} .*$/gm, '')
+  const refusal = prose.split(/(?<=[.!?])\s+/).find((sentence) => NOT_IN_USE.test(sentence))
+  if (!refusal) return null
+  return refusal.replace(/\s+/g, ' ').trim() || null
+}
+
 // runs must be newest first. States match the Team screen: working / attention / quiet /
 // never-run / not-in-use. "Quiet" is the one that matters — an agent that silently stopped is
 // worse than no agent, because you were counting on it.

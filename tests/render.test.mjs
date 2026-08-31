@@ -1064,3 +1064,34 @@ test('a week with no rate is counted in hours and never in money', () => {
   assert.ok(!/<b>\$/.test(drawn), 'a money figure appeared for somebody who gave no rate')
   assert.ok(!drawn.includes('at the rate you set'), 'it claimed a rate that was never given')
 })
+
+/* Three states on this board mean "deliberately off", and two of them show the owner's own reason:
+   a workflow with armed: false prints its `reason:`, and a parked ledger row prints its
+   `parked_because:`. An agent switched off printed nothing - the board read the knowledge file to
+   decide it, took a boolean, and threw the sentence away. So the two agents somebody had switched
+   off looked exactly like two nobody had got to, separated by a small grey label. */
+
+test('an agent switched off says why, in the owner\'s own words', () => {
+  const drawn = render({
+    ...base,
+    agents: [
+      { slug: 'sales', description: 'Researches a prospect.', model: 'opus', lastRun: null, lastStatus: null, runsThisWeek: 0, totalRuns: 0, state: 'not-in-use', notInUseBecause: 'I do not sell - the selling is Ray\'s job.' },
+      { slug: 'content', description: 'Writes posts.', model: 'opus', lastRun: null, lastStatus: null, runsThisWeek: 0, totalRuns: 0, state: 'never-run', notInUseBecause: null }
+    ]
+  }).get('team').innerHTML
+
+  assert.match(drawn, /I do not sell - the selling is Ray&#39;s job\./, 'the reason was thrown away')
+  assert.match(drawn, /Switched off, so nothing runs it/)
+  // and an agent nobody has got to yet must NOT borrow that wording
+  const contentCard = drawn.slice(drawn.indexOf('content'))
+  assert.ok(!contentCard.includes('Switched off'), 'an unused agent was described as switched off')
+  assert.match(contentCard, /Nothing logged yet/)
+})
+
+test('a switched-off agent is not invited to be tapped into an empty drawer', () => {
+  const drawn = render({
+    ...base,
+    agents: [{ slug: 'sales', description: 'd', model: 'opus', lastRun: null, lastStatus: null, runsThisWeek: 0, totalRuns: 0, state: 'not-in-use', notInUseBecause: 'I do not sell.' }]
+  }).get('team').innerHTML
+  assert.ok(!drawn.includes('tap to read them'), 'a switched-off agent invited a tap into nothing')
+})

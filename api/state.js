@@ -17,6 +17,7 @@ import {
   daysSince,
   stateFor,
   notInUse,
+  notInUseBecause,
   fillMarkers,
   sortRunsNewestFirst,
   runsSince,
@@ -921,6 +922,8 @@ export default async function handler(request, response) {
     }
     const runs = sortRunsNewestFirst(parsedRuns)
 
+    // Built once. It was `Object.fromEntries(knowledgeFiles)` inside the loop, rebuilt per agent.
+    const knowledgeFor = Object.fromEntries(knowledgeFiles)
     const agents = agentPaths.map((path, index) => {
       const slug = path.slice(AGENT_DIR.length + 1, -3)
       const data = parseFrontmatter(agentFiles[index][1])
@@ -933,7 +936,11 @@ export default async function handler(request, response) {
         lastStatus: mine[0]?.status ?? null,
         runsThisWeek: mine.filter((run) => (daysSince(run.started_at, now) ?? 99) <= 7).length,
         totalRuns: mine.length,
-        state: stateFor(mine, now, notInUse(Object.fromEntries(knowledgeFiles)[slug]))
+        state: stateFor(mine, now, notInUse(knowledgeFor[slug])),
+        // The owner's own sentence for why this one is switched off, so the card can say it. Null
+        // for every agent that is not switched off - which is six of the eight, and both of the
+        // two that can be.
+        notInUseBecause: notInUseBecause(knowledgeFor[slug])
       }
     })
 

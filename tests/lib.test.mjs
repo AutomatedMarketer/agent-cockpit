@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   notInUse,
+  notInUseBecause,
   ownWords,
   parseFrontmatter,
   daysSince,
@@ -161,4 +162,38 @@ test('stripping the quoted example is what the rule depends on', () => {
   const guidance = knowledgeFixture.guidance.sales
   assert.notEqual(ownWords(guidance), guidance, 'the quoted example is no longer being stripped')
   assert.equal(ownWords('plain prose with no example'), 'plain prose with no example')
+})
+
+/* The sentence behind a switched-off agent, so the board can print it. Display only - notInUse is
+   the judgement mirrored in agent-team-template and held to knowledge-parity.json; this is not. */
+
+test('the refusal sentence is pulled out of the file the board already read', () => {
+  const guidance = knowledgeFixture.guidance.sales
+  const written = guidance + '## What I sell\nI do not sell - I work for this business and the selling is Ray\'s job.\n\nIf that changes, this is where it gets written down.\n'
+  assert.equal(
+    notInUseBecause(written),
+    'I do not sell - I work for this business and the selling is Ray\'s job.',
+    'the refusal sentence was lost, or dragged the paragraph after it along'
+  )
+})
+
+test('an agent that is in use has no reason to give', () => {
+  const answered = knowledgeFixture.guidance.sales + '## What I sell\nCommercial landscape design.\n'
+  assert.equal(notInUseBecause(answered), null)
+})
+
+test('the guidance example is never mistaken for the owner\'s reason', () => {
+  // The shipped paragraph quotes the sentence, placeholder and all. It is not an answer.
+  assert.equal(notInUseBecause(knowledgeFixture.guidance.sales), null)
+})
+
+test('a refusal spread over two lines comes back as one sentence', () => {
+  const wrapped = '# FAQ\n\n## Who do you answer\nI do not deal with customers -\nenquiries go to Ray.\n'
+  assert.equal(notInUseBecause(wrapped), 'I do not deal with customers - enquiries go to Ray.')
+})
+
+test('nothing at all gives nothing back', () => {
+  for (const body of ['', null, undefined, '# FAQ\n\nnothing here\n']) {
+    assert.equal(notInUseBecause(body), null)
+  }
 })

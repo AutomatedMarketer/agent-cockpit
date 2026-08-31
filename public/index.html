@@ -858,8 +858,20 @@ function renderTeam() {
           <span class="chip">${agent.runsThisWeek} this week</span>
           <span class="small muted">last run ${escapeHtml(ago(agent.lastRun))}</span>
         </div>
+        ${
+          // Why this one is switched off, in the owner's own words, taken from the knowledge file
+          // the board already read to decide it. The other two deliberately-off states on this
+          // board both show their reason - a workflow prints its `reason:`, a parked ledger row
+          // prints its `parked_because:` - and this one showed nothing, so an agent somebody
+          // switched off on purpose looked like an agent nobody had got to.
+          agent.notInUseBecause
+            ? `<div class="small muted">${escapeHtml(agent.notInUseBecause)}</div>`
+            : ''
+        }
         <span class="runcount">${
-          agent.totalRuns === 0
+          agent.notInUseBecause
+            ? 'Switched off, so nothing runs it'
+            : agent.totalRuns === 0
             ? 'Nothing logged yet'
             : `${agent.totalRuns} run${agent.totalRuns === 1 ? '' : 's'} logged &mdash; tap to read them` +
               // Decorative. The sentence beside it already says the card opens, so a screen reader
