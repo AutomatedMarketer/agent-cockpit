@@ -230,3 +230,56 @@ test('a finite but enormous week still refuses rather than printing infinity', (
   assert.equal(hero.defined, false)
   assert.match(hero.why, /nobody can read/)
 })
+
+/* A parked row is one the owner deliberately did not hand over, because nobody was named to act
+   on the result. `check:ledger` prints those under their own Parked heading with the reason. This
+   screen showed them in What eats it looking exactly like every other row, so the question the
+   screen invites - why did four of these get a proposal and two not? - had no answer on it. */
+
+test('a parked row carries the reason it was parked', () => {
+  const ledger = shapeLedger([
+    'owner_type: business',
+    'hourly_value: 100',
+    'tasks:',
+    '  - task: Sorting the inbox',
+    '    words: "the inbox eats my morning"',
+    '    times_per_week: 5',
+    '    minutes_each: 12',
+    '    confirmed: twice',
+    '    hands_off: "I read each one and send it"',
+    '  - task: Weekly numbers',
+    '    words: "nobody reads them"',
+    '    times_per_week: 1',
+    '    minutes_each: 60',
+    '    confirmed: twice',
+    '    hands_off: ""',
+    '    parked_because: "Nobody reads the numbers I send round on Monday."'
+  ].join('\n'))
+
+  const [handed, parked] = ledger.tasks
+  assert.equal(handed.parkedBecause, null, 'a live row was marked parked')
+  assert.equal(
+    parked.parkedBecause,
+    'Nobody reads the numbers I send round on Monday.',
+    'a parked row reached the screen with no sign it was parked, and no reason'
+  )
+})
+
+test('an empty or missing parked reason is not a parked row', () => {
+  const ledger = shapeLedger([
+    'owner_type: business',
+    'tasks:',
+    '  - task: A',
+    '    words: "a"',
+    '    times_per_week: 1',
+    '    minutes_each: 60',
+    '    parked_because: ""',
+    '  - task: B',
+    '    words: "b"',
+    '    times_per_week: 1',
+    '    minutes_each: 60'
+  ].join('\n'))
+  for (const task of ledger.tasks) {
+    assert.equal(task.parkedBecause, null, `${task.task} was treated as parked`)
+  }
+})

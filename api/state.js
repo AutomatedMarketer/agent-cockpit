@@ -544,6 +544,15 @@ export function shapeLedger(source) {
       task: typeof row?.task === 'string' ? row.task : '',
       words: typeof row?.words === 'string' ? row.words : '',
       confirmed: row?.confirmed ?? null,
+      // A parked row is one the owner deliberately did not hand over, because nobody was named to
+      // act on the result. `check:ledger` prints those under their own "Parked" heading with the
+      // reason; this screen showed them in What eats it looking exactly like every other row, so
+      // the one question the screen invites - why did four of these get a proposal and two not? -
+      // had no answer on it. `parked_because` is the ledger's own field for the reason.
+      parkedBecause:
+        typeof row?.parked_because === 'string' && row.parked_because.trim()
+          ? row.parked_because.trim()
+          : null,
       hoursPerWeek: usable
     }
   })

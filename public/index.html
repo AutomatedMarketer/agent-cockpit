@@ -676,7 +676,9 @@ function renderLedger() {
         `<div class="gap"><b>${escapeHtml(task.task)}</b>
           <span class="small">${task.hoursPerWeek === null ? '' : (Math.round(task.hoursPerWeek * 10) / 10) + 'h'}</span>
           ${task.confirmed === 'once' ? '<span class="chip">said once</span>' : ''}
-          <div class="small muted">&ldquo;${escapeHtml(task.words)}&rdquo;</div></div>`
+          ${task.parkedBecause ? '<span class="chip">parked</span>' : ''}
+          <div class="small muted">&ldquo;${escapeHtml(task.words)}&rdquo;</div>
+          ${task.parkedBecause ? `<div class="small muted">Parked: ${escapeHtml(task.parkedBecause)}</div>` : ''}</div>`
       ).join('')}</div>`
     : `<div class="panel empty"><b>Your ledger names no tasks yet.</b> <span class="small">Run
        <code>/ledger</code> again and tell it what you actually repeat each week &mdash; everything
