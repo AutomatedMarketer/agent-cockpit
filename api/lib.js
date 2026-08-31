@@ -279,12 +279,28 @@ export function notInUseBecause(knowledgeBody) {
     // The set is the marks that genuinely wrap text. A dash is not one of them, whatever it looks
     // like: markdown emphasis is `*` and `_`, and a dash is the commonest separator there is -
     // the shipped refusal itself reads "I do not sell - I work for this business".
+    // A mark only comes along if it opens something. Two things have to be true. It must not be
+    // glued to a word - in "Note*I do not sell", that asterisk belongs to "Note", and carrying it
+    // put an unrelated word's punctuation inside the quote. And there must still be one of it left
+    // later in the sentence to close it, counted rather than merely looked for: "***I do not
+    // sell**" is three marks where only two close, and blind walking took all three.
     const WRAPPERS = new Set(['*', '_', '`', '"', "'"])
     const sentence = sentences[at]
     const found = NOT_IN_USE.exec(sentence)
-    let from = found ? found.index : 0
-    while (from > 0 && WRAPPERS.has(sentence[from - 1]) && sentence.includes(sentence[from - 1], found.index)) {
-      from -= 1
+    const opens = found ? found.index : 0
+    let from = opens
+    let runStart = opens
+    while (runStart > 0 && WRAPPERS.has(sentence[runStart - 1])) runStart -= 1
+    if (runStart === 0 || !/\w/.test(sentence[runStart - 1])) {
+      const rest = sentence.slice(opens)
+      const carried = []
+      for (let i = opens - 1; i >= runStart; i -= 1) {
+        const mark = sentence[i]
+        const closes = rest.split(mark).length - 1
+        if (carried.filter((seen) => seen === mark).length >= closes) break
+        carried.push(mark)
+        from = i
+      }
     }
     const taken = [sentence.slice(from)]
 
@@ -295,7 +311,29 @@ export function notInUseBecause(knowledgeBody) {
     for (let i = start + 1; i < block.length && !finished(taken.at(-1)); i += 1) {
       taken.push(block[i].split(/(?<=[.!?])\s+/)[0])
     }
-    return taken.join(' ').replace(/\s+/g, ' ').trim() || null
+    const quote = taken.join(' ').replace(/\s+/g, ' ').trim()
+    if (!quote) return null
+
+    // Last gate, and the one that matters most. Everything above splits sentences on a full stop,
+    // and a full stop is not always the end of a sentence. It is also an abbreviation, a decimal
+    // point, and part of every email address and filename ever written. Nothing in the character
+    // itself says which, so where the stops are ambiguous we say nothing at all.
+    //
+    // What that saves us from, all of it real and reproducible before this gate existed:
+    //   "...Ray handles it.He is at ray@example.com"   a missing space after a full stop - the
+    //                                                  commonest typo there is - put a stranger's
+    //                                                  email on the Team screen inside the quote
+    //   "<p>I do not sell - Ray handles it.</p>"       the closing tag came along
+    //   "I do not sell, e.g. tickets, Ray does"        cut at the abbreviation, and displayed the
+    //                                                  fragment "I do not sell, e.g." as a quote
+    //
+    // So: the first stop must also be the last thing in the quote, give or take the marks that
+    // close it. Anything else and there is no quote. The agent still reads as switched off - the
+    // student just has to open the file to see why, which is where they were before this existed.
+    // A quote nobody wrote is worse than no quote.
+    const stop = quote.search(/[.!?]/)
+    if (stop === -1) return quote // no stop at all, so nothing to be ambiguous about
+    return /^[.!?][)\]"'*_`]*$/.test(quote.slice(stop)) ? quote : null
   }
   return null
 }

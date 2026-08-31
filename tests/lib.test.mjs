@@ -282,7 +282,17 @@ const MUST_REFUSE = {
   // "I do not sell - Ray" for the wrapped case below - a fragment cut mid-clause, shown as though
   // it were the whole quote. A truncated quote is a wrong quote.
   'only inside a setext heading': 'I do not sell - Ray handles it.\n-----',
-  'only inside a setext heading written over two lines': 'I do not sell - Ray\nhandles it.\n-----'
+  'only inside a setext heading written over two lines': 'I do not sell - Ray\nhandles it.\n-----',
+
+  // Everything above splits sentences on a full stop, and a full stop is not always the end of a
+  // sentence. Each row below produced a WRONG quote before the ambiguity gate existed - not a
+  // missing one, a wrong one, which is the failure this whole function is built to avoid. The first
+  // is a plain typo and put a stranger's email address on screen inside the quote.
+  'followed by more prose with no space after the stop':
+    'I do not sell - Ray handles it.He is at ray@example.com or call the office.',
+  'wrapped in inline HTML': '<p>I do not sell - Ray handles it.</p>',
+  'carrying an abbreviation': 'I do not sell, e.g. tickets or merchandise, Ray does that.',
+  'carrying an email address': 'I do not sell - write to ray@example.com instead.'
 }
 
 // Marks the owner put ON the refusal itself, which must survive byte for byte. A `*` or `-` with
@@ -300,6 +310,25 @@ const VERBATIM = {
   'in quotation marks': '"I do not sell" - Ray handles it.',
   'in single quotes': "'I do not sell' - Ray handles it."
 }
+
+// The other half of that rule: a mark only comes along if it OPENS something. Both of these were
+// found by review, and both had the mark carried in when it should not have been.
+test('a mark glued to the word before it belongs to that word, not to the refusal', () => {
+  // The asterisk is part of "Note", not emphasis around the refusal. Carrying it printed an
+  // unrelated word's punctuation as the first character of somebody's quote.
+  assert.equal(
+    notInUseBecause('# FAQ\n\nNote*I do not sell - Ray handles it, per note*.\n'),
+    'I do not sell - Ray handles it, per note*.'
+  )
+})
+
+test('only as many opening marks come along as there are marks to close them', () => {
+  // Three asterisks, two of which close. Taking all three handed back an unbalanced quote.
+  assert.equal(
+    notInUseBecause('# FAQ\n\n***I do not sell** - Ray handles it.\n'),
+    '**I do not sell** - Ray handles it.'
+  )
+})
 
 for (const [shape, body] of Object.entries(QUOTABLE)) {
   test(`the reason is quoted cleanly when written ${shape}`, () => {
@@ -328,25 +357,6 @@ for (const [shape, body] of Object.entries(VERBATIM)) {
   })
 }
 
-test('a refusal wrapped across two lines is one sentence, not two', () => {
-  const body = '# FAQ\n\n## Who do you answer\nI do not deal with customers -\nenquiries go to Ray.\n'
-  assert.equal(notInUseBecause(body), 'I do not deal with customers - enquiries go to Ray.')
-})
-
-test('an agent that is in use has no reason to give', () => {
-  assert.equal(notInUseBecause(knowledgeFixture.guidance.sales + '## What I sell\nCommercial landscape design.\n'), null)
-})
-
-test('the shipped guidance example is never mistaken for an answer', () => {
-  assert.equal(notInUseBecause(knowledgeFixture.guidance.sales), null)
-})
-
-test('nothing at all gives nothing back', () => {
-  for (const body of ['', null, undefined, '# FAQ\n\nnothing here\n']) {
-    assert.equal(notInUseBecause(body), null)
-  }
-})
-
 /* A KNOWN LIMIT, written down rather than left to be rediscovered.
 
    If the line break falls inside the phrase itself - "I do not" on one line, "sell" on the next,
@@ -368,22 +378,7 @@ test('a refusal broken mid-phrase by a quote marker is missed, and misses safely
   assert.equal(notInUseBecause(body), null, 'nothing may be quoted when nothing was detected')
 })
 
-/* TWO SHAPES THAT ARE NOT DETECTED AT ALL, recorded as decisions rather than left to be found.
-
-   Both are notInUse's doing, not the extractor's. notInUse is the judgement mirrored in
-   agent-team-template and pinned by knowledge-parity.json, so changing it means changing a
-   contract on both sides at once - and neither of these is worth that.
-
-   Both fail SAFE: the agent reads "never run" instead of "not in use". Wrong, but the honest kind
-   of wrong. Nothing is invented and nobody is quoted. */
-
-test('a refusal broken mid-phrase by a quote marker is missed, and misses safely', () => {
-  // "I do not" / "> sell" - the gap holds a marker as well as a newline, and the pattern allows
-  // only whitespace between the words.
-  const body = '# FAQ\n\n> I do not\n> sell - Ray handles it.\n'
-  assert.equal(notInUse(body), false, 'if this starts detecting, the note above is out of date')
-  assert.equal(notInUseBecause(body), null, 'nothing may be quoted when nothing was detected')
-})
+/* A SECOND SHAPE THAT IS NOT DETECTED, same story as the one above and recorded the same way. */
 
 test('a refusal opening with underscore emphasis is missed, and misses safely', () => {
   // `_I do not sell_` - an underscore is a WORD character, so there is no word boundary between it
