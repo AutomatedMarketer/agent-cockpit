@@ -249,6 +249,13 @@ const QUOTABLE = {
   // mutation ran through the rest of the block and every test still passed, because in every other
   // fixture the refusal happened to be the last line.
   'with another sentence on the line below it': REFUSAL + '\nRay also picks which jobs we bid.',
+  // A label SHARING the refusal's line. Sentence-splitting cannot see these, because a colon and a
+  // dash are not sentence ends - so the two-line rows above passed while the same sentence written
+  // on one line glued the label on. The quote starts where the refusal starts.
+  'after a label and a colon on the same line': 'Quick answer: ' + REFUSAL,
+  'after a label and a dash on the same line': 'Quick answer - ' + REFUSAL,
+  'after an aside opening with a plus': '+1 on this: ' + REFUSAL,
+  'after a few words of prose on the same line': 'As I said, ' + REFUSAL,
   'as a nested bullet under a lead-in': '- Reasons\n  - ' + REFUSAL,
   'as a bullet under a lead-in inside a quote': '> Notes\n> - ' + REFUSAL,
   'below a fenced example': '```\nexample: I do not sell.\n```\n\n' + REFUSAL,
@@ -270,15 +277,19 @@ const MUST_REFUSE = {
   'only inside a setext heading written over two lines': 'I do not sell - Ray\nhandles it.\n-----'
 }
 
-// Text the owner wrote that must come back BYTE FOR BYTE, marks and all. A `*` or `-` with no
-// space after it is punctuation or emphasis, not a list marker, and an earlier version stripped it
-// anyway - turning "*I do not sell* - Ray handles it." into "I do not sell* - Ray handles it." and
-// showing that as a direct quote. Editing somebody's real words is the same failure as inventing
-// them, so these come back exactly as written even though the marks show.
+// Marks the owner put ON the refusal itself, which must survive byte for byte. A `*` or `-` with
+// no space after it is emphasis or punctuation, not a list marker, and an earlier version stripped
+// it anyway - turning "*I do not sell* - Ray handles it." into "I do not sell* - Ray handles it."
+// and showing that as a direct quote. Editing somebody's real words is the same failure as
+// inventing them, so anything touching the refusal with no space between comes along with it.
+//
+// Note what this is NOT: it is not "return the whole line". A label sharing the line is a lead-in
+// and is left behind, which is why "+1 on this: ..." sits in QUOTABLE rather than here. The quote
+// starts where the refusal starts; these rows are about it not starting one character late.
 const VERBATIM = {
   'italicised by the owner': '*I do not sell* - Ray handles it.',
   'bolded by the owner': '**I do not sell** - Ray handles it.',
-  'opening with a plus': '+1 on this: I do not sell - Ray handles it.',
+  'in quotation marks': '"I do not sell" - Ray handles it.',
   'opening with a dash and no space': '-I do not sell- is the short version, Ray handles it.'
 }
 

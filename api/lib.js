@@ -262,7 +262,21 @@ export function notInUseBecause(knowledgeBody) {
     const at = sentences.findIndex((sentence) => NOT_IN_USE.test(sentence))
     // Only the matching sentence, not the rest of its line: a paragraph written on one line can
     // carry the refusal in the middle of it, and what follows is a different sentence.
-    const taken = [sentences[at]]
+    //
+    // And within that sentence, the quote starts where the REFUSAL starts, not where the sentence
+    // does. A label can share the line - "Quick answer: I do not sell - Ray handles it." - and
+    // sentence-splitting cannot see it, because a colon and a dash are not sentence ends. This is
+    // not a guess about what a colon means: NOT_IN_USE already matches at "I" or "We", which is
+    // the start of the clause, so the clause is the quote.
+    //
+    // Punctuation touching that clause with no space between comes along, or "*I do not sell*"
+    // would lose its opening mark and be shown as "I do not sell*" - the corruption fixed in an
+    // earlier round, reintroduced from the other end.
+    const sentence = sentences[at]
+    const found = NOT_IN_USE.exec(sentence)
+    let from = found ? found.index : 0
+    while (from > 0 && /[^\s\w]/.test(sentence[from - 1])) from -= 1
+    const taken = [sentence.slice(from)]
 
     // Reach forward only while the sentence is unfinished, and only as far as it needs: a
     // continuation line can carry the end of this sentence AND the start of the next one, and the
