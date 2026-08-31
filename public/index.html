@@ -1686,8 +1686,15 @@ function renderConnections() {
   //
   // The empty state has to say the absence is FINE, because the neighbouring screens are telling him
   // nothing has run. A runtime is a shortcut tile, not an engine: runtimes.yml calls it "anything
-  // with a URL that you want one tap away from your dashboard", and nothing runs or fails to run
-  // because of what is in that list.
+  // with a URL that you want one tap away from your dashboard".
+  //
+  // But it is not inert, and the first version of this sentence said it was. shapeSetup's Access
+  // rung reads `provedConnections.length > 0 || runtimes.length > 0 || chosenTiles.length > 0`, so
+  // one entry here - unproved, no heartbeat, no URL - flips a rung on the Today screen. "Nothing
+  // runs or stops running because of what is in it" was true about RUNNING and read as "this list
+  // has no consequences", which is the kind of technically-true sentence this whole pass has been
+  // removing. Review caught it. So it now names the one consequence, and names the other way to
+  // satisfy it, which is the half he can check on the same screen.
   el('connections').innerHTML = `
     <h3 class="sub">Connections</h3>
     ${connectionRows
@@ -1700,8 +1707,9 @@ function renderConnections() {
       ? `<div class="panel">${runtimeRows}</div>`
       : `<div class="panel empty"><b>No machines listed, which is normal.</b>
          <span class="small">This is a shortcut list &mdash; anything of yours with a web address you
-         want one tap away, like a home server. Nothing runs or stops running because of what is in
-         it. Ask your team to add one when you have one.</span></div>`}`
+         want one tap away, like a home server. Nothing here makes a job run. The one other place it
+         counts is the <b>Access</b> step on Today, which a proved connection above also satisfies.
+         Ask your team to add one when you have one.</span></div>`}`
 }
 
 /* ---------- skills ---------- */

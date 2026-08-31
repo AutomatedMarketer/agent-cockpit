@@ -2,7 +2,7 @@
 // a network, a token, or a live account.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import handler, { isTaskCard, shapeHero, markOwnerSwitchedOff, shapeSkills } from '../api/state.js'
+import handler, { isTaskCard, shapeHero, markOwnerSwitchedOff, shapeSkills, shapeSetup } from '../api/state.js'
 
 // This suite covers the endpoint's data logic, not the view gate - that has its own
 // suite in gate.test.mjs. Opting out here keeps every case from carrying a key header.
@@ -701,4 +701,39 @@ test('a dead job with no owner recorded contributes no name', () => {
   )
   assert.deepEqual(skill.stalled, ['gone-cold'])
   assert.deepEqual(skill.stalledOwners, [], 'it invented an owner it was never given')
+})
+
+/* WHAT AN ENTRY IN runtimes.yml ACTUALLY CHANGES.
+
+   The Connections screen tells a student, in words, what an empty machine list costs them. That
+   sentence is only as good as this behaviour, and the first version of it was wrong: it said
+   nothing runs or stops running because of what is in the list, which is true about running and
+   reads as "this list has no consequences". One entry - unproved, no heartbeat, no URL - flips the
+   Access rung on the Today screen.
+
+   Pinned here so the sentence and the rule cannot drift apart. If Access stops depending on
+   runtimes, this fails, and the sentence on that screen has to be rewritten rather than quietly
+   becoming wrong. */
+
+const emptyRepo = {
+  brain: [], skills: [], workflows: [], runtimes: [], tiles: null, runs: [], connections: [], verdicts: 0, onboarding: null
+}
+const accessRung = (over) => shapeSetup({ ...emptyRepo, ...over }).find((rung) => rung.rung === 'access')
+
+test('one runtime entry, on its own, flips the Access rung on the Today screen', () => {
+  assert.equal(accessRung({}).pass, false, 'Access passes with nothing registered at all')
+  assert.equal(
+    accessRung({ runtimes: [{ name: 'Studio box', status: 'live' }] }).pass,
+    true,
+    'the Connections screen tells students an entry here counts towards Access - it does not'
+  )
+})
+
+test('a proved connection satisfies Access on its own, which is the other half of that sentence', () => {
+  // The screen says "which a proved connection above also satisfies". If that stops being true,
+  // the reassurance is hollow for anybody whose machine list is empty.
+  const proved = accessRung({ connections: [{ name: 'GitHub', proved: true }] })
+  assert.equal(proved.pass, true, 'a proved connection no longer satisfies Access')
+  const unproved = accessRung({ connections: [{ name: 'GitHub', proved: false }] })
+  assert.equal(unproved.pass, false, 'an UNPROVED connection satisfies Access, so the word "proved" is doing no work')
 })

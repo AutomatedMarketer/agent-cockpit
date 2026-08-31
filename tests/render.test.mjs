@@ -1449,8 +1449,17 @@ test('both halves are named even when one of them is empty', () => {
   const drawn = connectionsScreen({ connections: [connection({ name: 'GitHub' })], runtimes: [] })
   assert.match(drawn, /Runtimes/, 'a student with no machine never learns the board tracks them')
   assert.match(drawn, /No machines listed, which is normal/)
-  // The sentence wraps in the markup, so match across the break rather than pinning the layout.
-  assert.match(drawn, /Nothing runs or stops running because of what is in\s+it/, 'it does not say the absence is harmless')
+  // The empty state must name what an entry here DOES do, and not more than that. The first version
+  // said "nothing runs or stops running because of what is in it", which is true about running and
+  // reads as "this list has no consequences" - and one entry flips the Access rung on Today.
+  // Sentences wrap in the markup, so match across the break rather than pinning the layout.
+  assert.match(drawn, /Nothing here makes a job run/, 'it does not say what an entry cannot do')
+  assert.match(drawn, /Access<\/b> step on Today/, 'it hides the one thing an entry here does change')
+  assert.match(drawn, /which a proved connection above also\s+satisfies/, 'it does not say the other way to satisfy it')
+  assert.ok(
+    !/Nothing runs or stops running/.test(drawn),
+    'the sentence claiming this list has no consequences is back'
+  )
   assert.match(drawn, /Connections/, 'the half that does have rows lost its heading')
   assert.match(drawn, /GitHub/)
 })
