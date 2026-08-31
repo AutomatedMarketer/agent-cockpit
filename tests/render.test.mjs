@@ -1396,14 +1396,25 @@ test('a word inside a page, with no folder chosen, is told the difference', () =
   assert.ok(!said.includes('in agents/'), 'it named a folder nobody selected')
 })
 
-test('a chosen folder with nothing in it, and an empty vault, are different sentences', () => {
-  const emptyFolder = emptyStateFor(
-    { memorySource: 'docs' },
-    { ...memoryVault, memory: { ...memoryVault.memory, files: [{ path: 'shared/a.md', size: 1 }] } }
+test('every folder button has files behind it, so choosing one always shows something', () => {
+  // This is why there is no "nothing in this folder" message: the chips are built from the file
+  // list itself, so a chip cannot exist for an empty folder and nothing else sets the filter. I had
+  // written that message and a test for it, and review found the test could only reach it by handing
+  // the render a folder no chip would ever have offered - dead code, documented as a live screen.
+  // Pinning the invariant is the honest version: if chips ever stop being derived from the files,
+  // this fails and the missing message becomes a real gap rather than a silent one.
+  const drawn = render(memoryVault).get('memory').innerHTML
+  const chips = [...drawn.matchAll(/data-source="([^"]*)"/g)].map((m) => m[1])
+  assert.ok(chips.includes(''), 'the "all" chip is gone')
+  const tops = new Set(memoryVault.memory.files.map((f) => (f.path.includes('/') ? f.path.slice(0, f.path.indexOf('/')) : '(root)')))
+  assert.deepEqual(
+    chips.filter(Boolean).sort(),
+    [...tops].sort(),
+    'a folder button exists that no file lives in, or a folder has no button'
   )
-  assert.match(emptyFolder, /Nothing in docs\//)
-  assert.ok(!emptyFolder.includes('contains'), 'it quoted a search term nobody typed')
+})
 
+test('an empty vault says so plainly, with no search term to quote', () => {
   const emptyVault = emptyStateFor({}, { ...memoryVault, memory: { files: [], indexes: [], truncated: false } })
   assert.match(emptyVault, /No pages match\./)
   assert.ok(!emptyVault.includes('NAME'), 'it quoted a search term nobody typed')

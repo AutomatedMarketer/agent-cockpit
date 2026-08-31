@@ -1265,9 +1265,12 @@ function memoryTreeHtml() {
       return `<div class="panel empty"><b>No page NAME contains
         &ldquo;${escapeHtml(memoryQuery)}&rdquo;.</b> ${notInNames}</div>`
     }
-    if (memorySource) {
-      return `<div class="panel empty">Nothing in ${escapeHtml(memorySource)}/.</div>`
-    }
+    // No branch for "a folder with nothing in it", because there is no such folder. The chips are
+    // built from data.memory.files itself, so a chip exists only for a folder that has files in it,
+    // and nothing else can set memorySource. A message for that state would be code claiming a
+    // screen nobody can reach - and the test I wrote for it could only get there by handing the
+    // render a folder no chip would have offered. Review caught that; the invariant is pinned in
+    // tests/render.test.mjs instead, where it is a fact about the page rather than a dead sentence.
     return `<div class="panel empty">No pages match.</div>`
   }
   const folders = new Map()
