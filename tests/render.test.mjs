@@ -1176,3 +1176,49 @@ test('a job whose owner is in use is not accused of being unable to run', () => 
   }).get('workflows').innerHTML
   assert.ok(!drawn.includes('cannot run as written'), 'a job that runs fine was told it cannot')
 })
+
+test('a skill whose only job cannot run says so, without calling the skill dead', () => {
+  const drawn = render({
+    ...base,
+    skills: [{ slug: 'collect-run-logs', path: '.claude/skills/collect-run-logs/SKILL.md', description: 'Gather the facts.', usedBy: ['weekly-review'], stalled: ['weekly-review'] }]
+  }).get('skills').innerHTML
+
+  assert.match(drawn, /which cannot run as written/, 'the screen leaves him to cross-reference another one')
+  assert.match(drawn, /its owner is switched off/, 'it does not say WHY the job cannot run')
+  // The narrow claim. Everything on this screen can still be asked for by name, so anything
+  // stronger than "the job cannot run" is a bigger claim than the evidence supports.
+  for (const overreach of ['useless', 'never used', 'cannot be used', 'does nothing']) {
+    assert.ok(!drawn.includes(overreach), `the screen called a usable skill "${overreach}"`)
+  }
+})
+
+test('a skill used by a job that runs is not marked, and neither is one used by nothing', () => {
+  const drawn = render({
+    ...base,
+    skills: [
+      { slug: 'scan-market', path: '.claude/skills/scan-market/SKILL.md', description: 'd', usedBy: ['morning-intel'], stalled: [] },
+      { slug: 'sync', path: '.claude/skills/sync/SKILL.md', description: 'd', usedBy: [], stalled: [] }
+    ]
+  }).get('skills').innerHTML
+  assert.ok(!drawn.includes('cannot run as written'), 'a job that runs fine was reported as stalled')
+})
+
+test('a skill used by one dead job and one live one names the dead one', () => {
+  const drawn = render({
+    ...base,
+    skills: [{ slug: 'review-pipeline', path: '.claude/skills/review-pipeline/SKILL.md', description: 'd', usedBy: ['gone-cold', 'draft-queue'], stalled: ['gone-cold'] }]
+  }).get('skills').innerHTML
+  assert.match(drawn, /gone-cold cannot run as written/)
+  assert.ok(!drawn.includes('which cannot run as written'), 'it implied BOTH jobs are dead')
+})
+
+test('a skills payload with no stalled field at all still renders', () => {
+  // Older payloads, and any path that builds a skill by hand. A missing field must not throw and
+  // must not be read as a stall.
+  const drawn = render({
+    ...base,
+    skills: [{ slug: 'sync', path: '.claude/skills/sync/SKILL.md', description: 'd', usedBy: ['draft-queue'] }]
+  }).get('skills').innerHTML
+  assert.ok(drawn.includes('sync'), 'the screen failed to draw at all')
+  assert.ok(!drawn.includes('cannot run as written'))
+})

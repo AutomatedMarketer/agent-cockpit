@@ -358,15 +358,29 @@ export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
 // Every skill in the repo, with its one-line description and which workflows call it.
 // A skill no workflow uses is not wrong — it is there for sessions — but the owner should
 // be able to see that at a glance.
+//
+// `stalled` is the subset of those jobs that cannot run as written, because the agent that owns
+// them is switched off. For somebody with a job rather than a business that is not a corner case:
+// four of this repo's skills are listed as a step in exactly one job, and that job is one of the
+// two owned by sales and customer-service. The screen said "used by weekly-review" and left him to
+// cross-reference another screen to learn that weekly-review never fires.
+//
+// What it does NOT mean is that the skill is dead. Anything here can still be asked for by name -
+// which is what the other group on this screen says about itself - so the claim has to stay narrow:
+// the JOB cannot run, not the skill cannot be used.
 export function shapeSkills(skillFiles, workflows = []) {
   return skillFiles
     .map(([path, source]) => {
       const slug = path.split('/').at(-2)
       const data = parseFrontmatter(source ?? '')
-      const usedBy = workflows
-        .filter((workflow) => (workflow.steps ?? []).includes(slug))
-        .map((workflow) => workflow.slug)
-      return { slug, path, description: data.description ?? '', usedBy }
+      const users = workflows.filter((workflow) => (workflow.steps ?? []).includes(slug))
+      return {
+        slug,
+        path,
+        description: data.description ?? '',
+        usedBy: users.map((workflow) => workflow.slug),
+        stalled: users.filter((workflow) => workflow.ownerSwitchedOff).map((workflow) => workflow.slug)
+      }
     })
     .sort((a, b) => a.slug.localeCompare(b.slug))
 }

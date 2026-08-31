@@ -2,7 +2,7 @@
 // a network, a token, or a live account.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import handler, { isTaskCard, shapeHero, markOwnerSwitchedOff } from '../api/state.js'
+import handler, { isTaskCard, shapeHero, markOwnerSwitchedOff, shapeSkills } from '../api/state.js'
 
 // This suite covers the endpoint's data logic, not the view gate - that has its own
 // suite in gate.test.mjs. Opting out here keeps every case from carrying a key header.
@@ -617,4 +617,54 @@ test('marking leaves every other field on the job alone', () => {
   const [after] = markOwnerSwitchedOff([before], agentsWithTwoOff)
   assert.deepEqual({ ...after, ownerSwitchedOff: undefined }, { ...before, ownerSwitchedOff: undefined })
   assert.equal(before.ownerSwitchedOff, undefined, 'the original row was mutated')
+})
+
+/* A SKILL WHOSE ONLY JOB CANNOT RUN.
+
+   Four of this repo's skills are listed as a step by exactly one job, and that job is one of the two
+   owned by sales and customer-service - the agents somebody with a job switches off. The Skills
+   screen said "used by weekly-review" and left him to visit another screen to learn that
+   weekly-review never fires.
+
+   The claim stays narrow. The JOB cannot run; the skill can still be asked for by name, which is
+   what the other group on that screen says about itself. */
+
+const skillFile = (slug) => [`.claude/skills/${slug}/SKILL.md`, `---
+description: what ${slug} does
+---
+`]
+
+test('a skill is marked stalled only when the job listing it cannot run', () => {
+  const [collect, scan, lonely] = shapeSkills(
+    [skillFile('collect-run-logs'), skillFile('scan-market'), skillFile('sync')].sort(),
+    [
+      { slug: 'weekly-review', steps: ['collect-run-logs'], ownerSwitchedOff: true },
+      { slug: 'morning-intel', steps: ['scan-market'], ownerSwitchedOff: false }
+    ]
+  ).sort((a, b) => a.slug.localeCompare(b.slug))
+
+  assert.deepEqual([collect.slug, collect.usedBy, collect.stalled], ['collect-run-logs', ['weekly-review'], ['weekly-review']])
+  assert.deepEqual([scan.slug, scan.usedBy, scan.stalled], ['scan-market', ['morning-intel'], []])
+  // A skill no job lists at all is not stalled - it is the other group entirely, and calling it
+  // stalled would be the opposite lie.
+  assert.deepEqual([lonely.slug, lonely.usedBy, lonely.stalled], ['sync', [], []])
+})
+
+test('a skill used by both a dead job and a live one names only the dead one', () => {
+  const [skill] = shapeSkills(
+    [skillFile('review-pipeline')],
+    [
+      { slug: 'gone-cold', steps: ['review-pipeline'], ownerSwitchedOff: true },
+      { slug: 'draft-queue', steps: ['review-pipeline'], ownerSwitchedOff: false }
+    ]
+  )
+  assert.deepEqual(skill.usedBy, ['gone-cold', 'draft-queue'])
+  assert.deepEqual(skill.stalled, ['gone-cold'])
+})
+
+test('nothing is stalled when no job carries the flag at all', () => {
+  // shapeSkills is called with workflows that have been through markOwnerSwitchedOff, but it must
+  // not invent a stall from a missing field either.
+  const [skill] = shapeSkills([skillFile('scan-market')], [{ slug: 'morning-intel', steps: ['scan-market'] }])
+  assert.deepEqual(skill.stalled, [])
 })

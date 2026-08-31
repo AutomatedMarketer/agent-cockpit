@@ -1682,12 +1682,34 @@ function renderSkills() {
   //   own description, rendered two lines below the heading, says "use at the end of every agent
   //   run, scheduled or manual". A heading contradicted by the text under it is worse than no
   //   heading.
+  const stalledNote = (skill) => {
+    const stalled = skill.stalled ?? []
+    if (!stalled.length) return ''
+    const all = stalled.length === (skill.usedBy ?? []).length
+    const said = all
+      ? stalled.length === 1
+        ? 'which cannot run as written &mdash; its owner is switched off'
+        : 'none of which can run as written &mdash; their owners are switched off'
+      : `${stalled.map(escapeHtml).join(', ')} cannot run as written &mdash; the owner is switched off`
+    return `<div class="small bad">${said}</div>`
+  }
   const skillRow = (skill) => `
     <div class="agent">
       <div class="row between">
         <a href="#" data-open="${escapeHtml(skill.path)}" class="title">${escapeHtml(skill.slug)}</a>
         ${skill.usedBy.length ? `<span class="small muted">used by ${skill.usedBy.map(escapeHtml).join(', ')}</span>` : ''}
       </div>
+      ${
+        // A job that cannot run as written is still listed as a step here, and the heading above only
+        // says membership. Four skills in this repo are listed by exactly one job and that job is one
+        // of the two an employee switches off, so without this line he reads "used by weekly-review"
+        // and has to go to another screen to learn that weekly-review never fires.
+        //
+        // Deliberately narrow: it says the JOB cannot run, never that the skill is dead. Everything
+        // on this screen can still be asked for by name, which is what the other group says about
+        // itself, and "this skill is useless" would be a bigger claim than the evidence supports.
+        stalledNote(skill)
+      }
       <p class="small" style="margin:.3rem 0 0">${escapeHtml(skill.description)}</p>
     </div>`
   const onAsk = skills.filter((skill) => !skill.usedBy.length)
