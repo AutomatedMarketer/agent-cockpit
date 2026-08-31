@@ -958,22 +958,64 @@ test('the hero panel reads as one sentence, with no doubled or missing full stop
    The board was nearly clean. One line was not, and it was an empty state, which means it is the
    FIRST sentence a brand-new student reads on that screen. */
 
-test('no screen tells the reader it is their business', () => {
-  const empty = render(base)
-  const full = render({
-    ...base,
-    agents: [{ slug: 'research', description: 'd', model: 'sonnet', lastRun: null, lastStatus: null, runsThisWeek: 0, totalRuns: 0, state: 'never-run' }],
-    ledger: { ownerType: 'job', hourlyValue: null, hoursPerWeek: 10, costPerWeek: null, unpriced: true, unreadable: 0, complete: true, tasks: [] },
-    connections: [connection()],
-    skills: [skill('triage-inbox', ['inbox-triage'])],
-    memory: { files: [{ path: 'shared/about-me.md', size: 100 }], indexes: [], truncated: false }
-  })
+// Terms that assume the reader owns the thing. BARE words, not "your X" - the first version of
+// this list only had the "your ..." forms, and the live defect it missed said "check which clients
+// went quiet", which never says "your". A list I write is exactly the thing that misses what I did
+// not think of, so this errs wide and the exceptions are named.
+const OWNER_ASSUMPTIONS = [
+  /\byour business\b/i, /\byour company\b/i, /\byour revenue\b/i, /\byour staff\b/i,
+  /\bclients?\b/i, /\bcustomers?\b/i, /\bprospects?\b/i, /\brevenue\b/i, /\bpayroll\b/i
+]
 
-  for (const nodes of [empty, full]) {
+// A payload where every screen has something on it. The first version of this test called itself
+// "empty and populated" while leaving workflows, the board, ledger tasks and proposals all empty -
+// so half the branches it claimed to sweep were never rendered at all. That is the same overclaim
+// this suite exists to catch, one level up.
+const populated = () => ({
+  ...base,
+  agents: [{ slug: 'research', description: 'Looks something up and comes back with a short report.', model: 'sonnet', lastRun: new Date().toISOString(), lastStatus: 'ok', runsThisWeek: 1, totalRuns: 2, state: 'working' }],
+  runs: [{ run_id: 'r1', agent: 'research', workflow: 'morning-intel', status: 'ok', started_at: new Date().toISOString(), summary: 'Checked the portals.', session_url: 'https://claude.ai/code/x' }],
+  totalRuns: 1,
+  workflows: [workflow({ slug: 'morning-intel', name: 'Morning Intel', owner: 'research', arm: 'off', reason: 'Off until there is something to read.', state: 'never-run' })],
+  board: {
+    todo: [{ slug: '2026-08-20-a', title: 'Chase the certificate', for: 'email', doing: false }],
+    upNext: [], running: [],
+    done: [{ slug: 'r1', title: 'Morning Intel', summary: 'Checked the portals.', at: new Date().toISOString(), status: 'ok', url: 'https://claude.ai/code/x' }]
+  },
+  ledger: {
+    ownerType: 'job', hourlyValue: null, hoursPerWeek: 10.33, costPerWeek: null, unpriced: true, unreadable: 0, complete: true,
+    tasks: [
+      { task: 'Chasing documents', words: 'I chase five firms every bid', confirmed: 'twice', parked: false, parkedBecause: null, hoursPerWeek: 3 },
+      { task: 'Keeping certificates current', words: 'they expire and I find out late', confirmed: 'twice', parked: true, parkedBecause: 'They live on a drive I cannot reach.', hoursPerWeek: 0.7 }
+    ]
+  },
+  proposals: {
+    proposals: [{ task: 'Chasing documents', item: 'skill:draft-chase-messages', why: 'It drafts and sends nothing.', words: 'I chase five firms every bid', number: '3 hours a week' }],
+    gaps: [{ task: 'Checking a pack against its list', question: 'Nothing here reads a requirements list back - should it?' }]
+  },
+  connections: [connection()],
+  runtimes: [runtime()],
+  skills: [skill('triage-inbox', ['inbox-triage']), skill('capture-verdict')],
+  stack: [{ name: 'context7', source: 'plugin', plugin: 'context7@official', skill: null, present: null, gives: 'Official docs on demand', why: 'Reading the real docs beats recalling them', verify: 'Ask it to resolve a library you use' }],
+  memory: { files: [{ path: 'shared/about-me.md', size: 900 }, { path: 'runs/2026-08/a.json', size: 400 }], indexes: [], truncated: false },
+  setup: [{ rung: 'brief', label: 'Brief', pass: true, detail: 'filled in' }]
+})
+
+test('no screen assumes the reader owns a business, empty or populated', () => {
+  const fixtures = { empty: render(base), populated: render(populated()) }
+
+  // The populated fixture has to actually populate. This is the assertion the first version of
+  // this test needed and did not have.
+  for (const screen of SCREENS) {
+    const drawn = fixtures.populated.get(screen).innerHTML
+    assert.ok(drawn.length > 200, `the populated fixture leaves ${screen} empty, so it sweeps nothing there`)
+  }
+
+  for (const [label, nodes] of Object.entries(fixtures)) {
     for (const screen of SCREENS) {
       const drawn = nodes.get(screen).innerHTML
-      for (const assumption of [/your business/i, /your customers/i, /your revenue/i, /your company/i]) {
-        assert.ok(!assumption.test(drawn), `${screen} assumes the reader owns the business: ${assumption}`)
+      for (const assumption of OWNER_ASSUMPTIONS) {
+        assert.ok(!assumption.test(drawn), `${screen} (${label}) assumes the reader owns the business: ${assumption}`)
       }
     }
   }
@@ -987,6 +1029,9 @@ test('a week with no rate is counted in hours and never in money', () => {
 
   assert.match(drawn, /10\.3<\/b> hours a week/)
   assert.match(drawn, /No rate recorded/)
-  assert.ok(!drawn.includes('$'), 'a money figure appeared for somebody who gave no rate')
+  // Scoped to a money FIGURE, not any dollar sign anywhere on the panel: a real ledger.yml can
+  // legitimately quote "$500 in review requests" in somebody's own words, and this test would then
+  // fail for a reason unrelated to the thing it guards.
+  assert.ok(!/\$\d/.test(drawn), 'a money figure appeared for somebody who gave no rate')
   assert.ok(!drawn.includes('at the rate you set'), 'it claimed a rate that was never given')
 })

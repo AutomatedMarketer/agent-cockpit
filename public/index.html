@@ -557,6 +557,15 @@ function boardColumnHtml(title, cards, emptyText, extra = '') {
 // client path as the Run buttons (prompt-once key, sessionStorage, PUBLIC_FIRE) — and the
 // task-intake routine's session writes the card; this page still never writes the repo.
 // Agent slugs come from the live team list; slugs are repo data, so they stay escaped.
+// The "what job should run on its own?" placeholder used to read "check which clients went quiet".
+// Half the people this is built for have a job and no clients at all, and this box sits on the
+// Today screen on every load - not behind an empty state. A worked example that assumes customers
+// is the single most common defect the employee walkthrough found, and it was in the one box on
+// the board where somebody types what they want. Kept concrete, but about work anybody has.
+//
+// This note is a JS comment, not an HTML one: an HTML comment inside the template literal ends up
+// in innerHTML, where the test that sweeps every screen for owner-shaped words reads it and fails
+// on the explanation rather than on the page.
 function addTaskHtml() {
   const options = (data.agents ?? []).map((agent) =>
     `<option value="${escapeHtml(agent.slug)}">${escapeHtml(agent.slug)}</option>`
@@ -580,7 +589,7 @@ function addTaskHtml() {
     <form id="wf-form" hidden>
       <label for="wf-text">What job should run on its own?</label>
       <textarea id="wf-text" rows="3" maxlength="2200"
-        placeholder="e.g. Every Monday at 7, check which clients went quiet and draft a message to each"></textarea>
+        placeholder="e.g. Every Monday at 7, gather what changed last week and write it up for me"></textarea>
       <span class="small muted">Say what it does and when. Your team writes the workflow and
         asks you anything it still needs.</span>
       <button class="fire" type="submit" id="wf-send">Request it</button>
