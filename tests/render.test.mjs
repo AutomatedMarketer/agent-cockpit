@@ -1426,3 +1426,52 @@ test('the search term is escaped where it is quoted back', () => {
   assert.ok(!said.includes('<script>alert(1)'), 'the search box is an injection point')
   assert.ok(said.includes('&lt;script&gt;'), 'the term was dropped rather than escaped')
 })
+
+/* THE CONNECTIONS SCREEN HAS TWO HALVES, and an empty half used to take its subject off the screen.
+
+   `runtimes: []` is what agent-team-template SHIPS, so a student with one connection and no machine
+   registered - every student on day one - read a screen that never mentioned machines at all. They
+   could not tell whether the board does not track them or they simply have none. The employee test
+   repo says why it is empty in the file itself: "I work on their laptop and I am not putting a
+   machine of my own on their network."
+
+   The empty state has to say the absence is FINE, because the neighbouring screens are busy telling
+   him nothing has run. runtimes.yml calls a runtime "anything with a URL that you want one tap away
+   from your dashboard" - a shortcut tile, not an engine. */
+
+const aRuntime = (over = {}) => ({
+  name: 'Studio box', kind: 'agent-runtime', status: 'live',
+  lastBeat: new Date().toISOString(), url: 'http://example.invalid:8080', ...over
+})
+const connectionsScreen = (payload) => render({ ...base, ...payload }).get('connections').innerHTML
+
+test('both halves are named even when one of them is empty', () => {
+  const drawn = connectionsScreen({ connections: [connection({ name: 'GitHub' })], runtimes: [] })
+  assert.match(drawn, /Runtimes/, 'a student with no machine never learns the board tracks them')
+  assert.match(drawn, /No machines listed, which is normal/)
+  // The sentence wraps in the markup, so match across the break rather than pinning the layout.
+  assert.match(drawn, /Nothing runs or stops running because of what is in\s+it/, 'it does not say the absence is harmless')
+  assert.match(drawn, /Connections/, 'the half that does have rows lost its heading')
+  assert.match(drawn, /GitHub/)
+})
+
+test('a runtime with no connections still gets told what is missing', () => {
+  const drawn = connectionsScreen({ connections: [], runtimes: [aRuntime()] })
+  assert.match(drawn, /Nothing connected yet/)
+  assert.match(drawn, /Studio box/)
+  assert.ok(!drawn.includes('No machines listed'), 'it said there are no machines while listing one')
+})
+
+test('neither half present keeps the one message that covers the whole screen', () => {
+  const drawn = connectionsScreen({ connections: [], runtimes: [] })
+  assert.match(drawn, /Nothing connected yet/)
+  // Day zero should not carry two empty states arguing with each other.
+  assert.ok(!drawn.includes('No machines listed'), 'day one shows two empty panels instead of one')
+})
+
+test('a real runtime is still drawn with its state and its last heartbeat', () => {
+  const drawn = connectionsScreen({ connections: [connection({ name: 'GitHub' })], runtimes: [aRuntime({ status: 'silent', lastBeat: '2026-08-31T09:00:00Z' })] })
+  assert.match(drawn, /Studio box/)
+  assert.match(drawn, /heartbeat/)
+  assert.ok(!drawn.includes('No machines listed'), 'a listed machine was reported as missing')
+})

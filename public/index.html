@@ -1677,10 +1677,31 @@ function renderConnections() {
       </div>
     </div>`).join('')
 
-  const panels = []
-  if (connectionRows) panels.push(`<div class="panel">${connectionRows}</div>`)
-  if (runtimeRows) panels.push(`<h3 class="sub">Runtimes</h3><div class="panel">${runtimeRows}</div>`)
-  el('connections').innerHTML = panels.join('')
+  // Both halves always have a heading and something under it. They used to appear only if they had
+  // rows, so an empty half took its subject off the screen with it - and `runtimes: []` is what the
+  // template SHIPS, so that is every student on day one, not a corner case. The employee test repo
+  // says it in the file itself: "I work on their laptop and I am not putting a machine of my own on
+  // their network." He reads a screen that never mentions machines and cannot tell whether the board
+  // does not track them or he has none.
+  //
+  // The empty state has to say the absence is FINE, because the neighbouring screens are telling him
+  // nothing has run. A runtime is a shortcut tile, not an engine: runtimes.yml calls it "anything
+  // with a URL that you want one tap away from your dashboard", and nothing runs or fails to run
+  // because of what is in that list.
+  el('connections').innerHTML = `
+    <h3 class="sub">Connections</h3>
+    ${connectionRows
+      ? `<div class="panel">${connectionRows}</div>`
+      : `<div class="panel empty"><b>Nothing connected yet.</b>
+         <span class="small">Run <code>/connect</code> in your team repo and it will wire one tool,
+         prove it by reading your own data back to you, and register it here.</span></div>`}
+    <h3 class="sub">Runtimes</h3>
+    ${runtimeRows
+      ? `<div class="panel">${runtimeRows}</div>`
+      : `<div class="panel empty"><b>No machines listed, which is normal.</b>
+         <span class="small">This is a shortcut list &mdash; anything of yours with a web address you
+         want one tap away, like a home server. Nothing runs or stops running because of what is in
+         it. Ask your team to add one when you have one.</span></div>`}`
 }
 
 /* ---------- skills ---------- */
