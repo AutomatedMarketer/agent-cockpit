@@ -460,3 +460,50 @@ test('a parked row is marked whether or not a reason was typed', () => {
   assert.match(drawn, /Parked: Nobody reads them\./)
   assert.match(drawn, /Parked: nobody is named to act on the result yet/)
 })
+
+/* Each agent card on the Team screen is a <details> that opens to show what that agent actually
+   did, with a link to each session. The CSS hides the disclosure marker on purpose and leaves only
+   `cursor: pointer` - which does not exist on a phone, and the phone is the device this board is
+   built to be read on and the one the course tells people to bookmark on day one. So on that
+   device the cards looked flat and static, and every agent's work history was behind a tap with
+   nothing at all saying a tap did anything. Nine run logs on this repo, none of them reachable
+   unless you happened to try. */
+
+test('an agent card says it opens, and says how much is in there', () => {
+  const drawn = render({
+    ...base,
+    agents: [
+      { slug: 'research', description: 'd', model: 'sonnet', lastRun: new Date().toISOString(), lastStatus: 'ok', runsThisWeek: 2, totalRuns: 3, state: 'working' }
+    ]
+  }).get('team').innerHTML
+
+  assert.match(drawn, /3 runs logged/, 'the card does not say how much is behind the tap')
+  assert.match(drawn, /tap to read them/, 'nothing on the Team screen says a card opens')
+  assert.match(drawn, /class="chev"/, 'no visual affordance that the card expands')
+  assert.match(
+    drawn,
+    /<span class="chev" aria-hidden="true">/,
+    'the arrow is decorative and the sentence beside it already says the card opens - a screen ' +
+      'reader announcing a bare glyph after that sentence is noise'
+  )
+})
+
+test('an agent that has never run says so instead of inviting a tap into nothing', () => {
+  const nodes = render({
+    ...base,
+    agents: [
+      { slug: 'research', description: 'd', model: 'sonnet', lastRun: null, lastStatus: null, runsThisWeek: 0, totalRuns: 0, state: 'never-run' },
+      { slug: 'email', description: 'd', model: 'sonnet', lastRun: new Date().toISOString(), lastStatus: 'ok', runsThisWeek: 1, totalRuns: 1, state: 'working' }
+    ]
+  }).get('team').innerHTML
+
+  assert.match(nodes, /Nothing logged yet/, 'a never-run agent said nothing about being empty')
+  // ...and it must not carry the arrow either, or it is still inviting a tap into an empty drawer.
+  // Slicing between the two agent names isolates the first card. It works because a slug's first
+  // appearance in this markup is its own <span class="title"> - the class list and accentStyle()
+  // emit only a hex colour, never the slug - so there is nothing earlier to match on.
+  const neverRunCard = nodes.slice(nodes.indexOf('research'), nodes.indexOf('email'))
+  assert.ok(!neverRunCard.includes('chev'), 'an agent with no runs still invited a tap')
+  assert.match(nodes, /1 run logged/, 'a single run was described as "1 runs"')
+  assert.ok(!/1 runs logged/.test(nodes))
+})

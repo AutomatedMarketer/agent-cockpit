@@ -193,6 +193,12 @@
   .agent p.desc { margin: .3rem 0 .45rem; color: var(--muted); font-size: .8125rem; }
   details.agent > summary { list-style: none; cursor: pointer; }
   details.agent > summary::-webkit-details-marker { display: none; }
+  /* The card opens to show what this agent actually did. The marker above is hidden, and a
+     `cursor: pointer` is invisible on the phone this board is built to be read on - so on the
+     device that matters there was nothing at all saying a tap did anything. This is that sign. */
+  .agent .runcount { display: block; margin-top: .35rem; color: var(--muted); font-size: .75rem; }
+  .agent .chev { display: inline-block; margin-left: .35rem; transition: transform .15s ease; }
+  details.agent[open] .chev { transform: rotate(90deg); }
   .agent-runs { margin-top: .6rem; border-top: 1px solid var(--line); }
 
   /* Memory */
@@ -808,6 +814,15 @@ function renderTeam() {
           <span class="chip">${agent.runsThisWeek} this week</span>
           <span class="small muted">last run ${escapeHtml(ago(agent.lastRun))}</span>
         </div>
+        <span class="runcount">${
+          agent.totalRuns === 0
+            ? 'Nothing logged yet'
+            : `${agent.totalRuns} run${agent.totalRuns === 1 ? '' : 's'} logged &mdash; tap to read them` +
+              // Decorative. The sentence beside it already says the card opens, so a screen reader
+              // announcing a bare "›" after it is noise - and a fix about one modality has no
+              // business making another one worse.
+              '<span class="chev" aria-hidden="true">&rsaquo;</span>'
+        }</span>
       </summary>
       <div class="agent-runs">${runRows || '<div class="empty">No runs logged yet.</div>'}</div>
     </details>`
