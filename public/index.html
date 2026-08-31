@@ -1688,13 +1688,22 @@ function renderConnections() {
   // nothing has run. A runtime is a shortcut tile, not an engine: runtimes.yml calls it "anything
   // with a URL that you want one tap away from your dashboard".
   //
-  // But it is not inert, and the first version of this sentence said it was. shapeSetup's Access
-  // rung reads `provedConnections.length > 0 || runtimes.length > 0 || chosenTiles.length > 0`, so
-  // one entry here - unproved, no heartbeat, no URL - flips a rung on the Today screen. "Nothing
-  // runs or stops running because of what is in it" was true about RUNNING and read as "this list
-  // has no consequences", which is the kind of technically-true sentence this whole pass has been
-  // removing. Review caught it. So it now names the one consequence, and names the other way to
-  // satisfy it, which is the half he can check on the same screen.
+  // But it is not inert, and this sentence has been wrong twice.
+  //
+  // First it said "nothing runs or stops running because of what is in it" - true about RUNNING and
+  // read as "this list has no consequences". One entry here flips the Access rung on Today.
+  //
+  // Then it said the Access step is one "which a proved connection above also satisfies". That is
+  // the HEURISTIC branch of shapeSetup, which the code's own comment calls "the path a student never
+  // takes". Once /onboard has run, Access is `onboarding.access === true` and nothing else - a
+  // student mid-onboarding can prove every connection they own and the rung stays red. Worse, the
+  // check I did against the employee repo could not have caught it: that repo HAS an onboarding
+  // record marking Access done, so its rung was green either way, and green was consistent with my
+  // sentence and with the truth at the same time.
+  //
+  // So no substitute mechanism is claimed. Access is the only other place a runtime shows up at all
+  // (grep: accessDetail, the rung's pass in the heuristic branch, its detail in both), and the
+  // sentence now says exactly that and stops.
   el('connections').innerHTML = `
     <h3 class="sub">Connections</h3>
     ${connectionRows
@@ -1707,9 +1716,8 @@ function renderConnections() {
       ? `<div class="panel">${runtimeRows}</div>`
       : `<div class="panel empty"><b>No machines listed, which is normal.</b>
          <span class="small">This is a shortcut list &mdash; anything of yours with a web address you
-         want one tap away, like a home server. Nothing here makes a job run. The one other place it
-         counts is the <b>Access</b> step on Today, which a proved connection above also satisfies.
-         Ask your team to add one when you have one.</span></div>`}`
+         want one tap away, like a home server. Nothing here makes a job run; the only other place it shows
+         up is the <b>Access</b> step on Today. Ask your team to add one when you have one.</span></div>`}`
 }
 
 /* ---------- skills ---------- */

@@ -729,11 +729,55 @@ test('one runtime entry, on its own, flips the Access rung on the Today screen',
   )
 })
 
-test('a proved connection satisfies Access on its own, which is the other half of that sentence', () => {
-  // The screen says "which a proved connection above also satisfies". If that stops being true,
-  // the reassurance is hollow for anybody whose machine list is empty.
+test('a proved connection satisfies Access on its own, and an unproved one does not', () => {
   const proved = accessRung({ connections: [{ name: 'GitHub', proved: true }] })
   assert.equal(proved.pass, true, 'a proved connection no longer satisfies Access')
   const unproved = accessRung({ connections: [{ name: 'GitHub', proved: false }] })
   assert.equal(unproved.pass, false, 'an UNPROVED connection satisfies Access, so the word "proved" is doing no work')
+})
+
+/* EVERYTHING ABOVE IS THE PATH A STUDENT NEVER TAKES.
+
+   shapeSetup has two branches and the three tests above only reach the second one, which runs when
+   there is no onboarding record. The code's own comment calls that "the path a student never takes",
+   and it is right: /onboard writes a record into the repo, and from then on Access is that record
+   and nothing else.
+
+   This matters because the Connections screen tells students in words what an empty machine list
+   costs them, and the version of that sentence which said "the Access step, which a proved
+   connection above also satisfies" was reading the branch below rather than this one. For anybody
+   mid-onboarding it was false: they can prove every connection they own and the rung stays red.
+
+   And the check I ran against the employee repo could not have caught it. That repo HAS an
+   onboarding record marking Access done, so its rung was green whatever its connections said -
+   green was consistent with my sentence and with the truth at the same time. An observation that
+   cannot tell the two apart is not evidence for either. */
+
+const onboarded = (over) => shapeSetup({ ...emptyRepo, onboarding: { access: true }, ...over })
+  .find((rung) => rung.rung === 'access')
+
+test('once /onboard has run, Access is the record and nothing else', () => {
+  // No connections, no machines, nothing registered - and it still passes, because the record says
+  // the step was done. Adding a machine cannot make this MORE true.
+  const bare = onboarded({})
+  assert.equal(bare.pass, true)
+  assert.match(bare.detail, /Marked done in \/onboard, but nothing is registered/,
+    'a record with nothing behind it should say so rather than reading as a finished step')
+
+  const withRuntime = onboarded({ runtimes: [{ name: 'Studio box', status: 'live' }] })
+  assert.equal(withRuntime.pass, true)
+  assert.equal(withRuntime.detail, '1 runtime', 'a machine changes the wording, which is all it changes here')
+})
+
+test('mid-onboarding, no number of proved connections or machines lights Access', () => {
+  // The case that makes the old sentence false. This is the test that would have caught it.
+  const notYet = shapeSetup({
+    ...emptyRepo,
+    onboarding: { access: false },
+    connections: [{ name: 'GitHub', proved: true }, { name: 'Gmail', proved: true }],
+    runtimes: [{ name: 'Studio box', status: 'live' }]
+  }).find((rung) => rung.rung === 'access')
+
+  assert.equal(notYet.pass, false, 'proved connections lit Access for a student who has not finished /onboard')
+  assert.match(notYet.detail, /Not finished in \/onboard yet/)
 })

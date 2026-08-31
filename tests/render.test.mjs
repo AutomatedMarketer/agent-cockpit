@@ -1455,7 +1455,13 @@ test('both halves are named even when one of them is empty', () => {
   // Sentences wrap in the markup, so match across the break rather than pinning the layout.
   assert.match(drawn, /Nothing here makes a job run/, 'it does not say what an entry cannot do')
   assert.match(drawn, /Access<\/b> step on Today/, 'it hides the one thing an entry here does change')
-  assert.match(drawn, /which a proved connection above also\s+satisfies/, 'it does not say the other way to satisfy it')
+  // And claims NO substitute for it. The version that said "which a proved connection above also
+  // satisfies" was reading the heuristic branch of shapeSetup, which a student who has run /onboard
+  // never reaches - there Access is the onboarding record and nothing else.
+  assert.ok(
+    !/proved connection above also/.test(drawn),
+    'it claims a proved connection satisfies Access, which is false once /onboard has run'
+  )
   assert.ok(
     !/Nothing runs or stops running/.test(drawn),
     'the sentence claiming this list has no consequences is back'
