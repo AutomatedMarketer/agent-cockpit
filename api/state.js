@@ -122,9 +122,18 @@ function routineNameKey(value) {
   return typeof value === 'string' ? value.trim().normalize('NFC').toLowerCase().replace(/\s+/g, ' ') : ''
 }
 
+// Every `why` here is a FINISHED SENTENCE, capital letter and full stop, for the same reason the
+// hero panel's are: they are printed straight after a bold sentence that ends in a full stop, so a
+// fragment starting lowercase reads as a typo on the most prominent warning on the screen. That was
+// fixed for the hero panel one screen earlier and missed here - the tool was fixed and the other
+// end of it was not.
+//
+// Capitalising at the display layer is NOT the fix, and this is the third place that has been true:
+// the display layer cannot tell a sentence from a filename, and doing it there once turned
+// `tiles.yml` into `Tiles.yml` and sent students to a file that does not exist.
 export function shapeSnapshot(source, now = Date.now()) {
   if (source === null || source === undefined) {
-    return { takenAt: null, routines: [], usable: false, why: 'no snapshot has been taken yet' }
+    return { takenAt: null, routines: [], usable: false, why: 'No snapshot has been taken yet.' }
   }
   let parsed
   try {
@@ -132,16 +141,16 @@ export function shapeSnapshot(source, now = Date.now()) {
   } catch {
     // Corrupt is not absent. An empty routine list for an unreadable file would assert "nothing is
     // scheduled", which is a claim about somebody's account a broken file cannot support.
-    return { takenAt: null, routines: [], usable: false, why: 'the snapshot could not be read' }
+    return { takenAt: null, routines: [], usable: false, why: 'The snapshot could not be read.' }
   }
   const routines = Array.isArray(parsed?.routines) ? parsed.routines : null
   if (!routines) {
-    return { takenAt: null, routines: [], usable: false, why: 'the snapshot has no routines list' }
+    return { takenAt: null, routines: [], usable: false, why: 'The snapshot has no routines list.' }
   }
   const takenAt = typeof parsed?.takenAt === 'string' ? parsed.takenAt.trim() : ''
   const takenMs = takenAt ? Date.parse(takenAt) : NaN
   if (!takenAt || Number.isNaN(takenMs)) {
-    return { takenAt: null, routines, usable: false, why: 'the snapshot does not say when it was taken' }
+    return { takenAt: null, routines, usable: false, why: 'The snapshot does not say when it was taken.' }
   }
   const ageHours = (now - takenMs) / 3600_000
 
@@ -154,7 +163,7 @@ export function shapeSnapshot(source, now = Date.now()) {
       routines,
       ageHours,
       usable: false,
-      why: 'the snapshot is stamped in the future, so its age cannot be trusted'
+      why: 'The snapshot is stamped in the future, so its age cannot be trusted.'
     }
   }
 
@@ -165,7 +174,7 @@ export function shapeSnapshot(source, now = Date.now()) {
     ageHours,
     stale,
     usable: true,
-    why: stale ? `the snapshot was taken ${describeAge(ageHours)} ago` : null
+    why: stale ? `The snapshot was taken ${describeAge(ageHours)} ago.` : null
   }
 }
 
@@ -750,6 +759,30 @@ function isRunningLog(run, now) {
   return Number.isFinite(started) && now - started <= RUNNING_GRACE_MINUTES * 60_000
 }
 
+// A job owned by an agent somebody switched off validates clean and then never runs. That is not a
+// guess: agent-team-template's own validator asks whether the owner EXISTS, not whether it is in
+// use, and its scripts/check-arming.mjs already prints "Owned by an agent you are not using - these
+// cannot run as written" in the terminal for exactly this.
+//
+// The board had both halves and said neither. It reads the knowledge files to decide an agent is
+// switched off, and it reads every job's owner - and then showed nine cards that differed only in
+// their reason for being off. Two of the nine jobs the template ships are owned by sales and
+// customer-service, which are the two an employee switches off, so this is not a hypothetical about
+// hand-written files: it is the state a fresh clone is in the moment somebody with a job answers
+// those two knowledge files honestly. Both cards invited him to arm them once the data arrived.
+//
+// Returns the same rows with the flag added, rather than a filtered list, because the answer this
+// screen needs is which card to mark - not which cards to hide.
+export function markOwnerSwitchedOff(workflows = [], agents = []) {
+  const off = new Set(
+    agents.filter((agent) => agent?.state === 'not-in-use').map((agent) => agent.slug)
+  )
+  return workflows.map((workflow) => ({
+    ...workflow,
+    ownerSwitchedOff: typeof workflow?.owner === 'string' && workflow.owner !== '' && off.has(workflow.owner)
+  }))
+}
+
 export function shapeBoard(workflows, runs, tasks = [], now = Date.now()) {
   // To do: open tasks (todo and doing), oldest first — task filenames are date-prefixed
   // by convention, so path order is age order. `doing` rides along as a flag rather than
@@ -954,7 +987,10 @@ export default async function handler(request, response) {
     if (agents.length) known.agents = agents.map((agent) => agent.slug)
     if (skillSlugs.length) known.skills = skillSlugs
     const snapshot = shapeSnapshot(routineSnapshotSource, now)
-    const workflows = shapeWorkflows(workflowFiles, runs, known, now, snapshot.routines, snapshot.usable && !snapshot.stale)
+    const workflows = markOwnerSwitchedOff(
+      shapeWorkflows(workflowFiles, runs, known, now, snapshot.routines, snapshot.usable && !snapshot.stale),
+      agents
+    )
     const tasks = parseTasks(taskFiles)
 
     // Heartbeat files named by the registry, fetched only if the tree actually has them.

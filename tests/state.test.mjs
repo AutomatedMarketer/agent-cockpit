@@ -2,7 +2,7 @@
 // a network, a token, or a live account.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import handler, { isTaskCard, shapeHero } from '../api/state.js'
+import handler, { isTaskCard, shapeHero, markOwnerSwitchedOff } from '../api/state.js'
 
 // This suite covers the endpoint's data logic, not the view gate - that has its own
 // suite in gate.test.mjs. Opting out here keeps every case from carrying a key header.
@@ -549,4 +549,72 @@ test('a hero the board can compute is unaffected', () => {
     { ownerType: 'business', hoursPerWeek: 3, costPerWeek: 450, unpriced: false, unreadable: 0, complete: true, tasks: [] }
   )
   assert.equal(hero.defined, true)
+})
+
+/* A JOB OWNED BY AN AGENT SOMEBODY SWITCHED OFF.
+
+   It validates clean and then never runs: agent-team-template's workflow validator asks whether the
+   owner EXISTS, not whether it is in use, and its scripts/check-arming.mjs already prints
+   "Owned by an agent you are not using - these cannot run as written" in the terminal for it.
+
+   The board had both halves and said neither. It reads the knowledge files to decide an agent is
+   switched off, and it reads every job's owner, and it drew nine cards that differed only in their
+   reason for being off. Two of the nine jobs the template ships are owned by sales and
+   customer-service - the two an employee switches off - so this is the state a fresh clone is in
+   the moment somebody with a job answers those two files honestly. Both cards told him to arm them
+   once the data arrived. */
+
+const agentsWithTwoOff = [
+  { slug: 'sales', state: 'not-in-use' },
+  { slug: 'customer-service', state: 'not-in-use' },
+  { slug: 'research', state: 'working' },
+  { slug: 'editor', state: 'never-run' }
+]
+
+test('a job owned by a switched-off agent is marked, and the others are not', () => {
+  const marked = markOwnerSwitchedOff(
+    [
+      { slug: 'gone-cold', owner: 'sales' },
+      { slug: 'weekly-review', owner: 'customer-service' },
+      { slug: 'morning-intel', owner: 'research' },
+      { slug: 'quality-review', owner: 'editor' }
+    ],
+    agentsWithTwoOff
+  )
+  assert.deepEqual(
+    marked.map((workflow) => [workflow.slug, workflow.ownerSwitchedOff]),
+    [
+      ['gone-cold', true],
+      ['weekly-review', true],
+      ['morning-intel', false],
+      // An agent nobody has got round to yet is NOT the same as one switched off on purpose. This
+      // job will run the moment it is armed; saying it cannot would be the opposite lie.
+      ['quality-review', false]
+    ]
+  )
+})
+
+test('nothing is marked when no agent is switched off', () => {
+  const marked = markOwnerSwitchedOff(
+    [{ slug: 'gone-cold', owner: 'sales' }],
+    [{ slug: 'sales', state: 'working' }]
+  )
+  assert.equal(marked[0].ownerSwitchedOff, false)
+})
+
+test('a job with no owner is never marked, and never crashes the screen', () => {
+  const marked = markOwnerSwitchedOff(
+    [{ slug: 'a', owner: '' }, { slug: 'b' }, { slug: 'c', owner: null }],
+    agentsWithTwoOff
+  )
+  assert.deepEqual(marked.map((workflow) => workflow.ownerSwitchedOff), [false, false, false])
+  assert.deepEqual(markOwnerSwitchedOff(), [])
+})
+
+test('marking leaves every other field on the job alone', () => {
+  // It returns new rows rather than mutating, so anything it drops is a field a card stops drawing.
+  const before = { slug: 'gone-cold', owner: 'sales', name: 'Gone Cold', arm: 'off', reason: 'Off until.', problems: [] }
+  const [after] = markOwnerSwitchedOff([before], agentsWithTwoOff)
+  assert.deepEqual({ ...after, ownerSwitchedOff: undefined }, { ...before, ownerSwitchedOff: undefined })
+  assert.equal(before.ownerSwitchedOff, undefined, 'the original row was mutated')
 })

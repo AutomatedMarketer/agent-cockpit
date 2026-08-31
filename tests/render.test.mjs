@@ -94,7 +94,10 @@ const base = {
   ledger: null,
   proposals: null,
   hero: null,
-  routines: { takenAt: null, usable: false, stale: false, why: 'no snapshot has been taken yet', count: 0, known: false, orphans: [], problems: [] },
+  // Word for word what shapeSnapshot returns for an absent snapshot. It read 'no snapshot has been
+  // taken yet' here long after the API stopped saying that, so these tests were drawing a screen
+  // no student could ever see.
+  routines: { takenAt: null, usable: false, stale: false, why: 'No snapshot has been taken yet.', count: 0, known: false, orphans: [], problems: [] },
   setup: [],
   generatedAt: new Date().toISOString()
 }
@@ -1135,4 +1138,41 @@ test('a switched-off agent with no quotable reason still says it is switched off
   assert.match(drawn, /Switched off, so nothing runs it/)
   assert.ok(!drawn.includes('Nothing logged yet'), 'a switched-off agent read as one nobody had used')
   assert.ok(!drawn.includes('tap to read them'))
+})
+
+test('a job owned by a switched-off agent says so, above the reason it contradicts', () => {
+  // The reason on this card reads "Off until the pipeline has people in it who could go quiet",
+  // which tells him to arm it when the data arrives. Arming it would achieve nothing: the agent
+  // that owns it is one he switched off, and the workflow validator only checks the owner exists.
+  // The two sentences sit on the same card, so the one that contradicts the other has to come
+  // first - otherwise the card ends on the instruction that does not work.
+  const drawn = render({
+    ...base,
+    workflows: [
+      workflow({
+        slug: 'gone-cold',
+        name: 'Gone Cold',
+        owner: 'sales',
+        ownerSwitchedOff: true,
+        arm: 'off',
+        reason: 'Off until the pipeline has people in it who could go quiet.'
+      })
+    ]
+  }).get('workflows').innerHTML
+
+  assert.match(drawn, /cannot run as written/, 'the card never says the job cannot run')
+  assert.match(drawn, /which you are not using/)
+  assert.ok(drawn.includes('<b>sales</b>'), 'it does not name the owner, so he cannot go and fix it')
+  assert.ok(
+    drawn.indexOf('cannot run as written') < drawn.indexOf('Off until the pipeline'),
+    'the card ends on an instruction that does not work'
+  )
+})
+
+test('a job whose owner is in use is not accused of being unable to run', () => {
+  const drawn = render({
+    ...base,
+    workflows: [workflow({ owner: 'research', ownerSwitchedOff: false, arm: 'off', reason: 'Off until you know your run cap.' })]
+  }).get('workflows').innerHTML
+  assert.ok(!drawn.includes('cannot run as written'), 'a job that runs fine was told it cannot')
 })

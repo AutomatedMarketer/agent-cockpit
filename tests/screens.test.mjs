@@ -92,7 +92,14 @@ test('unapproved spend is named as spend nobody approved', () => {
 test('the snapshot is always presented as a snapshot, with its age', () => {
   assert.match(page, /This is a snapshot, not a live reading/)
   assert.match(page, /Which of these actually ring is unknown/, 'and an absent one says so')
-  assert.match(page, /run <code>\/routines<\/code> again before/, 'and a stale one says so')
+  assert.match(page, /Run <code>\/routines<\/code> again before/, 'and a stale one says so')
+  // The banner must not add its own punctuation around the reason. It used to append a full stop
+  // and start the next word lowercase, which is how "No snapshot has been taken yet" ended up
+  // reading as a typo directly under a bold sentence.
+  assert.ok(
+    !page.includes("routines.why ?? '')}. Run") && !page.includes("routines.why ?? '')} — run"),
+    'the banner is punctuating the reason again instead of letting it be a sentence'
+  )
 })
 
 test('orphan routines are reported and explicitly not adopted', () => {
@@ -106,4 +113,35 @@ test('the schedule chip is only lit when something actually rings', () => {
 test('the unknown state has its own label and explanation', () => {
   assert.match(page, /UNKNOWN/)
   assert.match(page, /Whether anything actually fires it is unknown/)
+})
+
+test('every class this page uses to mark a warning actually colours it', () => {
+  // There was no `.bad` rule at all. Five places write class="small bad" for their worst sentence
+  // and every one rendered as ordinary body text, including the most serious sentence on the whole
+  // board - "It is spending runs nobody approved." Somebody's money, in the same colour as
+  // everything else. The intent was written down four times (.fire-note.bad, .never-run .state,
+  // .no-heartbeat .state, .st-failed all point at --bad) and the one rule carrying it was missing.
+  //
+  // Swept rather than asserting one rule, because the way this happened was a class being used in
+  // the markup that the stylesheet had never heard of.
+  const styles = page.slice(page.indexOf('<style>'), page.indexOf('</style>'))
+  const used = new Set()
+  for (const attr of page.matchAll(/class="([^"$]+)"/g)) {
+    for (const name of attr[1].split(/\s+/)) if (name) used.add(name)
+  }
+  // A selector for THIS class, not one merely containing its name: `.grid` must not be satisfied by
+  // `.gridline`, and a plain substring check is how the second assertion below was wrong at first.
+  const styledSomewhere = (name) => new RegExp(`\\.${name}(?![\\w-])`).test(styles)
+  const missing = [...used].filter((name) => !styledSomewhere(name))
+  assert.ok(used.size > 40, 'the sweep found almost no classes, so it is checking nothing')
+  assert.deepEqual(missing, [], `these classes are written in the markup and styled nowhere: ${missing.join(', ')}`)
+
+  // A BARE `.bad` rule, not `.fire-note.bad`. The first version of this line passed with the real
+  // rule deleted, because `.fire-note.bad { color: var(--bad); }` contains the exact text it was
+  // looking for. Caught by deleting the rule and watching the test stay green.
+  assert.match(
+    styles,
+    /(^|[\s,{}])\.bad\s*\{[^}]*color:\s*var\(--bad\)/,
+    'nothing gives a bare .bad element its colour, so every warning renders as ordinary text'
+  )
 })

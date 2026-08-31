@@ -42,7 +42,27 @@ test('an absent snapshot is unusable and says so - it never means nothing is sch
   const snap = shapeSnapshot(null)
   assert.equal(snap.usable, false)
   assert.deepEqual(snap.routines, [])
-  assert.match(snap.why, /no snapshot/)
+  assert.match(snap.why, /No snapshot has been taken yet\./)
+})
+
+test('every reason a snapshot is unusable is a finished sentence', () => {
+  // These print immediately after a bold sentence that ends in a full stop, so a fragment starting
+  // lowercase reads as a typo on the most prominent warning on the screen - which is what it did.
+  // Swept rather than listed one by one, because the way this got missed was the hero panel being
+  // fixed one screen earlier and this set not being looked at.
+  const reasons = [
+    shapeSnapshot(null).why,
+    shapeSnapshot('not json at all').why,
+    shapeSnapshot('{"takenAt":"2026-08-01T00:00:00Z"}').why,
+    shapeSnapshot('{"routines":[]}').why,
+    shapeSnapshot('{"routines":[],"takenAt":"2999-01-01T00:00:00Z"}').why,
+    shapeSnapshot('{"routines":[],"takenAt":"2020-01-01T00:00:00Z"}').why
+  ]
+  assert.equal(reasons.filter(Boolean).length, 6, 'a branch stopped giving a reason at all')
+  for (const reason of reasons) {
+    assert.match(reason, /^[A-Z]/, `not a sentence start: ${reason}`)
+    assert.match(reason, /\.$/, `no full stop at the end: ${reason}`)
+  }
 })
 
 test('a corrupt snapshot is not the same as an absent one', () => {

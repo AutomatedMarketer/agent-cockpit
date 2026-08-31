@@ -75,6 +75,13 @@
   .not-in-use .state { color: var(--muted); }
   .muted { color: var(--muted); }
   .small { font-size: .8125rem; }
+  /* There was no `.bad` rule at all. Five places in this page write `class="small bad"` for their
+     worst sentence and every one of them rendered as ordinary body text, including the most serious
+     sentence on the board - "A routine is firing for this and the file says it is off. It is
+     spending runs nobody approved." Somebody's money, in the same grey as everything else.
+     `.fire-note.bad` and `.never-run .state` both already point at this variable, so the intent was
+     written down four times and the one rule that would carry it was missing. */
+  .bad { color: var(--bad); }
   /* Somebody else's sentence, at whatever length they wrote it. Three lines on a phone is enough to
      read the reason; the whole thing is in the title attribute. overflow-wrap because a long word
      or a pasted address would otherwise push the card wider than the screen. */
@@ -1077,14 +1084,14 @@ function snapshotBannerHtml(routines) {
   if (!routines) return ''
   if (!routines.usable) {
     return `<div class="panel empty"><b>Which of these actually ring is unknown.</b>
-      <span class="small">${escapeHtml(routines.why ?? '')}. Run <code>/routines</code> in your team repo
+      <span class="small">${escapeHtml(routines.why ?? '')} Run <code>/routines</code> in your team repo
       to record what is really scheduled. Until then the states below come from your files alone,
       and a file claiming a schedule is exactly what this screen is here to check.</span></div>`
   }
   const when = stamp(routines.takenAt)
   if (routines.stale) {
     return `<div class="panel empty"><b>These routines were last checked ${escapeHtml(when)}.</b>
-      <span class="small">${escapeHtml(routines.why ?? '')} — run <code>/routines</code> again before
+      <span class="small">${escapeHtml(routines.why ?? '')} Run <code>/routines</code> again before
       trusting it.</span></div>`
   }
   return `<div class="panel"><span class="small muted">${routines.count} routine${routines.count === 1 ? '' : 's'}
@@ -1150,6 +1157,13 @@ function renderWorkflows() {
           // the owner's own reason does not already say it.
           ? `<div class="small muted">${/^off\b/i.test(workflow.reason.trim()) ? '' : 'Off: '}${escapeHtml(workflow.reason)}</div>`
           : ''
+    // Printed ABOVE the reason, because it is the thing the reason contradicts. "Off until the
+    // pipeline has people in it who could go quiet" tells him to arm this when the data arrives;
+    // arming it would achieve nothing, because the agent that owns it is one he switched off. The
+    // wording matches what `check:arming` prints in the terminal, so the two cannot disagree.
+    const ownerNote = workflow.ownerSwitchedOff
+      ? `<div class="small bad">Owned by <b>${escapeHtml(workflow.owner)}</b>, which you are not using &mdash; this cannot run as written. Give it a different owner, or leave it off on purpose.</div>`
+      : ''
     const problems = workflow.problems.length
       ? `<ul class="problems">${workflow.problems.map((problem) => `<li>${escapeHtml(problem)}</li>`).join('')}</ul>`
       : ''
@@ -1189,6 +1203,7 @@ function renderWorkflows() {
         <span class="small muted">${last}${next}</span>
         <span class="row">${runButton}${armButton}${pauseButton}</span>
       </div>
+      ${ownerNote}
       ${armNote}
       ${problems}
     </div>`
