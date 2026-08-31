@@ -668,3 +668,37 @@ test('nothing is stalled when no job carries the flag at all', () => {
   const [skill] = shapeSkills([skillFile('scan-market')], [{ slug: 'morning-intel', steps: ['scan-market'] }])
   assert.deepEqual(skill.stalled, [])
 })
+
+test('the agents behind the dead jobs are listed once each, in job order', () => {
+  // Two dead jobs owned by the SAME agent must name it once. Saying "their owners are switched
+  // off" for that case claims two agents where there is one, which is how the display got this
+  // wrong before review caught it.
+  const [shared] = shapeSkills(
+    [skillFile('review-pipeline')],
+    [
+      { slug: 'gone-cold', owner: 'sales', steps: ['review-pipeline'], ownerSwitchedOff: true },
+      { slug: 'chase-again', owner: 'sales', steps: ['review-pipeline'], ownerSwitchedOff: true }
+    ]
+  )
+  assert.deepEqual(shared.stalled, ['gone-cold', 'chase-again'])
+  assert.deepEqual(shared.stalledOwners, ['sales'])
+
+  const [two] = shapeSkills(
+    [skillFile('review-pipeline')],
+    [
+      { slug: 'gone-cold', owner: 'sales', steps: ['review-pipeline'], ownerSwitchedOff: true },
+      { slug: 'weekly-review', owner: 'customer-service', steps: ['review-pipeline'], ownerSwitchedOff: true },
+      { slug: 'draft-queue', owner: 'content', steps: ['review-pipeline'], ownerSwitchedOff: false }
+    ]
+  )
+  assert.deepEqual(two.stalledOwners, ['sales', 'customer-service'], "a live job's owner was listed as switched off")
+})
+
+test('a dead job with no owner recorded contributes no name', () => {
+  const [skill] = shapeSkills(
+    [skillFile('review-pipeline')],
+    [{ slug: 'gone-cold', owner: '', steps: ['review-pipeline'], ownerSwitchedOff: true }]
+  )
+  assert.deepEqual(skill.stalled, ['gone-cold'])
+  assert.deepEqual(skill.stalledOwners, [], 'it invented an owner it was never given')
+})

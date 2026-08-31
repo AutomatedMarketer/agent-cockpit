@@ -7,7 +7,7 @@ import { shapeHero } from '../api/state.js'
 /* Every other test in this repo checks the API, or greps the page source for a string. None of
    them has ever RENDERED a screen. A verifier had to build its own DOM shim to find that the week
    strip still printed times for jobs nothing fires, and that an empty ledger produced a giant "0"
-   — both invisible to a regex over the source, both obvious the moment a screen is drawn.
+   &mdash; both invisible to a regex over the source, both obvious the moment a screen is drawn.
    So the harness lives here now. */
 
 const html = readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8')
@@ -156,7 +156,7 @@ test('no screen renders undefined, NaN or [object Object]', () => {
 /* ---------- the claim the last pass half-kept -------------------------------------------------- */
 
 /* The week strip filtered on `workflow.schedule` alone, so a declared job appeared on every day,
-   indistinguishable from a real one — and on Today it collected a "was due, no run logged" mark
+   indistinguishable from a real one &mdash; and on Today it collected a "was due, no run logged" mark
    four times a week. That is an accusation, and it needs an alarm clock to exist first. */
 
 test('a job nothing fires never appears in the week strip', () => {
@@ -1180,11 +1180,12 @@ test('a job whose owner is in use is not accused of being unable to run', () => 
 test('a skill whose only job cannot run says so, without calling the skill dead', () => {
   const drawn = render({
     ...base,
-    skills: [{ slug: 'collect-run-logs', path: '.claude/skills/collect-run-logs/SKILL.md', description: 'Gather the facts.', usedBy: ['weekly-review'], stalled: ['weekly-review'] }]
+    skills: [{ slug: 'collect-run-logs', path: '.claude/skills/collect-run-logs/SKILL.md', description: 'Gather the facts.', usedBy: ['weekly-review'], stalled: ['weekly-review'], stalledOwners: ['customer-service'] }]
   }).get('skills').innerHTML
 
   assert.match(drawn, /which cannot run as written/, 'the screen leaves him to cross-reference another one')
-  assert.match(drawn, /its owner is switched off/, 'it does not say WHY the job cannot run')
+  assert.match(drawn, /is switched off/, 'it does not say WHY the job cannot run')
+  assert.match(drawn, /weekly-review/, 'and it does not name the job or the agent behind it')
   // The narrow claim. Everything on this screen can still be asked for by name, so anything
   // stronger than "the job cannot run" is a bigger claim than the evidence supports.
   for (const overreach of ['useless', 'never used', 'cannot be used', 'does nothing']) {
@@ -1206,10 +1207,60 @@ test('a skill used by a job that runs is not marked, and neither is one used by 
 test('a skill used by one dead job and one live one names the dead one', () => {
   const drawn = render({
     ...base,
-    skills: [{ slug: 'review-pipeline', path: '.claude/skills/review-pipeline/SKILL.md', description: 'd', usedBy: ['gone-cold', 'draft-queue'], stalled: ['gone-cold'] }]
+    skills: [{ slug: 'review-pipeline', path: '.claude/skills/review-pipeline/SKILL.md', description: 'd', usedBy: ['gone-cold', 'draft-queue'], stalled: ['gone-cold'], stalledOwners: ['sales'] }]
   }).get('skills').innerHTML
   assert.match(drawn, /gone-cold cannot run as written/)
   assert.ok(!drawn.includes('which cannot run as written'), 'it implied BOTH jobs are dead')
+})
+
+/* HOW MANY OWNERS THERE ARE. Review found the version that could not tell: it said "the owner is
+   switched off" for any number of dead jobs, inventing one shared owner where there can be two -
+   and the two agents somebody with a job switches off are exactly that case. The count is out of
+   the sentence now; it names them instead, which is also the half he can act on. */
+
+const skillWith = (over) => ({
+  slug: 'review-pipeline',
+  path: '.claude/skills/review-pipeline/SKILL.md',
+  description: 'd',
+  ...over
+})
+const noteFor = (over) =>
+  render({ ...base, skills: [skillWith(over)] })
+    .get('skills')
+    .innerHTML.match(/<div class="small bad">([^<]*)<\/div>/)?.[1] ?? ''
+
+test('the line names the agents behind the dead jobs, however many there are', () => {
+  assert.equal(
+    noteFor({ usedBy: ['gone-cold'], stalled: ['gone-cold'], stalledOwners: ['sales'] }),
+    'which cannot run as written &mdash; sales is switched off'
+  )
+  assert.equal(
+    noteFor({ usedBy: ['gone-cold', 'weekly-review'], stalled: ['gone-cold', 'weekly-review'], stalledOwners: ['sales', 'customer-service'] }),
+    'none of which can run as written &mdash; sales and customer-service are switched off'
+  )
+  // Two dead jobs, ONE owner between them. "their owners are" would claim two agents where there
+  // is one; naming them says it once and correctly.
+  assert.equal(
+    noteFor({ usedBy: ['a', 'b'], stalled: ['a', 'b'], stalledOwners: ['sales'] }),
+    'none of which can run as written &mdash; sales is switched off'
+  )
+  // Three jobs, two dead, two different owners - the case review found, where the old wording said
+  // "the owner is switched off" and invented a single shared one.
+  assert.equal(
+    noteFor({ usedBy: ['a', 'b', 'c'], stalled: ['a', 'b'], stalledOwners: ['sales', 'customer-service'] }),
+    'a, b cannot run as written &mdash; sales and customer-service are switched off'
+  )
+  // Three owners, so the joining has to hold up past two.
+  assert.equal(
+    noteFor({ usedBy: ['a', 'b', 'c'], stalled: ['a', 'b', 'c'], stalledOwners: ['sales', 'customer-service', 'editor'] }),
+    'none of which can run as written &mdash; sales, customer-service and editor are switched off'
+  )
+})
+
+test('a payload with no stalledOwners still says the job cannot run, and claims nothing else', () => {
+  const note = noteFor({ usedBy: ['gone-cold'], stalled: ['gone-cold'] })
+  assert.equal(note, 'which cannot run as written')
+  assert.ok(!note.includes('switched off'), 'it named an owner it was never given')
 })
 
 test('a skills payload with no stalled field at all still renders', () => {

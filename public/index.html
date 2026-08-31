@@ -1682,16 +1682,28 @@ function renderSkills() {
   //   own description, rendered two lines below the heading, says "use at the end of every agent
   //   run, scheduled or manual". A heading contradicted by the text under it is worse than no
   //   heading.
+  // "a", "a and b", "a, b and c" - so the sentence below never has to say how many there are.
+  const inWords = (items) =>
+    items.length < 3
+      ? items.join(' and ')
+      : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
   const stalledNote = (skill) => {
     const stalled = skill.stalled ?? []
     if (!stalled.length) return ''
-    const all = stalled.length === (skill.usedBy ?? []).length
-    const said = all
-      ? stalled.length === 1
-        ? 'which cannot run as written &mdash; its owner is switched off'
-        : 'none of which can run as written &mdash; their owners are switched off'
-      : `${stalled.map(escapeHtml).join(', ')} cannot run as written &mdash; the owner is switched off`
-    return `<div class="small bad">${said}</div>`
+    // Which jobs. When every job listing this skill is dead there is no point naming them again -
+    // the "used by" line directly above already did.
+    const which = stalled.length === (skill.usedBy ?? []).length
+      ? stalled.length === 1 ? 'which cannot run as written' : 'none of which can run as written'
+      : `${stalled.map(escapeHtml).join(', ')} cannot run as written`
+    // And why, by naming the agents rather than counting them. An earlier version said "the owner
+    // is switched off" whatever the number, which invents one shared owner where there can be two -
+    // and the two agents somebody with a job switches off are exactly that case. Naming them is
+    // also the more useful half: it is the thing he would go and change.
+    const owners = skill.stalledOwners ?? []
+    const why = owners.length
+      ? ` &mdash; ${inWords(owners.map(escapeHtml))} ${owners.length === 1 ? 'is' : 'are'} switched off`
+      : ''
+    return `<div class="small bad">${which}${why}</div>`
   }
   const skillRow = (skill) => `
     <div class="agent">

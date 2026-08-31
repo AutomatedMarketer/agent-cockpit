@@ -379,7 +379,20 @@ export function shapeSkills(skillFiles, workflows = []) {
         path,
         description: data.description ?? '',
         usedBy: users.map((workflow) => workflow.slug),
-        stalled: users.filter((workflow) => workflow.ownerSwitchedOff).map((workflow) => workflow.slug)
+        stalled: users.filter((workflow) => workflow.ownerSwitchedOff).map((workflow) => workflow.slug),
+        // The AGENTS behind those jobs, deduplicated, so the line can name what he has to look at
+        // rather than counting. Review caught the version that could not: it said "the owner is
+        // switched off" for any number of jobs, which invents a single shared owner when two dead
+        // jobs can have two different ones - and this repo's two switchable agents are exactly that
+        // case. Naming them removes the count from the sentence entirely, and two jobs owned by the
+        // same agent correctly say that agent once.
+        stalledOwners: [
+          ...new Set(
+            users
+              .filter((workflow) => workflow.ownerSwitchedOff && typeof workflow.owner === 'string' && workflow.owner)
+              .map((workflow) => workflow.owner)
+          )
+        ]
       }
     })
     .sort((a, b) => a.slug.localeCompare(b.slug))
