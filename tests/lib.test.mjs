@@ -1,6 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync, existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
+  notInUse,
+  ownWords,
   parseFrontmatter,
   daysSince,
   minutesSince,
@@ -109,4 +113,52 @@ test('a missing or malformed heartbeat file says so rather than pretending', () 
   assert.equal(heartbeatStatus(null, NOW).status, 'no-heartbeat')
   assert.equal(heartbeatStatus({}, NOW).status, 'no-heartbeat')
   assert.equal(heartbeatStatus({ at: 'not a date' }, NOW).status, 'no-heartbeat')
+})
+
+/* ---------- the switched-off judgement must not drift from the template -----------------------
+
+   Two of the eight agents - sales and customer-service - are the ones somebody with a job switches
+   off, and this board decides which by reading their knowledge file. `notInUse` here and the copy
+   in agent-team-template's scripts/lib/knowledge.mjs are the same rule written twice, mirrored by
+   hand because there is no import path between a student's repo and a deployed web app. Same shape
+   as the arming mirror, which drifted and needed a shared fixture to catch it. This one had no
+   fixture, and it was wrong in both copies at once.
+
+   It got the answer backwards for the person it most often describes: a business owner who had
+   answered every question. Both knowledge files open with a paragraph telling somebody in a job
+   what to write, and it QUOTES the sentence. Nothing tells an owner to delete that paragraph. So
+   this screen told a working business their sales and customer-service agents were Not in use.
+
+   tests/fixtures/knowledge-parity.json is the shared contract: the same bytes in both repos, run
+   by both sides. Change one implementation only and that side fails here. */
+
+const knowledgeFixtureUrl = new URL('./fixtures/knowledge-parity.json', import.meta.url)
+const knowledgeFixture = JSON.parse(readFileSync(knowledgeFixtureUrl, 'utf8'))
+
+for (const testCase of knowledgeFixture.cases) {
+  test(`switched-off parity: ${testCase.label}`, () => {
+    const body = (knowledgeFixture.guidance[testCase.guidance] ?? '') + testCase.body
+    assert.equal(notInUse(body), testCase.notInUse)
+  })
+}
+
+test('the two repos hold the same switched-off contract, byte for byte', (t) => {
+  const sibling = fileURLToPath(
+    new URL('../../agent-team-template/tests/fixtures/knowledge-parity.json', import.meta.url)
+  )
+  if (!existsSync(sibling)) {
+    t.skip('agent-team-template is not checked out beside this repo')
+    return
+  }
+  assert.equal(
+    readFileSync(sibling, 'utf8'),
+    readFileSync(knowledgeFixtureUrl, 'utf8'),
+    'the shared contract has been edited on one side only - that is the drift, one level up'
+  )
+})
+
+test('stripping the quoted example is what the rule depends on', () => {
+  const guidance = knowledgeFixture.guidance.sales
+  assert.notEqual(ownWords(guidance), guidance, 'the quoted example is no longer being stripped')
+  assert.equal(ownWords('plain prose with no example'), 'plain prose with no example')
 })

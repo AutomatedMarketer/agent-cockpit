@@ -84,10 +84,44 @@ export function minutesSince(iso, now = Date.now()) {
 // as not in use.
 const NOT_IN_USE = /\b(?:i|we)\s+do\s+not\s+(?:sell|deal\s+with\s+customers|have\s+customers)\b/i
 
+// The refusal has to be found in the owner's OWN WORDS, not in the instructions that show them
+// what to write. Both knowledge files open with a paragraph quoting the sentence as an example,
+// wrapped in markdown emphasis and quotation marks:
+//
+//     *"I do not sell - I work for this business and the selling is <name>'s job"*
+//
+// The fill-marker guard alone separates a FRESH file from an answered one, and the case that bites
+// is an ANSWERED one. A business owner who answered every question and left the instructions in
+// place - nothing tells them to delete it - satisfied both halves, and this screen told them their
+// sales and customer-service agents were "Not in use". Exactly backwards, on two of eight agents.
+//
+// Strip that example and what is left is what the owner wrote. What identifies it is not its
+// punctuation but the `<name>` still sitting inside it: an unfilled placeholder, the same family
+// of thing as a `<!-- fill: -->` marker, which this function already refuses to judge around.
+//
+// Two earlier attempts inferred intent from SHAPE and each broke in the opposite direction.
+// Splitting at the first `## ` heading meant demoted or indented headings brought the false
+// positive back, and a refusal above the first heading was missed. Stripping any `*"..."*` span
+// meant somebody who copied the guidance's punctuation and changed the words - which is what
+// "something like" invites - had their real refusal thrown away. The placeholder is content, and
+// it is only ever true of text nobody has answered yet.
+//
+// KEEP IN SYNC with agent-team-template's scripts/lib/knowledge.mjs, same as the regex above.
+// tests/fixtures/knowledge-parity.json is the shared contract: the same bytes in both repos, run
+// by both sides, so changing one implementation alone fails that side's suite.
+const QUOTED_EXAMPLE = /\*"[\s\S]*?"\*/g
+const UNFILLED_NAME = /<name>/i
+
+export function ownWords(knowledgeBody) {
+  return String(knowledgeBody ?? '').replace(QUOTED_EXAMPLE, (span) =>
+    UNFILLED_NAME.test(span) ? ' ' : span
+  )
+}
+
 export function notInUse(knowledgeBody) {
   if (typeof knowledgeBody !== 'string' || !knowledgeBody) return false
   if (fillMarkers(knowledgeBody).length) return false
-  return NOT_IN_USE.test(knowledgeBody)
+  return NOT_IN_USE.test(ownWords(knowledgeBody))
 }
 
 // runs must be newest first. States match the Team screen: working / attention / quiet /
