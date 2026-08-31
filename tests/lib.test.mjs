@@ -228,6 +228,7 @@ const QUOTABLE = {
   'as a numbered item': '1. ' + REFUSAL,
   'as a numbered item with a bracket': '2) ' + REFUSAL,
   'as an indented bullet': '   - ' + REFUSAL,
+  'in a quote with no space after the marker': '>' + REFUSAL,
   'as a nested bullet under a lead-in': '- Reasons\n  - ' + REFUSAL,
   'as a bullet under a lead-in inside a quote': '> Notes\n> - ' + REFUSAL,
   'below a fenced example': '```\nexample: I do not sell.\n```\n\n' + REFUSAL,
@@ -241,10 +242,24 @@ const MUST_REFUSE = {
   'only inside a tilde fence': '~~~\nI do not sell.\n~~~',
   'only inside an indented block': '    I do not sell.',
   'only inside a heading': '## I do not sell',
-  // A setext heading is its title line plus the underline beneath it. Without removing that title
-  // line the refusal would be quoted from a heading, which is the one case the pop() in
-  // proseBlocks exists for - and until this row nothing tested it.
-  'only inside a setext heading': 'I do not sell - Ray handles it.\n-----'
+  // A setext heading is its title line plus the underline beneath it, and the underline claims the
+  // WHOLE run of lines above it, not just the last one. Dropping one line returned
+  // "I do not sell - Ray" for the wrapped case below - a fragment cut mid-clause, shown as though
+  // it were the whole quote. A truncated quote is a wrong quote.
+  'only inside a setext heading': 'I do not sell - Ray handles it.\n-----',
+  'only inside a setext heading written over two lines': 'I do not sell - Ray\nhandles it.\n-----'
+}
+
+// Text the owner wrote that must come back BYTE FOR BYTE, marks and all. A `*` or `-` with no
+// space after it is punctuation or emphasis, not a list marker, and an earlier version stripped it
+// anyway - turning "*I do not sell* - Ray handles it." into "I do not sell* - Ray handles it." and
+// showing that as a direct quote. Editing somebody's real words is the same failure as inventing
+// them, so these come back exactly as written even though the marks show.
+const VERBATIM = {
+  'italicised by the owner': '*I do not sell* - Ray handles it.',
+  'bolded by the owner': '**I do not sell** - Ray handles it.',
+  'opening with a plus': '+1 on this: I do not sell - Ray handles it.',
+  'opening with a dash and no space': '-I do not sell- is the short version, Ray handles it.'
 }
 
 for (const [shape, body] of Object.entries(QUOTABLE)) {
@@ -260,6 +275,16 @@ for (const [shape, body] of Object.entries(MUST_REFUSE)) {
       notInUseBecause('# FAQ\n\n' + body + '\n'),
       null,
       'an example was handed back as the owner\'s own words - saying nothing is the safe answer'
+    )
+  })
+}
+
+for (const [shape, body] of Object.entries(VERBATIM)) {
+  test(`a refusal ${shape} is quoted exactly as written`, () => {
+    assert.equal(
+      notInUseBecause('# FAQ\n\n' + body + '\n'),
+      body,
+      'the owner\'s own words were edited before being shown as a direct quote'
     )
   })
 }

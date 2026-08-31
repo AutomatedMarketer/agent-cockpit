@@ -175,7 +175,12 @@ export function notInUse(knowledgeBody) {
 // block, so a lead-in like "- Reasons" cannot run into the item beneath it. Wrapped lines inside
 // one block still join, because a refusal written across two lines is one sentence.
 function proseBlocks(knowledgeBody) {
-  const MARKERS = /^[ \t]{0,3}(?:(?:[>*+-]|\d+[.)])[ \t]*)+/
+  // A `>` is a quote marker with or without a space after it. A `*`, `+`, `-` or number is only a
+  // list marker when whitespace follows: `*I do not sell*` is somebody emphasising their own
+  // sentence, and an earlier version of this stripped that leading `*` and displayed
+  // "I do not sell* - Ray handles it." as a direct quote. Editing the owner's real words is the
+  // same failure as inventing them.
+  const MARKERS = /^[ \t]{0,3}(?:>[ \t]*|(?:[*+-]|\d+[.)])[ \t]+)+/
   const blocks = []
   let current = []
   let inFence = false
@@ -199,10 +204,12 @@ function proseBlocks(knowledgeBody) {
       close()
       continue
     }
-    // A setext underline turns the line above it into a heading, so that line goes too.
+    // A setext underline turns the WHOLE run of lines above it into a heading, not just the last
+    // one. Popping a single line meant a refusal wrapped over two lines and followed by a divider
+    // came back as "I do not sell - Ray" - a fragment cut mid-clause, shown as a complete quote.
+    // Silently truncating somebody is a wrong sentence, which is the thing this is built to refuse.
     if (/^[ \t]{0,3}[=-]{2,}[ \t]*$/.test(line)) {
-      current.pop()
-      close()
+      current = []
       continue
     }
     if (!line.trim()) {
