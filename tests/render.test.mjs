@@ -1095,3 +1095,16 @@ test('a switched-off agent is not invited to be tapped into an empty drawer', ()
   }).get('team').innerHTML
   assert.ok(!drawn.includes('tap to read them'), 'a switched-off agent invited a tap into nothing')
 })
+
+test('a switched-off agent with no quotable reason still says it is switched off', () => {
+  // Its refusal lives only inside a code fence, so there is nothing to quote. The card must not
+  // fall back to "Nothing logged yet", which is what an agent NOBODY HAS GOT TO says.
+  const drawn = render({
+    ...base,
+    agents: [{ slug: 'sales', description: 'd', model: 'opus', lastRun: null, lastStatus: null, runsThisWeek: 0, totalRuns: 0, state: 'not-in-use', notInUseBecause: null }]
+  }).get('team').innerHTML
+
+  assert.match(drawn, /Switched off, so nothing runs it/)
+  assert.ok(!drawn.includes('Nothing logged yet'), 'a switched-off agent read as one nobody had used')
+  assert.ok(!drawn.includes('tap to read them'))
+})

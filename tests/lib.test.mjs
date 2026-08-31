@@ -197,3 +197,54 @@ test('nothing at all gives nothing back', () => {
     assert.equal(notInUseBecause(body), null)
   }
 })
+
+/* A sentence walker cannot see markdown. Anything structural it walks through gets glued onto the
+   answer, and anything EXAMPLE-shaped it finds gets handed back as though the owner wrote it.
+
+   The first version stripped `#` headings only, and its commit said "markdown headings are
+   stripped" - false as a general claim. Three things got through, and one was not cosmetic: a file
+   with an example inside a code fence and the real answer below it returned the EXAMPLE, backticks
+   and all, presented as the owner's own words. Fabricated attribution is worse than no reason. */
+
+const REFUSAL = 'I do not sell - Ray handles it.'
+
+test('the owner\'s real answer wins over an example in a code fence', () => {
+  const body = '# FAQ\n\n```\nexample: I do not sell.\n```\n\nI do not sell - the real reason is Ray handles it.\n'
+  assert.equal(notInUseBecause(body), 'I do not sell - the real reason is Ray handles it.')
+})
+
+test('a refusal that exists only inside a code fence is not quoted at all', () => {
+  const body = '# X\n\n```\nI do not sell.\n```\n'
+  assert.equal(notInUseBecause(body), null, 'an example was handed back as the owner\'s own words')
+})
+
+test('a tilde fence is a fence too', () => {
+  const body = '# X\n\n~~~\nexample: I do not sell.\n~~~\n\nI do not sell - Ray handles it.\n'
+  assert.equal(notInUseBecause(body), REFUSAL)
+})
+
+test('markdown structure never ends up glued to the sentence', () => {
+  const around = {
+    'atx heading': '## What I sell\n' + REFUSAL,
+    'setext with dashes': 'Title\n-----\n' + REFUSAL,
+    'setext with equals': 'Section\n======\n' + REFUSAL,
+    'blockquote': '> ' + REFUSAL,
+    'bullet': '- ' + REFUSAL,
+    'star bullet': '* ' + REFUSAL,
+    'numbered': '1. ' + REFUSAL,
+    'numbered with bracket': '2) ' + REFUSAL,
+    'indented bullet': '   - ' + REFUSAL
+  }
+  for (const [shape, body] of Object.entries(around)) {
+    assert.equal(notInUseBecause('# FAQ\n\n' + body + '\n'), REFUSAL, `${shape} leaked into the sentence`)
+  }
+})
+
+test('a refusal with no full stop at the end still comes back whole', () => {
+  assert.equal(notInUseBecause('# X\n\nI do not sell - Ray handles it'), 'I do not sell - Ray handles it')
+})
+
+test('only the refusal comes back, not the paragraph around it', () => {
+  const body = '# X\n\nWe bid a lot of work. I do not sell - Ray handles it. I assemble the packs.\n'
+  assert.equal(notInUseBecause(body), REFUSAL)
+})

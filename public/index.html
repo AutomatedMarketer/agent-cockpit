@@ -869,7 +869,11 @@ function renderTeam() {
             : ''
         }
         <span class="runcount">${
-          agent.notInUseBecause
+          // Keyed on the STATE, not on whether a reason came back. A refusal that only exists
+          // inside a code fence or a heading leaves nothing quotable, and this card still has to
+          // say the agent is off rather than falling back to "Nothing logged yet", which is what
+          // an agent nobody has got to says.
+          agent.state === 'not-in-use'
             ? 'Switched off, so nothing runs it'
             : agent.totalRuns === 0
             ? 'Nothing logged yet'

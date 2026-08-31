@@ -135,15 +135,42 @@ export function notInUse(knowledgeBody) {
 // DISPLAY ONLY. `notInUse` above is the judgement that is mirrored in agent-team-template and held
 // to tests/fixtures/knowledge-parity.json; this is not part of that contract and the template has
 // no need of it.
+// What is left of a knowledge file once everything that is not the owner's prose is taken out.
+// A sentence walker cannot see markdown, so anything structural it walks through gets glued onto
+// the answer - and anything EXAMPLE-shaped it finds gets returned as though the owner wrote it.
+//
+// The first version of this stripped `#` headings only, and the commit said "markdown headings are
+// stripped", which was false as a general claim. Three things got through, and one of them was not
+// cosmetic:
+//
+//   FENCED CODE returned somebody else's sentence. A file with an example in a fence and the real
+//   answer below it handed back the EXAMPLE, backticks and all, presented as the owner's own words.
+//   Fabricated attribution is worse than no reason at all.
+//
+//   SETEXT HEADINGS (`Title` over `-----`) have no `#`, so they survived and glued on exactly the
+//   way ATX headings had. Writing `---` under a line with no blank line between is a common
+//   markdown slip that silently makes that line a heading.
+//
+//   BLOCK MARKERS - a `>` quote or a `-` bullet - came back stuck to the front of the sentence.
+function ownProse(knowledgeBody) {
+  return ownWords(knowledgeBody)
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/~~~[\s\S]*?~~~/g, ' ')
+    .replace(/^#{1,6} .*$/gm, ' ')
+    .replace(/^.*\r?\n[=-]{2,}[ \t]*$/gm, ' ')
+    .replace(/^[ \t]{0,3}(?:[>*+-]|\d+[.)])[ \t]+/gm, '')
+}
+
 export function notInUseBecause(knowledgeBody) {
   if (!notInUse(knowledgeBody)) return null
-  // Headings are dropped before the split. A markdown heading has no full stop, so a sentence
-  // walker runs straight through it and hands back "## What I sell I do not sell - ...", which is
-  // the file's structure glued onto the owner's answer.
-  const prose = ownWords(knowledgeBody).replace(/^#{1,6} .*$/gm, '')
-  const refusal = prose.split(/(?<=[.!?])\s+/).find((sentence) => NOT_IN_USE.test(sentence))
+  const refusal = ownProse(knowledgeBody)
+    .split(/(?<=[.!?])\s+/)
+    .find((sentence) => NOT_IN_USE.test(sentence))
   if (!refusal) return null
-  return refusal.replace(/\s+/g, ' ').trim() || null
+  const cleaned = refusal.replace(/\s+/g, ' ').trim()
+  // A refusal that only exists inside something structural leaves nothing to quote. The card is
+  // built to show "not in use" with no reason rather than invent one - see renderTeam.
+  return cleaned || null
 }
 
 // runs must be newest first. States match the Team screen: working / attention / quiet /
