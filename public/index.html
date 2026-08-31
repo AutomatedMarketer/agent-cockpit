@@ -819,8 +819,13 @@ function renderToday() {
 
 function renderTeam() {
   if (!data.agents.length) {
+    // "asks about your business" was the only line on this board that assumed the reader owns the
+    // thing. Half the people this is built for have a job: the ledger's very first question is
+    // owner_type: business | job | both, and the walkthrough's employee persona is a bid
+    // coordinator who does not price work, choose what to bid, or spend anything. It is the empty
+    // state, so it is the FIRST sentence a brand-new student reads on this screen.
     el('team').innerHTML = `<div class="panel empty"><b>You have no agents yet.</b>
-      <span class="small">Run <code>/onboard</code> in your team repo. It asks about your business
+      <span class="small">Run <code>/onboard</code> in your team repo. It asks about your work
       and writes the first agents into <code>.claude/agents/</code>, and they appear here.</span></div>`
     return
   }

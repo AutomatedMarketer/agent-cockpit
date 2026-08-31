@@ -948,3 +948,45 @@ test('the hero panel reads as one sentence, with no doubled or missing full stop
   assert.match(drawn, /nobody has chosen yours\. \/onboard asks which/)
   assert.match(drawn, /it should be\. Nothing is shown rather than a zero/)
 })
+
+/* Half the people this board is built for have a job rather than a business. The ledger's very
+   first question is `owner_type: business | job | both`, and the walkthrough's employee persona is
+   a bid coordinator who does not price work, choose what to bid, or spend anything. The course's
+   own model of its reader has been the owner-shaped one before - 18 of that persona's 19 lesson
+   runs turned up a defect, nearly all of it a worked example assuming customers or authority.
+
+   The board was nearly clean. One line was not, and it was an empty state, which means it is the
+   FIRST sentence a brand-new student reads on that screen. */
+
+test('no screen tells the reader it is their business', () => {
+  const empty = render(base)
+  const full = render({
+    ...base,
+    agents: [{ slug: 'research', description: 'd', model: 'sonnet', lastRun: null, lastStatus: null, runsThisWeek: 0, totalRuns: 0, state: 'never-run' }],
+    ledger: { ownerType: 'job', hourlyValue: null, hoursPerWeek: 10, costPerWeek: null, unpriced: true, unreadable: 0, complete: true, tasks: [] },
+    connections: [connection()],
+    skills: [skill('triage-inbox', ['inbox-triage'])],
+    memory: { files: [{ path: 'shared/about-me.md', size: 100 }], indexes: [], truncated: false }
+  })
+
+  for (const nodes of [empty, full]) {
+    for (const screen of SCREENS) {
+      const drawn = nodes.get(screen).innerHTML
+      for (const assumption of [/your business/i, /your customers/i, /your revenue/i, /your company/i]) {
+        assert.ok(!assumption.test(drawn), `${screen} assumes the reader owns the business: ${assumption}`)
+      }
+    }
+  }
+})
+
+test('a week with no rate is counted in hours and never in money', () => {
+  const drawn = render({
+    ...base,
+    ledger: { ownerType: 'job', hourlyValue: null, hoursPerWeek: 10.33, costPerWeek: null, unpriced: true, unreadable: 0, complete: true, tasks: [] }
+  }).get('ledger').innerHTML
+
+  assert.match(drawn, /10\.3<\/b> hours a week/)
+  assert.match(drawn, /No rate recorded/)
+  assert.ok(!drawn.includes('$'), 'a money figure appeared for somebody who gave no rate')
+  assert.ok(!drawn.includes('at the rate you set'), 'it claimed a rate that was never given')
+})
