@@ -75,6 +75,17 @@
   .not-in-use .state { color: var(--muted); }
   .muted { color: var(--muted); }
   .small { font-size: .8125rem; }
+  /* Somebody else's sentence, at whatever length they wrote it. Three lines on a phone is enough to
+     read the reason; the whole thing is in the title attribute. overflow-wrap because a long word
+     or a pasted address would otherwise push the card wider than the screen. */
+  .clamp {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
   .empty { padding: 1rem; color: var(--muted); font-size: .875rem; }
   code { background: var(--chip); padding: .1rem .3rem; border-radius: 4px; font-size: .85em; }
   .title { font-size: .975rem; font-weight: 600; margin: 0; }
@@ -864,8 +875,15 @@ function renderTeam() {
           // board both show their reason - a workflow prints its `reason:`, a parked ledger row
           // prints its `parked_because:` - and this one showed nothing, so an agent somebody
           // switched off on purpose looked like an agent nobody had got to.
+          //
+          // Capped at three lines because there is no cap on how long somebody's sentence is. The
+          // rule that finds it reads to the end of the paragraph, so a single sentence listing
+          // everything the owner does not sell is one legitimate quote and ran to twelve lines on a
+          // phone, burying the eight agent cards under it. The full text stays in the tooltip.
           agent.notInUseBecause
-            ? `<div class="small muted">${escapeHtml(agent.notInUseBecause)}</div>`
+            ? `<div class="small muted clamp" title="${escapeHtml(agent.notInUseBecause)}">${escapeHtml(
+                agent.notInUseBecause
+              )}</div>`
             : ''
         }
         <span class="runcount">${

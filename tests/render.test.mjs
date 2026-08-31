@@ -1096,6 +1096,34 @@ test('a switched-off agent is not invited to be tapped into an empty drawer', ()
   assert.ok(!drawn.includes('tap to read them'), 'a switched-off agent invited a tap into nothing')
 })
 
+test('a long reason is capped on screen, with the whole sentence still reachable', () => {
+  // There is no cap on how long somebody's sentence is, and the rule that finds it reads to the end
+  // of the paragraph - so one legitimate quote listing everything the owner does not sell ran to
+  // twelve lines on a phone and buried the seven cards under it. Capped to three lines in CSS, full
+  // text in the tooltip. Cutting the TEXT instead would be editing somebody's words to fit a box.
+  const long =
+    'I do not sell televisions, radios, cookware, garden furniture, office chairs, ' +
+    "children's toys, seasonal decorations, power tools or bathroom fittings, because " +
+    'Ray handles all of that for this business and has done since we started trading.'
+  const drawn = render({
+    ...base,
+    agents: [{ slug: 'sales', description: 'd', model: 'opus', lastRun: null, lastStatus: null, runsThisWeek: 0, totalRuns: 0, state: 'not-in-use', notInUseBecause: long }]
+  }).get('team').innerHTML
+
+  assert.match(drawn, /class="small muted clamp"/, 'the reason is not capped, so a long one takes the screen')
+  // Both ends of the sentence, in the tooltip and in the body. The apostrophe in the middle is
+  // escaped, which is why this checks the ends rather than the whole string.
+  assert.match(
+    drawn,
+    /title="I do not sell televisions[^"]*we started trading\."/,
+    'the full sentence is not reachable once it is capped'
+  )
+  assert.ok(
+    drawn.includes('>I do not sell televisions') && drawn.includes('since we started trading.<'),
+    'the sentence was shortened rather than clipped - that edits somebody\'s words to fit a box'
+  )
+})
+
 test('a switched-off agent with no quotable reason still says it is switched off', () => {
   // Its refusal lives only inside a code fence, so there is nothing to quote. The card must not
   // fall back to "Nothing logged yet", which is what an agent NOBODY HAS GOT TO says.
