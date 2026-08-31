@@ -1224,30 +1224,51 @@ let memoryQuery = ''
 let memorySource = ''
 
 function memoryTreeHtml() {
-  const files = data.memory.files.filter((file) => {
-    if (memorySource) {
-      const top = file.path.includes('/') ? file.path.slice(0, file.path.indexOf('/')) : '(root)'
-      if (top !== memorySource) return false
-    }
-    if (memoryQuery && !file.path.toLowerCase().includes(memoryQuery)) return false
-    return true
-  })
+  const topOf = (path) => (path.includes('/') ? path.slice(0, path.indexOf('/')) : '(root)')
+  const inFolder = (file) => !memorySource || topOf(file.path) === memorySource
+  const nameMatches = (file) => !memoryQuery || file.path.toLowerCase().includes(memoryQuery)
+  const files = data.memory.files.filter((file) => inFolder(file) && nameMatches(file))
   if (!files.length) {
-    // "No pages match" was a false statement, and quietly so. This box matches file.path and
-    // nothing else, so searching for a word that IS written in the vault - a client's name, a
-    // phrase somebody remembers typing - answered "No pages match." The page is there. Its NAME
-    // just does not contain the word, and nothing on screen said that was the difference.
+    // Three different reasons this list can be empty, and each one needs its own sentence. Both
+    // false statements below were on this screen, one of them shipped by the commit that fixed the
+    // other - which is the reason all three are spelled out here rather than sharing a message.
     //
-    // Said here rather than made true: the payload carries the list of pages and their sizes, not
-    // their contents, and a page is fetched only when it is opened. Searching inside them would be
-    // fifty-odd fetches on every keystroke. So the honest fix is for the box to describe what it
-    // does, in the moment the difference matters.
-    return memoryQuery
-      ? `<div class="panel empty"><b>No page NAME contains &ldquo;${escapeHtml(memoryQuery)}&rdquo;.</b>
-         <span class="small">This searches page names, not the words written inside them &mdash; the
-         board holds the list of your pages and only opens one when you ask for it. If you know
-         roughly where it lives, use the folder buttons above instead.</span></div>`
-      : `<div class="panel empty">No pages match.</div>`
+    // "No pages match." was said for a word that IS written in the vault. This box matches
+    // file.path and nothing else, so a client's name or a phrase somebody remembers typing finds
+    // nothing, and the page is right there. Its NAME does not contain the word, and nothing on
+    // screen said that was the difference.
+    //
+    // "No page NAME contains X" was then said while a FOLDER BUTTON was selected - a claim about
+    // the whole vault, made after looking in one folder. Search "brain" with the agents folder
+    // chosen and shared/business-brain.md is excluded by the folder, not by its name. Whatever it
+    // is on screen for, this screen must not tell somebody a page of theirs does not exist.
+    //
+    // Not made true, said: the payload carries the list of pages and their sizes, never their
+    // contents, and a page is fetched only when it is opened, so searching inside them would be
+    // fifty-odd fetches per keystroke.
+    const elsewhere = memoryQuery ? data.memory.files.filter(nameMatches).length : 0
+    const notInNames = `<span class="small">This searches page names, not the words written inside
+      them &mdash; the board holds the list of your pages and only opens one when you ask for it. If
+      you know roughly where it lives, use the folder buttons above instead.</span>`
+    if (memoryQuery && memorySource && elsewhere) {
+      return `<div class="panel empty"><b>No page name in ${escapeHtml(memorySource)}/ contains
+        &ldquo;${escapeHtml(memoryQuery)}&rdquo;.</b>
+        <span class="small">${elsewhere} elsewhere in your vault ${elsewhere === 1 ? 'does' : 'do'}
+        &mdash; tap <b>all</b> above to see ${elsewhere === 1 ? 'it' : 'them'}.</span></div>`
+    }
+    if (memoryQuery && memorySource) {
+      return `<div class="panel empty"><b>No page name contains
+        &ldquo;${escapeHtml(memoryQuery)}&rdquo;, in ${escapeHtml(memorySource)}/ or anywhere
+        else.</b> ${notInNames}</div>`
+    }
+    if (memoryQuery) {
+      return `<div class="panel empty"><b>No page NAME contains
+        &ldquo;${escapeHtml(memoryQuery)}&rdquo;.</b> ${notInNames}</div>`
+    }
+    if (memorySource) {
+      return `<div class="panel empty">Nothing in ${escapeHtml(memorySource)}/.</div>`
+    }
+    return `<div class="panel empty">No pages match.</div>`
   }
   const folders = new Map()
   for (const file of files) {

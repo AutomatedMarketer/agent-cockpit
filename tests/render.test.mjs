@@ -68,11 +68,24 @@ function render(payload, options = {}) {
 
   // The page defines everything as top-level declarations, so evaluating it and then calling
   // render() gives the real functions operating on the real payload shape.
+  //
+  // `options.state` sets the page's own screen state before drawing. Some of what a person does is
+  // not in the payload at all - which folder button they pressed, what they typed in the search box
+  // - and it lives in top-level variables the page's own listeners set. The shim's addEventListener
+  // is a no-op, so simulated typing does nothing, and a test written around that fact asserted on
+  // the SOURCE instead and missed a false sentence that only appears when a folder and a query are
+  // both set. Review found it. These are the same variables the page assigns; nothing is faked.
+  const state = options.state ?? {}
   const run = new Function(
     ...Object.keys(context),
-    `${script}\n; data = arguments[arguments.length - 1]; render(); return null;`
+    `${script}
+     ; data = arguments[arguments.length - 2]
+     ; const given = arguments[arguments.length - 1]
+     ; if (given.memoryQuery !== undefined) memoryQuery = given.memoryQuery
+     ; if (given.memorySource !== undefined) memorySource = given.memorySource
+     ; render(); return null;`
   )
-  run(...Object.values(context), payload)
+  run(...Object.values(context), payload, state)
   return nodes
 }
 
@@ -1302,20 +1315,103 @@ test('the search box says it searches names, before anybody types', () => {
   assert.match(drawn, /Search 3 page names/, 'the box promises to search pages, and searches names')
 })
 
-test('an empty vault still says something plain, with no search term to quote', () => {
-  const empty = render({ ...memoryPayload, memory: { files: [], indexes: [], truncated: false } })
-    .get('memory').innerHTML
-  assert.match(empty, /No pages match\./)
-  assert.ok(!empty.includes('page NAME contains'), 'it quoted a search term nobody typed')
+/* EVERY REASON THIS LIST CAN BE EMPTY, and each one gets its own sentence.
+
+   Two false statements have been on this screen, and the second was shipped by the commit that
+   fixed the first:
+
+     "No pages match."            said for a word that IS written in the vault. The box matches
+                                  file.path and nothing else, so a client's name or a remembered
+                                  phrase finds nothing while the page sits right there.
+     "No page NAME contains X"    said while a FOLDER BUTTON was narrowing the list - a claim about
+                                  the whole vault made after looking in one folder. Search "brain"
+                                  with agents chosen and shared/business-brain.md is excluded by the
+                                  folder, not by its name.
+
+   An earlier version of this test said the behaviour could not be reached from here, because the
+   DOM shim ignores listeners so simulated typing does nothing, and asserted on the page source
+   instead. That was true about typing and wrong about the state: the folder and the query live in
+   top-level variables, and the harness can set them. Review asked whether I had missed a way in,
+   and I had. */
+
+const memoryVault = {
+  ...base,
+  memory: {
+    files: [
+      { path: 'shared/business-brain.md', size: 2348 },
+      { path: 'shared/about-me.md', size: 805 },
+      { path: 'agents/sales/README.md', size: 400 },
+      { path: 'agents/editor/README.md', size: 400 }
+    ],
+    indexes: [],
+    truncated: false
+  }
+}
+const emptyStateFor = (state, payload = memoryVault) =>
+  render(payload, { state })
+    .get('memory')
+    .innerHTML.replace(/<[^>]*>/g, ' ')
+    .replace(/&ldquo;|&rdquo;/g, '"')
+    .replace(/&mdash;/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+test('a folder button narrowing the list never becomes a claim about the whole vault', () => {
+  // The exact case review found. "brain" is in shared/business-brain.md; the agents folder is what
+  // hides it, and the old wording said no page name contained it at all.
+  const said = emptyStateFor({ memorySource: 'agents', memoryQuery: 'brain' })
+  assert.match(said, /No page name in agents\/ contains "brain"/)
+  assert.match(said, /1 elsewhere in your vault does/, 'it does not say the page is findable')
+  assert.ok(!said.includes('No page NAME contains'), 'it still claims something about the whole vault')
 })
 
-/* The behaviour itself - typing a word and being told the difference - is NOT tested here, and
-   saying so is the point. This harness's DOM shim has addEventListener as a no-op, so the page's
-   own input handler never runs and `memoryQuery` can never be anything but empty. A test that
-   pretended otherwise would be asserting around the thing it claims to check, which is a habit that
-   has already put two inert tests into this repo.
+test('the count of pages hiding behind the folder filter is right, and reads as English', () => {
+  const one = emptyStateFor({ memorySource: 'agents', memoryQuery: 'brain' })
+  assert.match(one, /1 elsewhere in your vault does - tap all above to see it/)
+  // Two matches, both outside the chosen folder, so the sentence has to count and pluralise. The
+  // first term tried here was "me", which quietly matched agents/sales/README.md - so the list was
+  // never empty and the test was checking nothing.
+  const two = emptyStateFor(
+    { memorySource: 'agents', memoryQuery: 'about' },
+    { ...memoryVault, memory: { ...memoryVault.memory, files: [
+      { path: 'shared/about-me.md', size: 1 },
+      { path: 'shared/about-us.md', size: 1 },
+      { path: 'agents/sales/notes.md', size: 1 }
+    ] } }
+  )
+  assert.match(two, /2 elsewhere in your vault do - tap all above to see them/)
+})
 
-   What holds it instead: the source assertion in tests/screens.test.mjs that both branches exist and
-   differ, and a real browser at 390px, where searching "roofing" - a word written inside
-   shared/business-brain.md and in no file name - now returns the sentence naming the difference
-   rather than "No pages match." */
+test('a word in no page name anywhere says so, with the folder named as well', () => {
+  const said = emptyStateFor({ memorySource: 'agents', memoryQuery: 'zzzzz' })
+  assert.match(said, /No page name contains "zzzzz", in agents\/ or anywhere else/)
+  assert.match(said, /searches page names, not the words written inside them/)
+  assert.ok(!said.includes('elsewhere in your vault'), 'it offered pages that do not exist')
+})
+
+test('a word inside a page, with no folder chosen, is told the difference', () => {
+  const said = emptyStateFor({ memoryQuery: 'roofing' })
+  assert.match(said, /No page NAME contains "roofing"/)
+  assert.match(said, /searches page names, not the words written inside them/)
+  assert.ok(!said.includes('in agents/'), 'it named a folder nobody selected')
+})
+
+test('a chosen folder with nothing in it, and an empty vault, are different sentences', () => {
+  const emptyFolder = emptyStateFor(
+    { memorySource: 'docs' },
+    { ...memoryVault, memory: { ...memoryVault.memory, files: [{ path: 'shared/a.md', size: 1 }] } }
+  )
+  assert.match(emptyFolder, /Nothing in docs\//)
+  assert.ok(!emptyFolder.includes('contains'), 'it quoted a search term nobody typed')
+
+  const emptyVault = emptyStateFor({}, { ...memoryVault, memory: { files: [], indexes: [], truncated: false } })
+  assert.match(emptyVault, /No pages match\./)
+  assert.ok(!emptyVault.includes('NAME'), 'it quoted a search term nobody typed')
+})
+
+test('the search term is escaped where it is quoted back', () => {
+  const said = render(memoryVault, { state: { memoryQuery: '<script>alert(1)</script>' } })
+    .get('memory').innerHTML
+  assert.ok(!said.includes('<script>alert(1)'), 'the search box is an injection point')
+  assert.ok(said.includes('&lt;script&gt;'), 'the term was dropped rather than escaped')
+})
