@@ -181,12 +181,17 @@ test('a job nothing fires never appears in the week strip', () => {
   assert.ok(!today.includes('missed'), 'Today accused a job nothing fires of missing a run')
 
   // The Workflows CARD may show the time - it is the file's own text, and the card says in the
-  // same breath that nothing fires it. What it must not do is put it on the week grid.
+  // same breath that nothing fires it. Since the seven-day list replaced the grid here, the job
+  // is also named in the list's own "In a file, not ringing" section, deliberately. What none of
+  // them may do is put it among the seven days as though it were going to happen.
   const workflows = declared.get('workflows').innerHTML
   assert.match(workflows, /Nothing fires this/, 'the card must say the schedule is a wish')
   assert.ok(!workflows.includes('missed'), 'a job nothing fires cannot have missed a run')
-  const strip = workflows.split('<div class="stack">')[0]
-  assert.ok(!strip.includes('06:30'), 'the week strip placed a job nothing fires on the calendar')
+  const list = workflows.slice(workflows.indexOf('<h2>Next 7 days'), workflows.indexOf('<div class="stack">'))
+  const silentAt = list.indexOf('In a file, not ringing')
+  assert.ok(silentAt > 0, 'the section that names jobs nothing fires is gone')
+  assert.ok(!list.slice(0, silentAt).includes('06:30'), 'the seven days placed a job nothing fires on the calendar')
+  assert.ok(list.slice(silentAt).includes('06:30'), 'the job nothing fires lost the time its own file names')
 })
 
 test('an armed job does still appear in the week strip', () => {
@@ -195,6 +200,308 @@ test('an armed job does still appear in the week strip', () => {
     workflows: [workflow({ arm: 'armed', armed: true, routineId: 't1', nextRun: new Date(Date.now() + 3600_000).toISOString() })]
   })
   assert.ok(armed.get('workflows').innerHTML.includes('06:30'), 'a real job lost its time')
+})
+
+/* ---------- Next 7 days, on the Workflows screen ----------------------------------------------
+
+   The week grid answers "which weekday does this land on". It could not answer the question a
+   student actually asks - what is coming, in order, starting today - and it hid two kinds of job
+   to do it: anything nothing fires (counted in a note, never shown) and anything monthly or
+   hourly (dropped to a footnote with no day at all). The list answers the asked question and
+   shows every job that names a time, with the ones that do not ring in their own labelled
+   section rather than absent. Today keeps the grid: it answers a different question, with marks
+   for what ran, and those marks need a fixed week to sit on. */
+
+const DAY_LABEL = (date) =>
+  `${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()]} ${date.getDate()}`
+
+const sevenDays = () =>
+  Array.from({ length: 7 }, (unused, index) => {
+    const date = new Date()
+    date.setHours(0, 0, 0, 0)
+    date.setDate(date.getDate() + index)
+    return date
+  })
+
+/* Two of these tests passed against the unbuilt list, because a daily job also appears on all
+   seven columns of the OLD grid and the grid escapes names too. A test that passes before the
+   feature exists is measuring nothing. So every assertion below reads the list's own container,
+   which only the list produces - and this helper fails loudly rather than returning the whole
+   screen if that container is ever renamed. */
+function sevenDayList(nodes) {
+  const drawn = nodes.get('workflows').innerHTML
+  const opened = drawn.indexOf('<div class="days7">')
+  assert.ok(opened >= 0, 'the seven-day list did not render at all')
+  const ended = drawn.indexOf('<div class="stack">', opened)
+  return drawn.slice(opened, ended >= 0 ? ended : undefined)
+}
+
+/* One day's block, sliced between its own heading and the next day's.
+
+   The first version of the weekday test asserted "the job appears somewhere after Wednesday's
+   heading", which is not a claim about placement at all: the window starts today, today was a
+   Wednesday, so Wednesday's heading was at position zero and every possible misplacement sat
+   after it. Deleting the Monday-first conversion - which moves every weekly job to the wrong day
+   - left the suite green. Containment in a single block is the claim that was meant, and it holds
+   whichever day of the week the tests are run on. */
+function dayBlock(list, index) {
+  const starts = sevenDays().map((date) => {
+    const at = list.indexOf(DAY_LABEL(date))
+    assert.ok(at >= 0, `the list is missing ${DAY_LABEL(date)}`)
+    return at
+  })
+  const ends = [...starts.slice(1), list.length]
+  return list.slice(starts[index], ends[index])
+}
+
+test('the Workflows screen lists the next seven days, starting today, and Today keeps its grid', () => {
+  const nodes = render({
+    ...base,
+    workflows: [workflow({ arm: 'armed', armed: true, schedule: 'daily 06:30' })]
+  })
+  const workflows = nodes.get('workflows').innerHTML
+
+  assert.match(workflows, /Next 7 days/, 'the Workflows screen lost the seven-day list')
+  assert.ok(!workflows.includes('schedule-scroll'), 'the week grid is still on the Workflows screen as well as the list')
+
+  // Every one of the seven days, in order, starting with today.
+  const days = sevenDays().map(DAY_LABEL)
+  let cursor = -1
+  for (const label of days) {
+    const at = workflows.indexOf(label, cursor + 1)
+    assert.ok(at > cursor, `the seven-day list is missing ${label}, or has it out of order`)
+    cursor = at
+  }
+
+  // Today's grid is untouched - it carries the ran / was-due marks, which need a fixed week.
+  assert.ok(nodes.get('today').innerHTML.includes('schedule-scroll'), 'Today lost its week grid')
+})
+
+test('a daily job appears on all seven days and a weekly job on exactly one', () => {
+  const nodes = render({
+    ...base,
+    workflows: [
+      workflow({ slug: 'daily-one', name: 'Daily One', arm: 'armed', armed: true, schedule: 'daily 06:30' }),
+      workflow({ slug: 'weekly-one', name: 'Weekly One', arm: 'armed', armed: true, schedule: 'weekly wed 09:00' })
+    ]
+  })
+  const list = sevenDayList(nodes)
+
+  assert.equal((list.match(/Daily One/g) ?? []).length, 7, 'a daily job did not land on all seven days')
+  assert.equal((list.match(/Weekly One/g) ?? []).length, 1, 'a weekly job did not land on exactly one day')
+
+  // In WEDNESDAY's block, and in none of the other six. Asserting only that it appears somewhere
+  // after Wednesday's heading is not a claim about placement: run on a Wednesday, that heading is
+  // first and every wrong day satisfies it.
+  const wednesdayIndex = sevenDays().findIndex((date) => date.getDay() === 3)
+  for (let index = 0; index < 7; index += 1) {
+    const block = dayBlock(list, index)
+    assert.equal(
+      block.includes('Weekly One'),
+      index === wednesdayIndex,
+      `a weekly Wednesday job is ${index === wednesdayIndex ? 'missing from' : 'wrongly in'} the ${DAY_LABEL(sevenDays()[index])} block`
+    )
+    assert.ok(block.includes('Daily One'), `the daily job is missing from the ${DAY_LABEL(sevenDays()[index])} block`)
+  }
+})
+
+test('an hourly job is one row a day, not twenty-four', () => {
+  const nodes = render({
+    ...base,
+    workflows: [workflow({ slug: 'sweep', name: 'Sweep', arm: 'armed', armed: true, schedule: 'hourly' })]
+  })
+  const list = sevenDayList(nodes)
+
+  assert.equal((list.match(/Sweep/g) ?? []).length, 7, 'an hourly job did not collapse to one row a day')
+  assert.match(list, /every hour/, 'an hourly job lost the words that say how often it runs')
+})
+
+/* Monthly jobs had no weekday, so the grid could only put them in a footnote with no day at all.
+   A list keyed on real dates can place them, and does. */
+test('a monthly job lands on its real date when that date is inside the week', () => {
+  const target = sevenDays()[3]
+  const nodes = render({
+    ...base,
+    workflows: [
+      workflow({ slug: 'invoices', name: 'Invoices', arm: 'armed', armed: true, schedule: `monthly ${target.getDate()} 09:00` })
+    ]
+  })
+  const list = sevenDayList(nodes)
+
+  for (let index = 0; index < 7; index += 1) {
+    assert.equal(
+      dayBlock(list, index).includes('Invoices'),
+      index === 3,
+      `the monthly job is ${index === 3 ? 'missing from' : 'wrongly in'} the ${DAY_LABEL(sevenDays()[index])} block`
+    )
+  }
+})
+
+test('a job nothing fires is listed in its own section with its reason, never among the seven days', () => {
+  const nodes = render({
+    ...base,
+    workflows: [
+      workflow({ slug: 'rings', name: 'Rings', arm: 'armed', armed: true, schedule: 'daily 06:30' }),
+      workflow({
+        slug: 'wishful',
+        name: 'Wishful',
+        arm: 'declared',
+        armed: true,
+        schedule: 'daily 07:00',
+        reason: 'Off until the pipeline has people in it'
+      })
+    ]
+  })
+  const drawn = nodes.get('workflows').innerHTML
+  const list = drawn.slice(drawn.indexOf('<div class="days7">'), drawn.indexOf('<div class="stack">'))
+  const silentAt = list.indexOf('In a file, not ringing')
+
+  assert.ok(silentAt > 0, 'the section naming the jobs nothing fires is gone')
+  assert.ok(list.indexOf('Wishful') > silentAt, 'a job nothing fires was placed among the seven days')
+  assert.match(list, /Off until the pipeline has people in it/, 'the file\'s own reason was dropped')
+  // The seven days themselves stay honest: the only time above that section is the real one.
+  assert.ok(!list.slice(0, silentAt).includes('07:00'), 'a job nothing fires put its time on the calendar')
+  assert.ok(list.slice(0, silentAt).includes('06:30'), 'the job that does ring lost its time')
+})
+
+test('a day with nothing on it says so rather than rendering as a gap', () => {
+  const wednesdayIndex = sevenDays().findIndex((date) => date.getDay() === 3)
+  const nodes = render({
+    ...base,
+    workflows: [workflow({ slug: 'weekly-one', name: 'Weekly One', arm: 'armed', armed: true, schedule: 'weekly wed 09:00' })]
+  })
+  const list = sevenDayList(nodes)
+
+  assert.equal((list.match(/Nothing scheduled/g) ?? []).length, 6, 'the six empty days did not each say they were empty')
+  assert.ok(wednesdayIndex >= 0)
+})
+
+test('a job that rings without approval is marked on the list, because it is spending runs', () => {
+  const nodes = render({
+    ...base,
+    workflows: [workflow({ slug: 'rogue', name: 'Rogue', arm: 'unapproved', armed: false, schedule: 'daily 06:30' })]
+  })
+  const list = sevenDayList(nodes)
+
+  assert.match(list, /Rogue/, 'a job that really fires was left off the list because its file says off')
+  assert.match(list, /class="[^"]*\bbad\b[^"]*"[^>]*>[^<]*(?:06:30|Rogue)|not approved/i,
+    'nothing on the list marks a job that is firing without approval')
+})
+
+test('a name, an owner and a reason are text from a file, so all three are escaped', () => {
+  const nodes = render({
+    ...base,
+    workflows: [
+      workflow({ slug: 'rings', name: '<b>Loud</b>', owner: '<i>who</i>', arm: 'armed', armed: true, schedule: 'daily 06:30' }),
+      workflow({ slug: 'quiet', name: 'Quiet', arm: 'declared', schedule: 'daily 07:00', reason: '<script>alert(1)</script>' })
+    ]
+  })
+  const drawn = nodes.get('workflows').innerHTML
+  const list = drawn.slice(drawn.indexOf('<div class="days7">'), drawn.indexOf('<div class="stack">'))
+
+  assert.ok(!list.includes('<b>Loud</b>'), 'a job name from the repo was rendered as markup')
+  assert.ok(!list.includes('<i>who</i>'), 'an owner from the repo was rendered as markup')
+  assert.ok(!list.includes('<script>'), 'a reason from the repo was rendered as markup')
+  assert.match(list, /&lt;b&gt;Loud&lt;\/b&gt;/, 'the job name was dropped rather than escaped')
+})
+
+test('with nothing ringing at all the list says so once, and still names what is waiting', () => {
+  const nodes = render({
+    ...base,
+    workflows: [workflow({ slug: 'quiet', name: 'Quiet', arm: 'declared', schedule: 'daily 07:00', reason: 'Off until I have a run cap' })]
+  })
+  const list = nodes.get('workflows').innerHTML.split('<div class="stack">')[0]
+
+  assert.ok(!list.includes('<div class="days7">'), 'seven day blocks were drawn when nothing rings at all')
+  assert.ok(!list.includes('Nothing scheduled'), 'seven empty days were drawn when nothing rings at all')
+  assert.match(list, /Nothing that rings is scheduled/, 'the list did not say that nothing rings')
+  assert.match(list, /In a file, not ringing/, 'the jobs that are waiting were not named')
+  assert.match(list, /Off until I have a run cap/, 'the waiting job lost its reason')
+})
+
+/* Day one: no snapshot has been taken, so the banner at the top of this screen says in as many
+   words that whether these jobs ring is UNKNOWN. The list's own section sat three lines under
+   that banner claiming "nothing fires them" - an assertion about routines the board had just
+   said it could not make. Found by looking at the shipped state as a picture, not by a test.
+
+   The section describes what it actually read: a time in a file. Whether anything fires it is the
+   banner's question and the card's, and neither of them is this section. */
+test('the list never claims nothing fires a job while the board says routines are unknown', () => {
+  const nodes = render({
+    ...base,
+    routines: { usable: false, stale: false, why: 'No snapshot has been taken yet.', count: 0, takenAt: null },
+    workflows: [
+      workflow({ slug: 'a', name: 'A', schedule: 'daily 06:30', arm: 'off', reason: 'Off until there is an inbox.' }),
+      workflow({ slug: 'b', name: 'B', schedule: 'daily 07:00', arm: 'unknown', armed: true })
+    ]
+  })
+  const drawn = nodes.get('workflows').innerHTML
+  const list = drawn.slice(drawn.indexOf('<h2>Next 7 days'), drawn.indexOf('<div class="stack">'))
+
+  assert.match(list, /In a file, not ringing/, 'the waiting jobs were dropped')
+  assert.ok(
+    !/nothing fires (them|it)/.test(list),
+    'the list asserted that nothing fires these jobs, on a screen that has just said it cannot know'
+  )
+  assert.match(list, /a wish until a routine fires it/, 'the list no longer says what a time in a file is worth')
+})
+
+/* Second home of the same defect. Today's week strip printed "and nothing fires them" - a claim
+   about routines - three lines under its own banner saying which of these ring is UNKNOWN. With
+   no snapshot every scheduled job falls into that count, not because nothing fires them but
+   because nothing is known to. The Workflows list was fixed first; leaving this one would have
+   left the two screens contradicting each other. */
+test('Today does not claim nothing fires a job while its own banner says routines are unknown', () => {
+  const unknown = {
+    ...base,
+    routines: { usable: false, stale: false, why: 'No snapshot has been taken yet.', count: 0, takenAt: null },
+    workflows: [workflow({ slug: 'a', name: 'A', schedule: 'daily 06:30', arm: 'off' })]
+  }
+  const drawn = render(unknown).get('today').innerHTML
+  assert.ok(!/nothing fires (them|it)/.test(drawn), 'Today asserted that nothing fires a job it cannot know about')
+  assert.match(drawn, /whether anything fires it is unknown/, 'Today stopped accounting for the job entirely')
+
+  // And with a usable snapshot the original, stronger sentence is still the one printed - the
+  // claim is only softened where it cannot be made.
+  const known = render({
+    ...base,
+    routines: { usable: true, stale: false, count: 1, takenAt: new Date().toISOString() },
+    workflows: [
+      workflow({ slug: 'rings', name: 'Rings', schedule: 'daily 06:30', arm: 'armed', armed: true }),
+      workflow({ slug: 'a', name: 'A', schedule: 'daily 07:00', arm: 'declared', armed: true })
+    ]
+  }).get('today').innerHTML
+  assert.match(known, /1 other job names a time in its file and nothing fires it/)
+})
+
+/* Tapping a row threw the reader off the Workflows screen and onto Today.
+
+   The row is an anchor to its own job's card, and the card's id is real - the anchor resolved,
+   and reading the markup said it worked. But this screen routes on the hash, and showScreen sends
+   any hash it does not recognise to 'today', so following href="#job-morning-intel" navigated
+   away from the screen the reader was on. Only clicking it in a browser showed that.
+
+   The harness here cannot dispatch a click, so what it pins is the wiring the fix depends on:
+   the row carries data-job, the card carries the matching id, and the handler that cancels the
+   navigation is bound to that attribute. */
+test('a row in the list is wired to scroll, not to navigate by hash', () => {
+  const nodes = render({
+    ...base,
+    routines: { ...base.routines, usable: true, stale: false, known: true, count: 1, takenAt: new Date().toISOString() },
+    workflows: [workflow({ slug: 'morning-intel', name: 'Morning Intel', schedule: 'daily 06:30', arm: 'armed', armed: true })]
+  })
+  const drawn = nodes.get('workflows').innerHTML
+
+  assert.match(drawn, /data-job="morning-intel"/, 'the row lost the hook the click handler binds to')
+  assert.match(drawn, /id="job-morning-intel"/, 'the card lost the id the row points at')
+
+  // The handler, and its preventDefault, in the page source. Without the cancel, the browser
+  // follows the href and the router sends the reader to Today.
+  const source = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+  const wiring = source.slice(source.indexOf("querySelectorAll('[data-job]')"))
+  assert.ok(wiring.length, 'nothing binds a click handler to the seven-day rows any more')
+  assert.match(wiring.slice(0, 400), /event\.preventDefault\(\)/, 'the row click no longer cancels hash navigation')
+  assert.match(wiring.slice(0, 400), /scrollIntoView/, 'the row click no longer scrolls to the card')
 })
 
 test('jobs that do not ring are counted rather than silently dropped', () => {
@@ -554,7 +861,12 @@ test('the arming explanation disappears when there is nothing left to arm', () =
 test('the Workflows screen does not tell you to go to the Workflows screen', () => {
   const drawn = render({ ...base, workflows: nineWorkflows() }).get('workflows').innerHTML
   assert.ok(!drawn.includes('see the Workflows screen'), 'the screen pointed at itself')
-  assert.match(drawn, /each one is listed below/)
+  // The count note said "each one is listed below" here. The seven-day list does better than
+  // count them: it names every one, with its own reason, in its own section. The obligation the
+  // count discharged - that a job declaring a time and fired by nothing is never silently absent
+  // - is what has to hold, not the sentence that used to discharge it.
+  assert.match(drawn, /In a file, not ringing/, 'the jobs nothing fires are neither counted nor named')
+  assert.match(drawn, /jobs name a time in their files/)
 })
 
 test('Today still points at the Workflows screen, because from there it is a real direction', () => {
@@ -588,28 +900,47 @@ test('the silent-job count survives a repo that has armed something', () => {
     workflow({ slug: 'silent-a', name: 'Silent A', owner: 'research', schedule: 'daily 07:00', arm: 'declared' }),
     workflow({ slug: 'silent-b', name: 'Silent B', owner: 'research', schedule: 'daily 08:00', arm: 'declared' })
   ]
-  const nodes = render({ ...base, workflows: mixed })
+  // A job can only BE armed if a snapshot was taken - armStateFor cannot return 'armed' without
+  // one. The fixture used to leave base's "no snapshot yet" in place while calling a job armed,
+  // a state no repo can be in, and that inconsistency is what let it pin a sentence the board
+  // could not have said truthfully.
+  const nodes = render({
+    ...base,
+    routines: { ...base.routines, usable: true, stale: false, known: true, count: 1, takenAt: new Date().toISOString() },
+    workflows: mixed
+  })
 
-  for (const screen of ['today', 'workflows']) {
-    const drawn = nodes.get(screen).innerHTML
-    assert.match(
-      drawn,
-      /2 other jobs name a time in their files and nothing fires them/,
-      `the ${screen} screen dropped the silent-job count as soon as one job was armed`
-    )
-    // And it has to come BEFORE the week grid. A caveat read after four columns of a calendar
-    // that looks complete has already lost - which is why the arm state prints before the
-    // schedule chip everywhere else on this page.
-    assert.ok(
-      drawn.indexOf('other jobs name a time') < drawn.indexOf('schedule-scroll'),
-      `on ${screen} the warning sits under the calendar it is there to undermine`
-    )
+  // Today counts them, above its grid. A caveat read after four columns of a calendar that looks
+  // complete has already lost, which is why the arm state prints before the schedule chip
+  // everywhere else on this page.
+  const today = nodes.get('today').innerHTML
+  assert.match(
+    today,
+    /2 other jobs name a time in their files and nothing fires them/,
+    'Today dropped the silent-job count as soon as one job was armed'
+  )
+  assert.ok(
+    today.indexOf('other jobs name a time') < today.indexOf('schedule-scroll'),
+    'on Today the warning sits under the calendar it is there to undermine'
+  )
+
+  // The Workflows screen names them instead, which is the stronger form of the same duty: both
+  // silent jobs appear, with their times, and neither is among the seven days.
+  const workflows = nodes.get('workflows').innerHTML
+  const list = workflows.slice(workflows.indexOf('<h2>Next 7 days'), workflows.indexOf('<div class="stack">'))
+  const silentAt = list.indexOf('In a file, not ringing')
+  assert.ok(silentAt > 0, 'the Workflows screen dropped the silent jobs as soon as one job was armed')
+  for (const name of ['Silent A', 'Silent B']) {
+    assert.ok(list.slice(silentAt).includes(name), `${name} vanished once another job was armed`)
+    assert.ok(!list.slice(0, silentAt).includes(name), `${name} was placed among the seven days`)
   }
+  assert.ok(list.slice(0, silentAt).includes('Rings'), 'the job that does ring left the calendar')
 })
 
 test('one silent job is counted in the singular, alongside something that rings', () => {
   const nodes = render({
     ...base,
+    routines: { ...base.routines, usable: true, stale: false, known: true, count: 1, takenAt: new Date().toISOString() },
     workflows: [
       workflow({ slug: 'rings', name: 'Rings', owner: 'research', schedule: 'daily 06:30', arm: 'armed', armed: true }),
       workflow({ slug: 'silent', name: 'Silent', owner: 'research', schedule: 'daily 07:00', arm: 'declared' })

@@ -349,6 +349,30 @@
   .pill .t { color: var(--muted); white-space: nowrap; }
   .sched-foot { border-top: 1px solid var(--line); padding: .5rem .9rem; font-size: .8125rem; }
   .sched-foot .pill { display: inline-block; margin: .15rem .35rem .15rem 0; }
+  /* Next 7 days — a list, so it reads top to bottom on a phone with no sideways scroll at all */
+  .days7 .d7-day { border-top: 1px solid var(--line); padding: .5rem .9rem .6rem; }
+  .days7 .d7-day:first-child { border-top: 0; }
+  .days7 .d7-day.today { background: var(--panel-2); }
+  .d7-date { font-size: .6875rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin-bottom: .35rem; }
+  .d7-row {
+    display: flex; gap: .55rem; align-items: baseline; text-decoration: none; color: inherit;
+    padding: .3rem .45rem; margin: 0 0 .25rem; border-radius: 6px;
+    background: var(--panel-2); border: 1px solid var(--line); border-left-width: 3px;
+  }
+  .days7 .d7-day.today .d7-row { background: var(--panel); }
+  .d7-row .d7-t { font-size: .75rem; color: var(--muted); white-space: nowrap; flex: none; min-width: 4.2rem; }
+  .d7-row .d7-what { display: flex; flex-wrap: wrap; gap: .3rem .45rem; align-items: baseline; }
+  .d7-row .d7-why { flex-basis: 100%; }
+  .d7-none { padding: .1rem .45rem; }
+  .d7-silent { border-top: 1px solid var(--line); padding: .6rem .9rem .7rem; }
+  .d7-silent h3 { font-size: .8125rem; margin: 0 0 .2rem; }
+  .d7-silent .d7-row { opacity: .75; }
+  .d7-silent .d7-row .d7-t { min-width: 7.5rem; }
+  /* The nav is fixed and 103px tall, so a card scrolled to viewport top lands BEHIND it: tap a
+     job and you arrive at the middle of its card with the name hidden. Measured in the browser
+     after clicking, not assumed from the markup - the scroll reported "top: 0" and looked right
+     in every number until the screenshot showed the wrong half of the card. */
+  .card[id^="job-"] { scroll-margin-top: 7rem; }
   .legend { display: flex; flex-wrap: wrap; gap: .35rem .9rem; padding: .55rem .9rem; border-top: 1px solid var(--line); font-size: .75rem; color: var(--muted); align-items: center; }
   .legend span { display: inline-flex; align-items: center; gap: .35rem; }
   .hero { text-align: center; padding: 1.6rem 1rem; }
@@ -845,7 +869,7 @@ function renderToday() {
     `<h2>Due next</h2>` + dueHtml +
     `<h2>Gone quiet</h2>` + quietHtml +
     // The week, last: what is scheduled, what already ran, what was due and did not.
-    scheduleStripHtml(data.workflows, { dates: true, runs: data.runs, heading: 'This week' }) +
+    scheduleStripHtml(data.workflows, { dates: true, runs: data.runs, heading: 'This week', routines: data.routines }) +
     // Spec B.2: remaining routine runs are linked, never scraped — there is no API for them.
     `<h2>Usage</h2><div class="panel"><p class="small">Remaining routine runs live on your
       <a href="https://claude.ai/settings/usage" rel="noreferrer noopener">claude.ai usage page</a> —
@@ -977,11 +1001,26 @@ function ranOnDays(runs, slug) {
 function scheduleStripHtml(workflows, options = {}) {
   const scheduled = workflows.filter((workflow) => workflow.schedule && ringsNow(workflow))
   const silent = workflows.filter((workflow) => workflow.schedule && !ringsNow(workflow))
-  // `here` means this strip is being drawn ON the Workflows screen, where pointing the reader at
-  // the Workflows screen is a sentence that sends them nowhere. The count still belongs; only the
-  // direction changes.
+  // This strip is drawn on Today and nowhere else: the Workflows screen shows the seven-day list
+  // instead, which names these jobs rather than counting them. It used to take a `here` flag for
+  // when it was drawn ON the Workflows screen, where pointing the reader at the Workflows screen
+  // sends them nowhere - that branch went with the caller, and is deleted rather than left as a
+  // condition the next reader has to assume both sides of.
+  // "and nothing fires them" is a claim about ROUTINES, and with no snapshot this board has no
+  // routines to claim anything about. In the shipped state it printed that sentence three lines
+  // under its own banner saying which of these ring is unknown: two answers on one screen, and
+  // the confident one wrong. Every job with a schedule lands in `silent` when the snapshot is
+  // unusable - not because nothing fires them, but because nothing is known to.
+  //
+  // Found by looking at the day-one screen as a picture while replacing the Workflows strip, and
+  // fixed here as well because otherwise the two screens now disagree with each other.
+  const routinesKnown = options.routines ? Boolean(options.routines.usable && !options.routines.stale) : true
   const silentNote = silent.length
-    ? `<p class="small muted">${silent.length === 1 ? '1 other job names a time in its file and nothing fires it' : silent.length + ' other jobs name a time in their files and nothing fires them'} - ${options.here ? 'each one is listed below.' : 'see the Workflows screen.'}</p>`
+    ? `<p class="small muted">${
+        routinesKnown
+          ? (silent.length === 1 ? '1 other job names a time in its file and nothing fires it' : silent.length + ' other jobs name a time in their files and nothing fires them')
+          : (silent.length === 1 ? '1 other job names a time in its file, and whether anything fires it is unknown' : silent.length + ' other jobs name a time in their files, and whether anything fires them is unknown')
+      } - see the Workflows screen.</p>`
     : ''
   if (!scheduled.length) {
     return silentNote
@@ -1059,6 +1098,136 @@ function scheduleStripHtml(workflows, options = {}) {
     ${footnotes.length ? `<div class="sched-foot">${footnotes.join(' ')}</div>` : ''}
     ${key}
     ${legend ? `<div class="legend">${legend}</div>` : ''}
+  </div>`
+}
+
+/* ---------- Next 7 days -------------------------------------------------------------------
+
+   The week grid above answers "which weekday does this land on". It cannot answer the question a
+   student actually asks - what is coming, in order, starting today - and to answer its own it has
+   to hide two kinds of job: anything nothing fires (counted in a note, never shown) and anything
+   monthly or every-N (dropped to a footnote with no day at all).
+
+   This list answers the asked question, and because it is keyed on real dates rather than
+   weekday columns, a monthly job lands on its own date instead of in a footnote. Every job that
+   names a time appears somewhere: the ones that ring under a day, the ones that do not in their
+   own labelled section underneath, with the file's own reason. Absent is what made the grid
+   confusing; labelled is the fix.
+
+   The grid stays on Today. It answers a different question - did today's job run - and its marks
+   need a fixed week to sit on.
+
+   TIMES ARE PRINTED AS THE FILE WRITES THEM. The page does not convert them, and does not claim a
+   timezone it has not checked: the server computes next-run times in UTC while this list reads
+   the schedule string, so a sentence here saying "your local time" would be a claim nothing
+   verifies. The day a job lands on is this device's calendar, exactly as the grid already does. */
+
+const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+function sevenDayDates(now = new Date()) {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  return Array.from({ length: 7 }, (unused, index) => {
+    const date = new Date(start)
+    date.setDate(start.getDate() + index)
+    return date
+  })
+}
+
+/* Does this schedule fire on this date, and with what label? Returns null for "not that day".
+   scheduleWeekView's day indexes are Monday-first (0 = Mon); a JS date is Sunday-first, hence
+   the conversion. Getting that backwards would put every weekly job on the wrong day, which is
+   the sort of mistake that looks like data and reads like a fact. */
+function firingOnDate(view, date) {
+  if (!view) return null
+  if (view.type === 'interval') return { sort: -1, label: view.label === 'hourly' ? 'every hour' : view.label }
+  if (view.type === 'days') {
+    return view.days.includes((date.getDay() + 6) % 7) ? { sort: timeSort(view.time), label: view.time } : null
+  }
+  if (view.type === 'monthly') {
+    return date.getDate() === view.day ? { sort: timeSort(view.time), label: view.time } : null
+  }
+  return null
+}
+
+const timeSort = (time) => {
+  const [hours, minutes] = String(time ?? '').split(':').map(Number)
+  return (Number.isFinite(hours) ? hours : 0) * 60 + (Number.isFinite(minutes) ? minutes : 0)
+}
+
+function nextSevenDaysHtml(workflows, options = {}) {
+  const heading = options.heading ?? 'Next 7 days'
+  const scheduled = workflows.filter((workflow) => workflow.schedule && ringsNow(workflow))
+  const silent = workflows.filter((workflow) => workflow.schedule && !ringsNow(workflow))
+
+  // Every job that names a time and is fired by nothing, named rather than counted. The count
+  // note the grid prints is not repeated here: a list of them says the same thing and more, and
+  // two statements of one fact on one screen is how a reader learns to skim both.
+  const silentHtml = silent.length
+    ? `<div class="d7-silent">
+        <h3>In a file, not ringing</h3>
+        <p class="small muted">${silent.length === 1 ? 'This job names' : 'These ' + silent.length + ' jobs name'} a time in ${silent.length === 1 ? 'its file' : 'their files'}. A time in a file is a wish until a routine fires it, and arming is a decision you make with your team, not here.</p>
+        ${silent.map((workflow) => `<div class="d7-row muted">
+          <span class="d7-t">${escapeHtml(workflow.schedule)}</span>
+          <span class="d7-what"><b>${escapeHtml(workflow.name)}</b>${workflow.owner ? ` <span class="small muted">${escapeHtml(workflow.owner)}</span>` : ''}
+            ${
+              // The owner note comes BEFORE the reason, for the same cause the card below states
+              // it first: a reason like "Off until the pipeline has people in it" tells the reader
+              // to arm this when the data arrives, and arming it would achieve nothing while the
+              // agent that owns it is switched off. Printing the reason here unqualified put that
+              // instruction ABOVE the fact that contradicts it, higher up the screen than the card
+              // that does the contradicting - re-opening, one panel further up, the exact defect
+              // stage 3 closed on the card itself.
+              workflow.ownerSwitchedOff
+                ? `<span class="small bad d7-why">Owned by <b>${escapeHtml(workflow.owner)}</b>, which you are not using &mdash; this cannot run as written.</span>`
+                : ''
+            }${workflow.reason ? `<span class="small muted d7-why">${escapeHtml(workflow.reason)}</span>` : ''}</span>
+        </div>`).join('')}
+      </div>`
+    : ''
+
+  if (!scheduled.length) {
+    // Seven days of "Nothing scheduled" is a worse answer than one sentence saying so.
+    return `<h2>${escapeHtml(heading)}</h2><div class="panel">
+      <div class="empty">Nothing that rings is scheduled.</div>
+      ${silentHtml}
+    </div>`
+  }
+
+  const days = sevenDayDates().map((date, index) => {
+    const rows = []
+    for (const workflow of scheduled) {
+      const firing = firingOnDate(scheduleWeekView(workflow.schedule), date)
+      if (!firing) continue
+      const hex = agentColor(workflow.owner) ?? 'var(--muted)'
+      // A job whose file says off while a routine fires it is spending runs nobody approved.
+      // The card below says so in full; the list says enough that it is not read as normal.
+      const rogue = workflow.arm === 'unapproved'
+      rows.push({
+        sort: firing.sort,
+        // `data-job`, and the handler calls preventDefault - the same shape as data-open and
+        // data-fire elsewhere on this page, and it is load-bearing here. This screen routes on
+        // the hash, and showScreen sends any hash it does not recognise to Today. So letting the
+        // browser follow a bare href="#job-..." threw the reader off the Workflows screen
+        // entirely: tap a job, land on Today. The anchor still resolved to the right card, which
+        // is why reading the markup could not catch it. Clicking it did.
+        html: `<a class="d7-row${rogue ? ' bad' : ''}" href="#job-${escapeHtml(workflow.slug)}" data-job="${escapeHtml(workflow.slug)}" style="border-left-color:${hex}">
+          <span class="d7-t">${escapeHtml(firing.label)}</span>
+          <span class="d7-what"><b>${escapeHtml(workflow.name)}</b>${workflow.owner ? ` <span class="small muted">${escapeHtml(workflow.owner)}</span>` : ''}${rogue ? ' <span class="chip bad">not approved</span>' : ''}</span>
+        </a>`
+      })
+    }
+    rows.sort((a, b) => a.sort - b.sort)
+    const label = `${DAY_SHORT[date.getDay()]} ${date.getDate()} ${MONTH_SHORT[date.getMonth()]}`
+    return `<div class="d7-day${index === 0 ? ' today' : ''}">
+      <div class="d7-date">${escapeHtml(label)}${index === 0 ? ' <span class="small muted">today</span>' : ''}</div>
+      ${rows.length ? rows.map((row) => row.html).join('') : '<div class="small muted d7-none">Nothing scheduled</div>'}
+    </div>`
+  }).join('')
+
+  return `<h2>${escapeHtml(heading)}</h2><div class="panel">
+    <div class="days7">${days}</div>
+    ${silentHtml}
   </div>`
 }
 
@@ -1199,7 +1368,10 @@ function renderWorkflows() {
       ? `<button class="fire" type="button" data-arm="${escapeHtml(workflow.slug)}"
            title="Asks your team to create a real routine for this job">Arm</button>`
       : ''
-    return `<div class="panel card agent-accent ${workflow.state}"${accentStyle(workflow.owner)}>
+    // The seven-day list links here. `job-` and not `wf-`, which is already the prefix of this
+    // screen's New-workflow form controls (wf-open, wf-form, wf-text) - a job whose slug was
+    // "open" would have scrolled the reader to a button instead of to their own job.
+    return `<div id="job-${escapeHtml(workflow.slug)}" class="panel card agent-accent ${workflow.state}"${accentStyle(workflow.owner)}>
       <div class="row between">
         <span class="row"><span class="dot"></span><span class="title">${escapeHtml(workflow.name)}</span></span>
         <span class="state">${escapeHtml(STATE_LABEL[workflow.state] ?? workflow.state)}</span>
@@ -1225,7 +1397,17 @@ function renderWorkflows() {
        starts spending runs. Your team asks for your run cap first and confirms the routine exists
        afterwards; it never arms anything silently.</p>`
     : ''
-  el('workflows').innerHTML = snapshotBannerHtml(data.routines) + scheduleStripHtml(data.workflows, { here: true }) + armingNote + `<div class="stack">${cards}</div>` + routineProblemsHtml(data.routines) + orphanRoutinesHtml(data.routines)
+  el('workflows').innerHTML = snapshotBannerHtml(data.routines) + nextSevenDaysHtml(data.workflows) + armingNote + `<div class="stack">${cards}</div>` + routineProblemsHtml(data.routines) + orphanRoutinesHtml(data.routines)
+
+  // A row in the seven-day list scrolls to that job's card. preventDefault is the whole point:
+  // this screen routes on the hash, and an unrecognised one sends the reader to Today, so the
+  // browser must not be allowed to follow the href.
+  el('workflows').querySelectorAll('[data-job]').forEach((row) =>
+    row.addEventListener('click', (event) => {
+      event.preventDefault()
+      const card = document.getElementById(`job-${row.dataset.job}`)
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }))
 }
 
 /* ---------- Memory ---------- */
