@@ -280,6 +280,9 @@ test('a ledger with no hours shows a sentence on the Ledger screen, not a zero',
     ledger: { ownerType: 'business', hourlyValue: 150, hoursPerWeek: 0, costPerWeek: 0, unpriced: false, unreadable: 0, complete: false, tasks: [] }
   }).get('ledger').innerHTML
 
+  // Was `!includes('$0')`, which stopped meaning anything once money lost its dollar sign: the
+  // cost line is now "<b>0</b> a week" or "<b>0 USD</b> a week", so guard the markup, not a symbol.
+  assert.ok(!/<b>0(?: \S+)?<\/b> a week/.test(drawn), 'the Ledger screen printed "0 a week at the rate you set"')
   assert.ok(!drawn.includes('$0'), 'the Ledger screen printed "$0 a week at the rate you set"')
   assert.match(drawn, /no hours in it yet/)
   assert.match(drawn, /would say your\s+repeating work costs you nothing/)
@@ -1078,7 +1081,63 @@ test('a week with no rate is counted in hours and never in money', () => {
   // upstream in api/state.js. escapeHtml means repo text can never produce a literal <b>, so this
   // matches the cost line and nothing a person wrote.
   assert.ok(!/<b>\$/.test(drawn), 'a money figure appeared for somebody who gave no rate')
+  // Money no longer carries a "$", so the guard above would pass against a bare cost line. This
+  // is the cost line's own shape: a bold number, an optional code, then "a week".
+  assert.ok(!/<b>[\d,]+(?: \S+)?<\/b> a week/.test(drawn), 'a cost line appeared for somebody who gave no rate')
   assert.ok(!drawn.includes('at the rate you set'), 'it claimed a rate that was never given')
+})
+
+test('money on the Ledger screen carries the ledger\'s own currency code, never a dollar sign', () => {
+  const drawn = render({
+    ...base,
+    ledger: { ownerType: 'business', hourlyValue: 165, currency: 'GBP', hoursPerWeek: 12.9, costPerWeek: 2131, unpriced: false, unreadable: 0, complete: true, tasks: [] }
+  }).get('ledger').innerHTML
+
+  assert.match(drawn, /<b>2,131 GBP<\/b> a week at the rate you set/)
+  assert.ok(!/<b>\$/.test(drawn), 'the board guessed a dollar sign for a ledger that said GBP')
+  assert.ok(!drawn.includes('No currency recorded'), 'it said no currency was recorded when one was')
+})
+
+test('a rate with no currency prints the number bare and says so, rather than guessing a symbol', () => {
+  const drawn = render({
+    ...base,
+    ledger: { ownerType: 'business', hourlyValue: 150, currency: null, hoursPerWeek: 16.25, costPerWeek: 2437.5, unpriced: false, unreadable: 0, complete: true, tasks: [] }
+  }).get('ledger').innerHTML
+
+  assert.match(drawn, /<b>2,438<\/b> a week at the rate you set/)
+  assert.match(drawn, /No currency recorded, so the number is printed bare\./)
+  assert.ok(!/<b>\$/.test(drawn), 'the board fell back to a dollar sign')
+})
+
+test('a currency code is text from a file somebody wrote, so it is escaped on both money sites', () => {
+  // `<b>` fits the currency shape (no whitespace, under nine characters), so it reaches the page.
+  const hostile = '<b>'
+  const ledgerScreen = render({
+    ...base,
+    ledger: { ownerType: 'business', hourlyValue: 150, currency: hostile, hoursPerWeek: 10, costPerWeek: 1500, unpriced: false, unreadable: 0, complete: true, tasks: [] }
+  }).get('ledger').innerHTML
+  assert.match(ledgerScreen, /1,500 &lt;b&gt;<\/b> a week at the rate you set/)
+
+  const today = render({
+    ...base,
+    hero: { metric: 'cost-a-week', defined: true, value: 1500, unit: 'a week', money: true, currency: hostile, caption: 'at the rate you set' }
+  }).get('today').innerHTML
+  assert.match(today, /class="hero-value">1,500 &lt;b&gt;</)
+})
+
+test('the hero prints money with the currency code after the number, or bare when there is none', () => {
+  const withCode = render({
+    ...base,
+    hero: { metric: 'cost-a-week', defined: true, value: 2131, unit: 'a week', money: true, currency: 'GBP', caption: 'at the rate you set' }
+  }).get('today').innerHTML
+  assert.match(withCode, /class="hero-value">2,131 GBP</)
+
+  const bare = render({
+    ...base,
+    hero: { metric: 'cost-a-week', defined: true, value: 2437.5, unit: 'a week', money: true, currency: null, caption: 'at the rate you set' }
+  }).get('today').innerHTML
+  assert.match(bare, /class="hero-value">2,438</)
+  assert.ok(!bare.includes('$'), 'the hero fell back to a dollar sign')
 })
 
 /* Three states on this board mean "deliberately off", and two of them show the owner's own reason:

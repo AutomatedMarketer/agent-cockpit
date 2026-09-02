@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { shapeLedger, shapeProposals, shapeHero, isParked } from '../api/state.js'
+import { shapeLedger, shapeProposals, shapeHero, isParked, currencyOf, formatMoney } from '../api/state.js'
 
 /* The first numbers on this board that come from the owner rather than from the team's own
    activity. Everything else here counts what the agents did; these count what the week costs, in
@@ -137,6 +137,62 @@ test('a money hero with no rate behind it is undefined, not zero', () => {
   const hero = shapeHero({ hero: 'cost-a-week' }, unpriced)
   assert.equal(hero.defined, false)
   assert.match(hero.why, /ledger/)
+})
+
+/* ---------- currency ---------------------------------------------------------------------- */
+
+/* The board printed "$" for every student in every country and never asked. Now the ledger
+   carries the owner's own code, the board carries it through to the hero and the cost line, and
+   a ledger that names none gets a bare number and a sentence saying so - never a guessed symbol. */
+
+test('the ledger carries its currency out as written, and null when it names none', () => {
+  assert.equal(shapeLedger(LEDGER.replace('hourly_value: 150\n', 'hourly_value: 150\ncurrency: GBP\n')).currency, 'GBP')
+  assert.equal(shapeLedger(LEDGER).currency, null)
+  assert.equal(shapeLedger(LEDGER.replace('hourly_value: 150\n', 'hourly_value: 150\ncurrency: pounds sterling\n')).currency, null)
+})
+
+test('the money hero carries the currency, so the page never has to guess a symbol', () => {
+  const priced = shapeLedger(LEDGER.replace('hourly_value: 150\n', 'hourly_value: 150\ncurrency: EUR\n'))
+  const hero = shapeHero({ hero: 'cost-a-week' }, priced)
+  assert.equal(hero.defined, true)
+  assert.equal(hero.money, true)
+  assert.equal(hero.currency, 'EUR')
+  const bare = shapeHero({ hero: 'cost-a-week' }, shapeLedger(LEDGER))
+  assert.equal(bare.defined, true)
+  assert.equal(bare.currency, null)
+})
+
+/* tests/fixtures/currency-parity.json is the shared contract - the same bytes in both repos, run
+   by both sides. Change one implementation alone and that side fails here. */
+
+const currencyFixtureUrl = new URL('./fixtures/currency-parity.json', import.meta.url)
+const currencyFixture = JSON.parse(readFileSync(currencyFixtureUrl, 'utf8'))
+
+for (const testCase of currencyFixture.codes) {
+  test(`currency parity, code: ${testCase.label}`, () => {
+    assert.equal(currencyOf(testCase.parsed), testCase.currency)
+  })
+}
+
+for (const testCase of currencyFixture.money) {
+  test(`currency parity, money: ${testCase.label}`, () => {
+    assert.equal(formatMoney(testCase.value, testCase.currency), testCase.text)
+  })
+}
+
+test('the two repos hold the same currency contract, byte for byte', (t) => {
+  const sibling = fileURLToPath(
+    new URL('../../agent-team-template/tests/fixtures/currency-parity.json', import.meta.url)
+  )
+  if (!existsSync(sibling)) {
+    t.skip('agent-team-template is not checked out beside this repo')
+    return
+  }
+  assert.equal(
+    readFileSync(sibling, 'utf8'),
+    readFileSync(currencyFixtureUrl, 'utf8'),
+    'the shared contract has been edited on one side only - that is the drift, one level up'
+  )
 })
 
 test('a hero with no ledger behind it says so', () => {

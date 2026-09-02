@@ -573,10 +573,29 @@ export function isParked(row) {
   return handsOff === '' || /<!--\s*fill:/.test(handsOff)
 }
 
+// A short code such as USD, GBP or EUR, or null when the ledger did not say. KEEP IN SYNC with
+// agent-team-template's currencyOf() in scripts/lib/ledger.mjs - mirrored by hand like the other
+// ledger rules, and pinned by tests/fixtures/currency-parity.json, the same bytes in both repos.
+// Never guess: this board printed "$" for every student in every country until the field existed.
+const CURRENCY_SHAPE = /^\S{1,8}$/
+export function currencyOf(parsed) {
+  const value = parsed?.currency
+  return typeof value === 'string' && CURRENCY_SHAPE.test(value.trim()) ? value.trim() : null
+}
+
+// The one way money becomes words on this board, the same shape as the template's formatMoney():
+// the code after the number, and bare - never a symbol - when there is no code. The caller adds
+// "a week" so the hero can split value from unit.
+export function formatMoney(value, currency) {
+  const number = Math.round(value).toLocaleString('en-US')
+  return currency ? `${number} ${currency}` : number
+}
+
 export function shapeLedger(source) {
   if (!source) return null
   const parsed = parseSimpleYaml(source)
   const hourlyValue = positiveNumber(parsed?.hourly_value)
+  const currency = currencyOf(parsed)
   const rows = Array.isArray(parsed?.tasks) ? parsed.tasks : []
 
   let hoursPerWeek = 0
@@ -628,6 +647,9 @@ export function shapeLedger(source) {
     // Null, never zero, when they gave no rate. Zero would read as "this time is free", which is a
     // different claim and a false one - and it is the claim a dashboard makes loudest.
     hourlyValue,
+    // Null when the ledger names no currency. The page then prints the number bare and says so,
+    // rather than the dollar sign it used to assume for everyone.
+    currency,
     hoursPerWeek,
     costPerWeek: hourlyValue === null ? null : hoursPerWeek * hourlyValue,
     unpriced: hourlyValue === null,
@@ -681,7 +703,7 @@ export const HERO_METRICS = {
       : null,
   'cost-a-week': (ledger) =>
     usableHours(ledger) && !ledger.unpriced
-      ? { value: ledger.costPerWeek, unit: 'a week', money: true, caption: 'at the rate you set' }
+      ? { value: ledger.costPerWeek, unit: 'a week', money: true, currency: ledger.currency ?? null, caption: 'at the rate you set' }
       : null
 }
 

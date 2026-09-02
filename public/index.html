@@ -416,6 +416,12 @@ const STATE_LABEL = {
 }
 
 const el = (id) => document.getElementById(id)
+// Money as words, the same shape as api/state.js formatMoney and the template's: the ledger's own
+// currency code after the number, or the bare number when the ledger names none. Never a symbol.
+const formatMoney = (value, currency) => {
+  const number = Math.round(value).toLocaleString('en-US')
+  return currency ? `${number} ${currency}` : number
+}
 const escapeHtml = (value) =>
   String(value ?? '').replace(/[&<>"']/g, (character) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
@@ -684,8 +690,10 @@ function heroHtml(hero) {
     // source instead - see shapeHero in api/state.js.
     return `<div class="panel empty"><b>No hero number yet.</b> <span class="small">${escapeHtml(hero.why ?? '')} Nothing is shown rather than a zero, because a zero here would be a claim about your week.</span></div>`
   }
+  // Money carries the ledger's own currency code after the number, or nothing at all when the
+  // ledger names none. Never a symbol: this line printed "$" for every student in every country.
   const value = hero.money
-    ? '$' + Math.round(hero.value).toLocaleString('en-US')
+    ? formatMoney(hero.value, hero.currency)
     : (Math.round(hero.value * 10) / 10).toLocaleString('en-US')
   return `<div class="panel hero"><div class="hero-value">${escapeHtml(value)}</div>
     <div class="hero-unit">${escapeHtml(hero.unit ?? '')}</div>
@@ -716,7 +724,9 @@ function renderLedger() {
   const money = ledger.unpriced
     ? '<span class="small muted">No rate recorded, so this is counted in hours only.</span>'
     : costKnown
-      ? `<b>$${Math.round(ledger.costPerWeek).toLocaleString('en-US')}</b> a week at the rate you set`
+      ? `<b>${escapeHtml(formatMoney(ledger.costPerWeek, ledger.currency))}</b> a week at the rate you set` +
+        // On its own line: run on from "at the rate you set" it read as one sentence on a phone.
+        (ledger.currency ? '' : '<br><span class="small muted">No currency recorded, so the number is printed bare.</span>')
       : '<span class="small muted">No cost, because there are no hours to cost.</span>'
 
   const unreadableNote = ledger.unreadable
