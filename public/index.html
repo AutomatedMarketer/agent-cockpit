@@ -42,6 +42,12 @@
     -webkit-text-size-adjust: 100%;
     padding-top: calc(var(--nav-h) + env(safe-area-inset-top, 0px) + 1rem);
   }
+  /* 44rem is a phone-and-tablet measure, and on a phone it is the right one. The desktop
+     override is below, in the same media query that turns the nav into a sidebar - this cap was
+     written when the page was phone-only, the sidebar was added later, and nothing ever lifted
+     it. On a 1890px screen that left 176px of sidebar, 498px of nothing, 704px of content and
+     513px more nothing: over half the window empty, with the task board squeezed into four
+     168px columns. */
   .wrap { max-width: 44rem; margin: 0 auto; padding: 1rem 1rem 0; }
   header { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; margin-bottom: .15rem; }
   h1 { font-size: 1.25rem; margin: 0; letter-spacing: -.01em; }
@@ -339,6 +345,27 @@
       color: var(--muted); font-weight: 600;
     }
     nav .talk:hover { color: var(--accent); }
+
+    /* The content fills the space beside the sidebar instead of staying at the phone measure.
+       Capped so an ultrawide does not stretch the board into something nobody can scan, but the
+       cap is high enough that a laptop fills edge to edge: at 1440 the available width is 1264
+       and this never bites. */
+    .wrap { max-width: 82rem; padding: 1rem 1.75rem 0; }
+
+    /* Layout gets the width; READING does not. A paragraph 1300px wide is measurably harder to
+       read than one at 70 characters - the eye loses the line on the way back. So the board, the
+       tables and the job lists take the full width, and running text is capped by its own
+       measure. Only ever a cap: inside a board column, where the container is already narrower
+       than 70ch, these rules do nothing at all. */
+    .wrap > p,
+    .panel > p,
+    .panel.empty,
+    .empty,
+    p.small,
+    .group-note,
+    .desc,
+    .summary { max-width: 70ch; }
+
   }
 
   /* Agent identity colors — set inline from AGENT_PALETTE. Identity (who owns this) is a
@@ -365,6 +392,22 @@
   .days7 .d7-day { border-top: 1px solid var(--line); padding: .5rem .9rem .6rem; }
   .days7 .d7-day:first-child { border-top: 0; }
   .days7 .d7-day.today { background: var(--panel-2); }
+
+  /* The seven days become columns rather than one tall list. Stacked, each day was a row of three
+     short words stretched across 1240px and the week ran off the bottom of the screen - width
+     made that view worse, not better. Side by side the whole week is one glance, which is the
+     question this list exists to answer. Borders switch from top to left to match.
+
+     THIS BLOCK MUST STAY BELOW THE RULES IT OVERRIDES. It first sat with the other desktop rules
+     two hundred lines up, and every line of it was dead: a media query adds no specificity, so
+     the unconditional `.days7 .d7-day` above - same selector, later in the file - won the tie and
+     put a top border back on. Desktop showed every day with BOTH borders and the first day with
+     neither. The rule was present, asserted by a test, and never reached a pixel. */
+  @media (min-width: 48rem) {
+    .days7 { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); }
+    .days7 .d7-day { border-top: 0; border-left: 1px solid var(--line); }
+    .days7 .d7-day:first-child { border-left: 0; }
+  }
   .d7-date { font-size: .6875rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin-bottom: .35rem; }
   .d7-row {
     display: flex; gap: .55rem; align-items: baseline; text-decoration: none; color: inherit;

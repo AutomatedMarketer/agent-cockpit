@@ -1048,6 +1048,188 @@ test('one silent job is counted in the singular, alongside something that rings'
   assert.match(nodes.get('today').innerHTML, /1 other job names a time in its file and nothing fires it/)
 })
 
+/* ---------- the desktop width ------------------------------------------------------------------
+
+   `.wrap` capped content at 44rem and centred it. That is the right measure for a phone and it
+   was never lifted when the desktop sidebar was added, so on a 1890px screen the page rendered as
+   176px of sidebar, 498px of nothing, 704px of content and 513px more nothing - over half the
+   window empty, with the task board squeezed into four 168px columns.
+
+   These are RULE-level tests. This suite has no layout engine and cannot measure a pixel; what it
+   can hold is that the desktop override exists, that it is scoped to the desktop, and that
+   reading text is still capped by its measure. The browser numbers behind each are recorded in
+   the commit, taken at 390, 1024 and 1890. */
+
+const stylesheet = () => readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+
+// EVERY 48rem block, joined. There is more than one - the board's columns live in their own -
+// and taking the first was how the first version of these tests read the wrong rules and failed
+// against code that was correct.
+const desktopBlock = () => {
+  const css = stylesheet()
+  const blocks = []
+  let from = 0
+  for (;;) {
+    const at = css.indexOf('@media (min-width: 48rem)', from)
+    if (at < 0) break
+    // Brace-counting, because a regex cannot match nested rules.
+    let depth = 0
+    let index = css.indexOf('{', at)
+    const start = index
+    for (; index < css.length; index += 1) {
+      if (css[index] === '{') depth += 1
+      else if (css[index] === '}') {
+        depth -= 1
+        if (depth === 0) break
+      }
+    }
+    blocks.push(css.slice(start, index))
+    from = index
+  }
+  assert.ok(blocks.length, 'the desktop media query is gone')
+  return blocks.join('\n')
+}
+
+test('the desktop layout lifts the phone width cap rather than leaving it in place', () => {
+  const desktop = desktopBlock()
+  assert.match(desktop, /\.wrap\s*\{[^}]*max-width:\s*82rem/,
+    'the desktop override of the 44rem cap is gone, so a wide screen is a phone column again')
+})
+
+test('the phone keeps its own measure, so lifting the cap cannot reach it', () => {
+  const css = stylesheet()
+  // The base rule, outside any media query, still carries the phone cap.
+  assert.match(css, /\n\s*\.wrap \{ max-width: 44rem;/,
+    'the phone lost its reading measure and now runs the full width of the screen')
+})
+
+test('reading text stays capped by its measure even though the layout got wider', () => {
+  const desktop = desktopBlock()
+  const measure = desktop.match(/\.summary \{ max-width: (\d+)ch/) || desktop.match(/max-width:\s*(\d+)ch/)
+  assert.ok(measure, 'nothing caps a line of prose any more, so paragraphs run the full width')
+  const chars = Number(measure[1])
+  assert.ok(chars >= 55 && chars <= 85, `a measure of ${chars} characters is outside what anyone reads comfortably`)
+  // The elements that actually carry running text on these screens.
+  for (const selector of ['.panel.empty', '.desc', '.summary', 'p.small']) {
+    assert.ok(desktop.includes(selector), `${selector} is no longer capped, and it carries prose`)
+  }
+})
+
+test('the week grid on Workflows uses the width instead of stretching seven rows across it', () => {
+  const desktop = desktopBlock()
+  assert.match(desktop, /\.days7 \{[^}]*grid-template-columns:\s*repeat\(auto-fill/,
+    'the seven-day list is a single tall column again on a screen wide enough to show the week')
+})
+
+/* A rule being PRESENT is not the same as a rule WINNING, and the test above only knew about the
+   first. The seven-day grid's border override sat with the other desktop rules two hundred lines
+   above the unconditional `.days7 .d7-day` it was overriding. A media query adds no specificity,
+   so the later unconditional rule won the tie: on desktop every day carried both a top and a left
+   border, and the first carried neither. Every test passed. The rule never reached a pixel.
+
+   So this checks the cascade, not the text: for any selector written both inside a min-width
+   query and unconditionally, the media query has to come LATER whenever they set the same
+   property. It is the one part of precedence a file can be read for. */
+
+const cssRules = () => {
+  const css = stylesheet()
+  const start = css.indexOf('<style>')
+  const end = css.indexOf('</style>', start)
+  assert.ok(start > 0 && end > start, 'the stylesheet is no longer in a <style> block')
+  // Comments OUT first. Without this the text between one rule's closing brace and the next
+  // rule's opening one includes any comment sitting between them, so the selector read for
+  // `.days7 .d7-day` was "/* Next 7 days - a list, so it reads... */ .days7 .d7-day", matched
+  // nothing, and the check below could never fire. It reported clean against the very bug it was
+  // written for, which is the same shape as the defect it is here to catch.
+  const sheet = css.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '')
+
+  const rules = []
+  let depth = 0
+  let mediaDepth = null
+  let index = 0
+  let selectorStart = 0
+  while (index < sheet.length) {
+    const char = sheet[index]
+    if (char === '{') {
+      const head = sheet.slice(selectorStart, index).trim()
+      depth += 1
+      if (head.startsWith('@media')) {
+        mediaDepth = depth
+      } else if (head && !head.startsWith('@')) {
+        const bodyEnd = sheet.indexOf('}', index)
+        rules.push({
+          selector: head.split('\n').map((line) => line.trim()).filter(Boolean).join(' '),
+          body: sheet.slice(index + 1, bodyEnd),
+          at: index,
+          inMedia: mediaDepth !== null
+        })
+      }
+      selectorStart = index + 1
+    } else if (char === '}') {
+      if (mediaDepth === depth) mediaDepth = null
+      depth -= 1
+      selectorStart = index + 1
+    }
+    index += 1
+  }
+  assert.ok(rules.length > 40, `only ${rules.length} rules parsed - the parser has stopped seeing the sheet`)
+  return rules
+}
+
+/* A shorthand resets the longhands it covers, so `border: 1px solid red` further down cancels a
+   `border-top: 0` above it just as surely as another `border-top` would. Comparing property names
+   as strings missed that entirely. Only the shorthands this sheet actually uses are listed - a
+   full CSS map is not the job, and an incomplete one that pretends otherwise is worse. */
+const SHORTHANDS = {
+  border: ['border-top', 'border-right', 'border-bottom', 'border-left', 'border-width', 'border-style', 'border-color'],
+  'border-width': ['border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width'],
+  padding: ['padding-top', 'padding-right', 'padding-bottom', 'padding-left'],
+  margin: ['margin-top', 'margin-right', 'margin-bottom', 'margin-left'],
+  background: ['background-color', 'background-image', 'background-position', 'background-size'],
+  font: ['font-size', 'font-family', 'font-weight', 'line-height'],
+  flex: ['flex-grow', 'flex-shrink', 'flex-basis'],
+  grid: ['grid-template-columns', 'grid-template-rows', 'grid-template-areas'],
+  'grid-template': ['grid-template-columns', 'grid-template-rows', 'grid-template-areas']
+}
+
+// What a declaration actually governs: itself, plus everything it resets.
+const governedBy = (name) => new Set([name, ...(SHORTHANDS[name] ?? [])])
+
+const propertiesOf = (body) =>
+  body.split(';').map((part) => part.split(':')[0].trim()).filter((name) => name && !name.startsWith('/'))
+
+/* Two selectors a browser treats as identical must compare equal here. `.a .b` and `.a  .b` are
+   the same selector and were being read as two different rules, so an override could be dead and
+   this check would never look at it. */
+const normaliseSelector = (selector) =>
+  selector.replace(/\s*([>+~,])\s*/g, '$1').replace(/\s+/g, ' ').trim()
+
+test('a desktop override is never cancelled by an unconditional rule further down the sheet', () => {
+  const rules = cssRules()
+  const problems = []
+
+  for (const override of rules.filter((rule) => rule.inMedia)) {
+    const overridden = propertiesOf(override.body)
+    if (!overridden.length) continue
+    const sameSelector = rules.filter((rule) =>
+      !rule.inMedia &&
+      normaliseSelector(rule.selector) === normaliseSelector(override.selector) &&
+      rule.at > override.at)
+
+    for (const plain of sameSelector) {
+      // A later declaration clashes if what IT governs includes anything the override set - which
+      // catches a shorthand cancelling a longhand, not only an exact name match.
+      const clash = overridden.filter((name) =>
+        propertiesOf(plain.body).some((later) => governedBy(later).has(name)))
+      if (clash.length) {
+        problems.push(`${override.selector} sets ${clash.join(', ')} in a media query, and the same selector sets it again unconditionally further down - the later one wins and the override is dead`)
+      }
+    }
+  }
+
+  assert.deepEqual(problems, [], problems.join('\n'))
+})
+
 test('the step chain wraps instead of being cut off mid-word', () => {
   const styles = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
   const rule = styles.match(/\n\s*\.steps \{[^}]*\}/)[0]
