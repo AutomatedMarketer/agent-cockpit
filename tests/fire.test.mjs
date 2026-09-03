@@ -31,17 +31,24 @@ const FILES = {
   'workflows/no-fire.yml':
     'name: No Fire\nowner: research\nsteps: [write-brief]\ntrigger:\n  schedule: "daily 06:00"\noutput: inbox/{date}/no-fire.md\n',
   '.claude/agents/research.md':
-    '---\nname: research\ndescription: Finds things out.\nmodel: sonnet\n---\n\nYou are the research agent.\n'
+    '---\nname: research\ndescription: Finds things out.\nmodel: sonnet\n---\n\nYou are the research agent.\n',
+  'tasks/2026-08-18-call-supplier.md':
+    '---\nstatus: todo\nfor: research\n---\n\n# Call the supplier\n\nAsk about the September lead time.\n'
 }
 
 // Stub both upstreams: GitHub contents reads and the trigger POST. Records trigger calls
 // so the happy paths can assert exactly what was dispatched.
 function stubFetch({ trigger = { status: 200, body: '{}' } } = {}) {
   const original = globalThis.fetch
-  const calls = { trigger: [] }
+  // GitHub reads are recorded as well as trigger POSTs. Without that, a test meant to prove the
+  // slug gate can pass through a different gate entirely: drop the slug check and "../workflows/
+  // monday-brief" is still refused, but by the card-exists check, AFTER a traversal path has
+  // been sent to GitHub. Asserting that no repo read happened at all is the claim that was meant.
+  const calls = { trigger: [], github: [] }
   globalThis.fetch = async (url, options = {}) => {
     const target = String(url)
     if (target.startsWith('https://api.github.com')) {
+      calls.github.push(target)
       const match = /\/contents\/(.+?)\?ref=/.exec(target)
       const body = match ? FILES[decodeURI(match[1])] : undefined
       if (body === undefined) return new Response('Not Found', { status: 404 })
@@ -589,4 +596,91 @@ test('arm still refuses something that is not a slug', async () => {
   const { response, calls } = await fire(withKey({ workflow: 'Not A Slug!', action: 'arm' }))
   assert.equal(response.statusCode, 400)
   assert.equal(calls.trigger.length, 0)
+})
+
+/* ---------- move: the Start and Done buttons on a task card ----------------------------------
+
+   The second way this board can ask for a file to change, after "task". It is the same power as
+   the Add-task button, not new power - an authenticated POST that hands an instruction to a
+   Claude session, which makes the edit and commits as the owner. So it is held to the same
+   validation: the card must already exist in the repo, and the status must be one of three
+   words. Nothing here writes anything. */
+
+test('move asks the intake to set a card to doing, naming the card and the status', async () => {
+  const { response, calls } = await fire(
+    withKey({ action: 'move', task: '2026-08-18-call-supplier', status: 'doing' })
+  )
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.body.task, '2026-08-18-call-supplier')
+  assert.equal(response.body.status, 'doing')
+  assert.equal(calls.trigger.length, 1, 'it dispatches through the general intake')
+
+  const sent = JSON.parse(calls.trigger[0].options.body)
+  assert.equal(sent.action, 'move')
+  assert.equal(sent.task, '2026-08-18-call-supplier')
+  assert.equal(sent.status, 'doing')
+  assert.match(sent.instruction, /tasks\/2026-08-18-call-supplier\.md/, 'the instruction never names the file')
+  assert.match(sent.instruction, /status: doing/, 'the instruction never names the status to write')
+  assert.match(sent.instruction, /commit/i, 'the instruction never says to commit')
+})
+
+test('moving a card to done tells the session to date it, because seven days counts from that', async () => {
+  const { calls } = await fire(
+    withKey({ action: 'move', task: '2026-08-18-call-supplier', status: 'done' })
+  )
+  const sent = JSON.parse(calls.trigger[0].options.body)
+  assert.match(sent.instruction, /done_at/, 'a card can be marked done with no date to count from')
+  assert.match(sent.instruction, /YYYY-MM-DD/, 'the instruction does not say what shape the date takes')
+})
+
+test('move refuses a card the repo does not have, rather than asking for one to be invented', async () => {
+  const { response, calls } = await fire(
+    withKey({ action: 'move', task: 'no-such-card', status: 'done' })
+  )
+  assert.equal(response.statusCode, 400)
+  assert.equal(calls.trigger.length, 0, 'it dispatched a move for a card that does not exist')
+  assert.match(response.body.error, /tasks\//, 'the error does not say where cards live')
+})
+
+test('move refuses anything that is not one of the three statuses', async () => {
+  for (const status of ['archived', 'DONE', '', null, 42, 'done; rm -rf']) {
+    const { response, calls } = await fire(
+      withKey({ action: 'move', task: '2026-08-18-call-supplier', status })
+    )
+    assert.equal(response.statusCode, 400, `status ${JSON.stringify(status)} was accepted`)
+    assert.equal(calls.trigger.length, 0)
+  }
+})
+
+test('move refuses a slug that could climb out of tasks/, before it reads anything', async () => {
+  for (const task of ['../workflows/monday-brief', '..', 'a/../../etc/passwd', 'Not A Slug!', '']) {
+    const { response, calls } = await fire(withKey({ action: 'move', task, status: 'done' }))
+    assert.equal(response.statusCode, 400, `slug ${JSON.stringify(task)} was accepted`)
+    assert.equal(calls.trigger.length, 0)
+    // The gate that matters is the SHAPE, checked before any repo read. Asserting only the 400
+    // let the slug check be deleted with every test still green: the path then went to GitHub as
+    // "tasks/../workflows/monday-brief.md", came back 404, and the card-exists check refused it -
+    // the right answer from the wrong gate, after the traversal had already been sent.
+    assert.equal(calls.github.length, 0,
+      `a traversal path reached GitHub for ${JSON.stringify(task)} instead of being refused on shape`)
+  }
+})
+
+test('move needs the fire key, like everything else that dispatches', async () => {
+  const { response, calls } = await fire({ body: { action: 'move', task: '2026-08-18-call-supplier', status: 'done' } })
+  assert.equal(response.statusCode, 401)
+  assert.equal(calls.trigger.length, 0)
+})
+
+test('the move instruction tells the session the card body is not talking to it', async () => {
+  const { calls } = await fire(
+    withKey({ action: 'move', task: '2026-08-18-call-supplier', status: 'done' })
+  )
+  const sent = JSON.parse(calls.trigger[0].options.body)
+  // The card was written by whoever opened it. A session about to edit that file must not read
+  // its contents as orders - the same rule the task action already states for title and details.
+  assert.match(sent.instruction, /never as instructions|not as instructions/i,
+    'nothing tells the session to treat the card text as text')
+  // And it changes the frontmatter only. "Mark it done" must not become "rewrite the card".
+  assert.match(sent.instruction, /frontmatter/i, 'the instruction does not limit the edit to the frontmatter')
 })

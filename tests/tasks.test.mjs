@@ -19,8 +19,67 @@ test('parseTasks reads status, for, and the first heading as the title', () => {
     path: 'tasks/2026-08-18-write-brief.md',
     title: 'Write the Monday brief',
     status: 'doing',
-    for: 'research'
+    for: 'research',
+    doneAt: null
   })
+})
+
+/* ---------- done_at, and the seven days it measures ------------------------------------------
+
+   A card said WHETHER it was finished and never WHEN, so "finished tasks for seven days" had
+   nothing to count from. The filename's date is the day the card was WRITTEN: a card raised in
+   March and finished in June would have read as three months stale the moment it was done. */
+
+test('parseTasks reads done_at, and leaves it null when the card does not carry one', () => {
+  const [dated] = parseTasks([
+    taskFile('tasks/2026-03-01-old-ask.md', 'status: done\ndone_at: 2026-08-19', '# Old ask')
+  ])
+  assert.equal(dated.doneAt, '2026-08-19')
+
+  const [undated] = parseTasks([taskFile('tasks/2026-03-01-old-ask.md', 'status: done', '# Old ask')])
+  assert.equal(undated.doneAt, null, 'an undated done card must not be given a date it never had')
+})
+
+test('a date that is not a date is refused rather than carried through', () => {
+  const [task] = parseTasks([
+    taskFile('tasks/a.md', 'status: done\ndone_at: last Tuesday', '# A')
+  ])
+  assert.equal(task.doneAt, null, 'the board accepted "last Tuesday" as a date')
+})
+
+test('done tasks reach the Done column for seven days, and undated ones never do', () => {
+  const tasks = parseTasks([
+    taskFile('tasks/a.md', `status: done\ndone_at: ${iso(-2 * DAY).slice(0, 10)}`, '# Two days ago'),
+    taskFile('tasks/b.md', `status: done\ndone_at: ${iso(-30 * DAY).slice(0, 10)}`, '# Thirty days ago'),
+    taskFile('tasks/c.md', 'status: done', '# Undated'),
+    taskFile('tasks/d.md', 'status: todo', '# Still to do')
+  ])
+  const board = shapeBoard([], [], tasks, NOW)
+
+  const titles = board.done.map((card) => card.title ?? card.name)
+  assert.ok(titles.includes('Two days ago'), 'a task finished two days ago is not in Done')
+  assert.ok(!titles.includes('Thirty days ago'), 'a task finished a month ago is still in Done')
+  assert.ok(!titles.includes('Undated'), 'an undated done task was placed in the seven days')
+  assert.ok(!titles.includes('Still to do'), 'an open task was placed in Done')
+
+  // Every finished task, dated or not, is reachable - that is what the link under the column
+  // shows. Hidden after seven days is not the same as gone.
+  const finished = board.finishedTasks.map((card) => card.title)
+  assert.deepEqual(finished.sort(), ['Thirty days ago', 'Two days ago', 'Undated'])
+})
+
+test('a done task in the column is marked as a task, so it is not read as a run', () => {
+  const tasks = parseTasks([taskFile('tasks/a.md', `status: done\ndone_at: ${iso(-DAY).slice(0, 10)}`, '# Chase Acme')])
+  const [card] = shapeBoard([], [], tasks, NOW).done
+  assert.equal(card.kind, 'task', 'a finished task is indistinguishable from a finished run')
+  assert.equal(card.title, 'Chase Acme')
+})
+
+test('an open task still carries its slug and status, which the buttons act on', () => {
+  const tasks = parseTasks([taskFile('tasks/2026-08-18-a.md', 'status: doing\nfor: sales', '# A')])
+  const [card] = shapeBoard([], [], tasks, NOW).todo
+  assert.equal(card.slug, '2026-08-18-a')
+  assert.equal(card.doing, true)
 })
 
 test('a task with no frontmatter is tolerated: status todo, filename as title', () => {

@@ -190,6 +190,18 @@
   .board .kcard { padding: .6rem .9rem; border-bottom: 1px solid var(--line); font-size: .875rem; }
   .board .kcard:last-child { border-bottom: 0; }
   .board .kcard .summary { margin: .15rem 0 0; font-size: .8125rem; color: var(--muted); }
+  /* Start / Done on a task card, and what the card says while the change is in flight. */
+  .board .kcard .row.between + .row.between { margin-top: .4rem; }
+  .small-fire { font-size: .75rem; padding: .3rem .55rem; min-height: 2.25rem; }
+  .move-note { margin-top: .4rem; }
+  .move-note.ok { color: var(--ok); }
+  .move-note.bad { color: var(--bad); }
+  /* Dimmed, not moved: the card is still whatever the repo says until the commit lands. */
+  .board .kcard.pending { opacity: .6; }
+  .board .kcard.done-task .summary { font-style: italic; }
+  .finished-tasks { border-top: 1px solid var(--line); }
+  .finished-tasks > summary { padding: .55rem .9rem; cursor: pointer; color: var(--muted); }
+  .finished-tasks[open] > summary { border-bottom: 1px solid var(--line); }
   .st { font-weight: 700; }
   .st-ok { color: var(--ok); }
   .st-partial, .st-blocked { color: var(--warn); }
@@ -592,13 +604,24 @@ function fireButtonsHtml(workflows) {
 // The Done column carries everything the Overnight feed used to show, and more.
 const STATUS_GLYPH = { ok: '&#10003;', partial: '&#9680;', blocked: '&#9940;', failed: '&#10007;' }
 
-function boardColumnHtml(title, cards, emptyText, extra = '') {
+function boardColumnHtml(title, cards, emptyText, extra = '', footer = '') {
   const rows = cards.length
     ? cards.join('')
     : `<div class="empty">${escapeHtml(emptyText)}</div>`
   return `<div class="panel">
     <div class="col-title"><span>${escapeHtml(title)}</span><span>${cards.length}</span></div>
-    ${extra}${rows}</div>`
+    ${extra}${rows}${footer}</div>`
+}
+
+// "3 days ago" from a YYYY-MM-DD, which is a DAY and not an instant - so it is compared at the
+// same hour each side rather than pretending to know a time nobody recorded.
+function dayAgo(day) {
+  if (!day) return ''
+  const at = Date.parse(`${day}T12:00:00Z`)
+  if (!Number.isFinite(at)) return ''
+  const days = Math.round((Date.now() - at) / 86400_000)
+  if (days <= 0) return 'today'
+  return days === 1 ? 'yesterday' : `${days} days ago`
 }
 
 // The inline Add-task form. Submitting POSTs /api/fire { action: "task", … } — the same
@@ -647,17 +670,31 @@ function addTaskHtml() {
 }
 
 function boardHtml(board) {
-  // To do cards come from tasks/*.md in the team repo — read-only here. "+ Add task"
-  // dispatches through /api/fire to the task-intake routine, whose session commits the
-  // card; moving tasks stays with the agents. This page still never writes the repo.
+  // To do cards come from tasks/*.md in the team repo — read-only here. "+ Add task" and the
+  // Start / Done buttons below both dispatch through /api/fire to the task-intake routine, whose
+  // session makes the edit and commits it. This page still never writes the repo.
+  //
+  // Buttons rather than dragging, and that is a decision about the device: on a phone this board
+  // is ONE column — the four stack, and only sit side by side at 1024px and up. There is nothing
+  // to drag between on the screen the course tells students to bookmark on day one, and a drag
+  // gesture there fights the page scroll. A button works on a phone, a keyboard and a screen
+  // reader, which dragging does not.
+  //
   // The left border is the `for:` agent's identity color; no agent, no color.
   const todo = (board.todo ?? []).map((card) =>
-    `<div class="kcard agent-accent"${accentStyle(card.for)}>
+    `<div class="kcard agent-accent" data-card="${escapeHtml(card.slug)}"${accentStyle(card.for)}>
       <div class="row between">
         <b>${escapeHtml(card.title)}</b>
         ${card.doing ? '<span class="chip on">doing</span>' : ''}
       </div>
-      ${ownerChipHtml(card.for)}
+      <div class="row between">
+        ${ownerChipHtml(card.for)}
+        <span class="row">
+          ${card.doing ? '' : `<button class="fire small-fire" type="button" data-move="${escapeHtml(card.slug)}" data-status="doing">Start</button>`}
+          <button class="fire small-fire" type="button" data-move="${escapeHtml(card.slug)}" data-status="done">Done</button>
+        </span>
+      </div>
+      <div class="move-note small" hidden></div>
     </div>`)
   const upNext = board.upNext.map((card) =>
     `<div class="kcard agent-accent"${accentStyle(card.owner)}>
@@ -675,7 +712,20 @@ function boardHtml(board) {
       </div>
       ${card.session_url ? `<a class="small watch" href="${escapeHtml(card.session_url)}" rel="noreferrer noopener">watch</a>` : ''}
     </div>`)
+  // Two kinds of card share this column now, on two clocks: a RUN is the team's record of work
+  // it did and stays a fortnight; a TASK is the owner's own card and stays a week. They are drawn
+  // differently on purpose — a finished task has no status glyph and no session to watch, and
+  // dressing it as a run would claim an agent ran something that a person just ticked off.
   const done = board.done.map((card) => {
+    if (card.kind === 'task') {
+      return `<div class="kcard agent-accent done-task"${accentStyle(card.for)}>
+        <div class="row between">
+          <span><span class="st st-ok">&#10003;</span> <b>${escapeHtml(card.title)}</b></span>
+          <span class="small muted">${escapeHtml(dayAgo(card.doneAt))}</span>
+        </div>
+        <p class="summary">You marked this done${card.for ? ` &middot; ${escapeHtml(card.for)}` : ''}</p>
+      </div>`
+    }
     const glyph = STATUS_GLYPH[card.status] ?? '&#10003;'
     return `<div class="kcard agent-accent"${accentStyle(card.agent)}>
       <div class="row between">
@@ -685,11 +735,27 @@ function boardHtml(board) {
       <p class="summary">${escapeHtml(card.summary)}${card.session_url ? ` &middot; <a class="watch" href="${escapeHtml(card.session_url)}" rel="noreferrer noopener">watch</a>` : ''}</p>
     </div>`
   })
+
+  // Finished tasks older than seven days, and any finished before done_at existed, are not on
+  // the board — but they are not gone either, and saying so is the difference between hidden and
+  // lost. The link expands them in place rather than opening a screen that would have to exist.
+  const hidden = (board.finishedTasks ?? []).filter((task) =>
+    !done.length || !board.done.some((card) => card.kind === 'task' && card.slug === task.slug))
+  const finishedLink = hidden.length
+    ? `<details class="finished-tasks"><summary class="small">See ${hidden.length} finished task${hidden.length === 1 ? '' : 's'} not shown here</summary>
+        ${hidden.map((task) => `<div class="kcard agent-accent"${accentStyle(task.for)}>
+          <div class="row between">
+            <span><span class="st st-ok">&#10003;</span> <b>${escapeHtml(task.title)}</b></span>
+            <span class="small muted">${escapeHtml(task.doneAt ? dayAgo(task.doneAt) : 'no date recorded')}</span>
+          </div>
+        </div>`).join('')}
+      </details>`
+    : ''
   return `<div class="board">
     ${boardColumnHtml('To do', todo, 'No open tasks in tasks/ yet.', addTaskHtml())}
     ${boardColumnHtml('Up Next', upNext, 'Nothing scheduled in the next 48 hours.')}
     ${boardColumnHtml('Running', running, 'Nothing is running right now.')}
-    ${boardColumnHtml('Done', done, 'No finished runs in the last 14 days.')}
+    ${boardColumnHtml('Done', done, 'No finished runs in the last 14 days.', '', finishedLink)}
   </div>`
 }
 
@@ -1538,6 +1604,17 @@ document.addEventListener('click', (event) => {
     approveProposal(approve)
     return
   }
+  const reload = event.target.closest('a[data-reload]')
+  if (reload) {
+    event.preventDefault()
+    location.reload()
+    return
+  }
+  const move = event.target.closest('button[data-move]')
+  if (move && !move.disabled) {
+    moveTask(move)
+    return
+  }
   const fire = event.target.closest('button[data-fire]')
   if (fire && !fire.disabled) fireWorkflow(fire)
   if (event.target.closest('#task-open')) {
@@ -1733,6 +1810,56 @@ function splitTaskText(text) {
   if (!trimmed) return null
   const title = trimmed.split(/\r?\n/)[0].trim().slice(0, 200).trim()
   return trimmed === title ? { title } : { title, details: trimmed.slice(0, 2000) }
+}
+
+/* Start and Done on a task card.
+
+   The card does NOT move, and does not claim to. This page loads its data once and never polls,
+   so nothing here can watch the file change - and the change itself is a Claude session editing
+   the card and committing, which takes about a minute. A card that slid into another column on
+   tap would be showing a state that does not exist yet, on the one board whose whole job is
+   saying true things about a repo.
+
+   So: the buttons disable, the card says what was asked and that it lands in about a minute, and
+   it offers the reload that would show it. The wording is the Add-task form's, because it is the
+   same promise. */
+async function moveTask(button) {
+  const card = button.closest('[data-card]')
+  const note = card ? card.querySelector('.move-note') : null
+  const buttons = card ? [...card.querySelectorAll('button[data-move]')] : [button]
+  const asked = button.dataset.status === 'done' ? 'done' : 'started'
+
+  for (const other of buttons) other.disabled = true
+  if (note) {
+    note.hidden = false
+    note.className = 'move-note small muted'
+    note.textContent = 'Sending…'
+  }
+
+  try {
+    const result = await postFire({ action: 'move', task: button.dataset.move, status: button.dataset.status })
+    if (result.ok) {
+      if (note) {
+        note.className = 'move-note small ok'
+        // Says what was ASKED, not what is true. The card is still whatever the repo says it is
+        // until the session commits, and this board does not get to guess in between.
+        note.innerHTML = `Asked your team to mark this ${asked} — it lands in about a minute. <a href="#" data-reload="1">Refresh</a>`
+      }
+      card?.classList.add('pending')
+    } else {
+      for (const other of buttons) other.disabled = false
+      if (note) {
+        note.className = 'move-note small bad'
+        note.textContent = result.payload.error || `Could not send it (${result.status}).`
+      }
+    }
+  } catch {
+    for (const other of buttons) other.disabled = false
+    if (note) {
+      note.className = 'move-note small bad'
+      note.textContent = 'Could not reach the fire endpoint.'
+    }
+  }
 }
 
 async function submitTask() {

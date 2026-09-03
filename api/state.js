@@ -21,7 +21,7 @@ import {
   fillMarkers,
   sortRunsNewestFirst,
   runsSince,
-  heartbeatStatus, viewGate } from './lib.js'
+  heartbeatStatus, viewGate, TASK_STATUSES } from './lib.js'
 import {
   parseWorkflow,
   normaliseSteps,
@@ -766,8 +766,6 @@ export function shapeHero(tiles, ledger) {
   return { metric, defined: true, ...resolved }
 }
 
-const TASK_STATUSES = ['todo', 'doing', 'done']
-
 export function parseTasks(taskFiles) {
   return taskFiles.map(([path, body]) => {
     const source = body ?? ''
@@ -781,9 +779,24 @@ export function parseTasks(taskFiles) {
       path,
       title: heading ? heading[1] : slug,
       status,
-      for: typeof data.for === 'string' && data.for ? data.for : null
+      for: typeof data.for === 'string' && data.for ? data.for : null,
+      // The day the card was CLOSED, which is not the date in its filename - that is the day it
+      // was written, and a card raised in March and finished in June would read as three months
+      // stale the moment it was done. Only a real YYYY-MM-DD counts: "last Tuesday" is somebody
+      // typing a note into a date field, and a board that accepted it would sort by nonsense.
+      doneAt: isCalendarDay(data.done_at) ? data.done_at.trim() : null
     }
   })
+}
+
+// A date this board can count from, or nothing. Deliberately narrow: it checks the shape AND
+// that the shape names a real day, so 2026-02-31 is refused rather than rolled into March.
+export function isCalendarDay(value) {
+  if (typeof value !== 'string') return false
+  const text = value.trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false
+  const at = new Date(`${text}T00:00:00Z`)
+  return Number.isFinite(at.getTime()) && at.toISOString().slice(0, 10) === text
 }
 
 // The Board: four columns for the Today screen — To do, Up Next, Running, Done.
@@ -800,6 +813,9 @@ const RUNNING_GRACE_MINUTES = 30
 const TERMINAL_STATUSES = ['ok', 'partial', 'blocked', 'failed']
 const UP_NEXT_WINDOW_MS = 48 * 3600_000
 const DONE_WINDOW_MS = 14 * 86400_000
+// Nuno's call, 2026-09-02: a finished TASK shows for seven days, then lives behind the link
+// under the column rather than on the board. Runs keep their fourteen.
+const TASK_DONE_WINDOW_MS = 7 * 86400_000
 
 function isRunningLog(run, now) {
   if (run.finished_at) return false
@@ -837,9 +853,15 @@ export function shapeBoard(workflows, runs, tasks = [], now = Date.now()) {
   // by convention, so path order is age order. `doing` rides along as a flag rather than
   // its own column: on a phone four columns already stack tall enough.
   //
-  // Done tasks add no card of their own. A finished task only earns its place in Done
-  // through the run log the agent wrote — the run card IS the record, and carding the
-  // task file next to it would show the same work twice.
+  // Done tasks USED TO add no card of their own: a finished task earned its place in Done only
+  // through the run log the agent wrote, on the reasoning that the run card IS the record and
+  // carding the task beside it would show one piece of work twice.
+  //
+  // That held while the only way a card got finished was an agent finishing it. The board now
+  // has a Done button, so a card can be closed by the owner with no run behind it at all — and
+  // under the old rule that work vanished from the board the moment it was done. Finished tasks
+  // are carded below, for seven days against the runs' fourteen, and marked `kind: 'task'` so
+  // the two are never dressed as each other.
   const todo = tasks
     .filter((task) => task.status === 'todo' || task.status === 'doing')
     .sort((a, b) => a.path.localeCompare(b.path))
@@ -882,6 +904,7 @@ export function shapeBoard(workflows, runs, tasks = [], now = Date.now()) {
     const at = Date.parse(run.finished_at ?? run.started_at)
     if (!Number.isFinite(at) || now - at > DONE_WINDOW_MS) continue
     done.push({
+      kind: 'run',
       name,
       agent: run.agent ?? null,
       status: run.status ?? 'ok',
@@ -891,10 +914,33 @@ export function shapeBoard(workflows, runs, tasks = [], now = Date.now()) {
       _at: at
     })
   }
+
+  // Finished TASKS join the finished runs, for seven days rather than the runs' fourteen. Two
+  // windows in one column because they are two different things: a run is the team's record of
+  // work it did, and stays long enough to review a fortnight; a task is the owner's own card,
+  // and a column of last month's ticks is not a board, it is a filing cabinet.
+  //
+  // Undated done cards - every one written before done_at existed - are NOT placed here. The
+  // board would have to invent a date to sort them by, and inventing one is how a card finished
+  // in June reads as March. They are reachable in full through finishedTasks below.
+  const finishedTasks = tasks
+    .filter((task) => task.status === 'done')
+    .map((task) => ({ kind: 'task', slug: task.slug, title: task.title, for: task.for ?? null, doneAt: task.doneAt ?? null }))
+    .sort((a, b) => String(b.doneAt ?? '').localeCompare(String(a.doneAt ?? '')))
+
+  for (const task of finishedTasks) {
+    if (!task.doneAt) continue
+    // Midday UTC, not midnight: a card dated today must read as today for a reader west of
+    // Greenwich too, and a date with no time in it is a day, not an instant.
+    const at = Date.parse(`${task.doneAt}T12:00:00Z`)
+    if (!Number.isFinite(at) || now - at > TASK_DONE_WINDOW_MS) continue
+    done.push({ ...task, _at: at })
+  }
+
   done.sort((a, b) => b._at - a._at)
   for (const card of done) delete card._at
 
-  return { todo, upNext, running, done }
+  return { todo, upNext, running, done, finishedTasks }
 }
 
 // Which files in tasks/ are somebody's cards. Exported so the suite can hit it directly rather

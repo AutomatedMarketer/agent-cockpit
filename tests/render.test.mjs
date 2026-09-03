@@ -202,6 +202,105 @@ test('an armed job does still appear in the week strip', () => {
   assert.ok(armed.get('workflows').innerHTML.includes('06:30'), 'a real job lost its time')
 })
 
+/* ---------- Start and Done on a task card -----------------------------------------------------
+
+   Buttons rather than dragging, because on a phone this board is ONE column: the four stack, and
+   only sit side by side at 1024px and up. There is nothing to drag between on the device the
+   course tells students to bookmark on day one. */
+
+const boardWith = (over) => ({
+  todo: [], upNext: [], running: [], done: [], finishedTasks: [], ...over
+})
+
+test('an open task card carries Start and Done, and a card already doing carries only Done', () => {
+  const drawn = render({
+    ...base,
+    board: boardWith({
+      todo: [
+        { slug: 'a-card', title: 'Chase Acme', for: 'sales', doing: false },
+        { slug: 'b-card', title: 'Write the brief', for: 'research', doing: true }
+      ]
+    })
+  }).get('today').innerHTML
+
+  assert.match(drawn, /data-move="a-card"[^>]*data-status="doing"/, 'a todo card has no Start button')
+  assert.match(drawn, /data-move="a-card"[^>]*data-status="done"/, 'a todo card has no Done button')
+  assert.match(drawn, /data-move="b-card"[^>]*data-status="done"/, 'a doing card has no Done button')
+  assert.ok(
+    !/data-move="b-card"[^>]*data-status="doing"/.test(drawn),
+    'a card already being worked on was offered Start again'
+  )
+})
+
+test('a task card names itself, so the button knows which file to ask about', () => {
+  const drawn = render({
+    ...base,
+    board: boardWith({ todo: [{ slug: '2026-08-18-call-supplier', title: 'Call the supplier', for: null, doing: false }] })
+  }).get('today').innerHTML
+  assert.match(drawn, /data-card="2026-08-18-call-supplier"/)
+})
+
+test('a task title and slug are repo text, so both are escaped on the card', () => {
+  const drawn = render({
+    ...base,
+    board: boardWith({ todo: [{ slug: 'a-card', title: '<img src=x onerror=1>', for: null, doing: false }] })
+  }).get('today').innerHTML
+  assert.ok(!drawn.includes('<img src=x'), 'a task title from the repo was rendered as markup')
+  assert.match(drawn, /&lt;img src=x/)
+})
+
+/* A finished TASK and a finished RUN share the Done column on two clocks - seven days and
+   fourteen. They are drawn differently on purpose: a task has no session to watch and no agent
+   status, and dressing it as a run would claim something ran that a person just ticked off. */
+
+test('a finished task in Done is marked as one, and never given a watch link', () => {
+  const drawn = render({
+    ...base,
+    board: boardWith({
+      done: [
+        { kind: 'task', slug: 'a-card', title: 'Chase Acme', for: 'sales', doneAt: '2026-09-01' },
+        { kind: 'run', name: 'monday-brief', agent: 'research', status: 'ok', summary: 'Brief written.', started_at: new Date().toISOString(), session_url: 'https://claude.ai/code/s1' }
+      ]
+    })
+  }).get('today').innerHTML
+
+  assert.match(drawn, /You marked this done/, 'a finished task is indistinguishable from a run')
+  assert.match(drawn, /Chase Acme/)
+  // The run keeps its watch link; the task must not have been given one.
+  const taskCard = drawn.slice(drawn.indexOf('Chase Acme'), drawn.indexOf('monday-brief'))
+  assert.ok(!taskCard.includes('watch'), 'a finished task was given a session to watch')
+})
+
+test('finished tasks that are not on the board are offered behind a link, counted', () => {
+  const drawn = render({
+    ...base,
+    board: boardWith({
+      done: [{ kind: 'task', slug: 'shown', title: 'Shown', for: null, doneAt: '2026-09-01' }],
+      finishedTasks: [
+        { kind: 'task', slug: 'shown', title: 'Shown', for: null, doneAt: '2026-09-01' },
+        { kind: 'task', slug: 'old', title: 'Old one', for: null, doneAt: '2026-01-04' },
+        { kind: 'task', slug: 'undated', title: 'Undated one', for: null, doneAt: null }
+      ]
+    })
+  }).get('today').innerHTML
+
+  assert.match(drawn, /See 2 finished tasks not shown here/, 'the hidden finished tasks are not offered')
+  assert.match(drawn, /Old one/)
+  assert.match(drawn, /Undated one/)
+  assert.match(drawn, /no date recorded/, 'an undated card was given a date it never had')
+})
+
+test('with nothing hidden there is no link at all', () => {
+  const drawn = render({
+    ...base,
+    board: boardWith({
+      done: [{ kind: 'task', slug: 'shown', title: 'Shown', for: null, doneAt: '2026-09-01' }],
+      finishedTasks: [{ kind: 'task', slug: 'shown', title: 'Shown', for: null, doneAt: '2026-09-01' }]
+    })
+  }).get('today').innerHTML
+  assert.ok(!drawn.includes('finished task'), 'a link was offered to nothing')
+})
+
 /* ---------- Next 7 days, on the Workflows screen ----------------------------------------------
 
    The week grid answers "which weekday does this land on". It could not answer the question a

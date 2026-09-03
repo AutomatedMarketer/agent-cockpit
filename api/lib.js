@@ -39,6 +39,14 @@ export function viewGate(request, env = process.env) {
 
 // Pure helpers, kept out of the handler so they can be tested without a network.
 
+// The three statuses a task card can be in — the contract in the template's tasks/README.md.
+// Here, in the module both api/state.js and api/fire.js already import from, because it was
+// briefly written out in both of them: state.js reads the status off a card, fire.js refuses to
+// ask for one that is not on the list, and two literals that must agree with no mechanism
+// keeping them agreeing is the same shape as the constant-time compare above having two copies.
+// The mirroring that IS unavoidable is with the student's repo, which has no import path here.
+export const TASK_STATUSES = ['todo', 'doing', 'done']
+
 export const STALE_AFTER_DAYS = 7
 export const HEARTBEAT_STALE_AFTER_MINUTES = 30
 export const OVERNIGHT_HOURS = 24

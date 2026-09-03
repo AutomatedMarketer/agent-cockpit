@@ -80,6 +80,7 @@ test('done holds 14 days of finished runs, newest first, with summary and watch 
   )
   assert.deepEqual(done.map((card) => card.name), ['monday-brief', 'email'])
   assert.deepEqual(done[0], {
+    kind: 'run',
     name: 'monday-brief',
     agent: 'research',
     status: 'ok',
@@ -103,5 +104,5 @@ test('every terminal status lands in done; anything else without a finish does n
 })
 
 test('empty inputs give four empty columns, not a crash', () => {
-  assert.deepEqual(shapeBoard([], [], [], NOW), { todo: [], upNext: [], running: [], done: [] })
+  assert.deepEqual(shapeBoard([], [], [], NOW), { todo: [], upNext: [], running: [], done: [], finishedTasks: [] })
 })

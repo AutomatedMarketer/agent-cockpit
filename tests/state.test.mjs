@@ -367,8 +367,11 @@ test('the board ships in the payload with its four columns filled from the repo'
   // Running: both fixture runs carry a settled ok status older than the grace window.
   assert.deepEqual(body.board.running, [])
   // Done: the hour-old run is in, the twenty-day-old run is outside the 14-day window.
+  // `kind` tells a finished run from a finished task, which now share this column on
+  // different clocks - runs for fourteen days, the owner's own cards for seven.
   assert.deepEqual(body.board.done, [
     {
+      kind: 'run',
       name: 'monday-brief',
       agent: 'research',
       status: 'ok',
