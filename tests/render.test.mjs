@@ -2533,3 +2533,44 @@ test('every class the add forms emit is one the stylesheet actually styles', () 
       `the forms put class "${name}" in the markup and no rule anywhere targets it`)
   }
 })
+
+/* The defect the tests could not see, found by looking at the screen: on a wide window the add
+   forms were a stretched phone layout - a 1225px textarea for one sentence, the explanation on
+   one long line, and a 1225px submit button. 588 tests passed and four separate reads of the
+   stylesheet went past it.
+
+   This is the mirror of every other check in this block, and the reason `rulesFor` takes a
+   `desktop` option rather than just dropping media rules. The measure cap MUST be inside the
+   desktop query: applied unconditionally it would put a 34rem ceiling on the phone form, which
+   is 327px wide and needs every pixel. So it is asserted present on desktop and absent
+   everywhere else. */
+
+test('the add forms keep a readable measure on a wide screen', () => {
+  const capped = rulesFor('.add-panel .fire-form', { desktop: true })
+  assert.ok(capped.length,
+    'nothing caps the add form width on desktop, so it stretches the full content column - a 1225px box for one sentence')
+  assert.ok(capped.flatMap(declarationsIn).includes('max-width'),
+    'the desktop rule for the add form declares no max-width, which is the whole point of it')
+
+  assert.deepEqual(rulesFor('.add-panel .fire-form').map((rule) => rule.selector), [],
+    'the desktop measure cap is written unconditionally, so it also squeezes the phone form - which is 327px wide and needs all of it')
+})
+
+test('the submit button stops being full width on a wide screen', () => {
+  const button = rulesFor('.add-panel .fire-form .fire', { desktop: true })
+  assert.ok(button.length, 'nothing stops the submit button stretching the whole form on desktop')
+  assert.ok(button.flatMap(declarationsIn).some((property) => property.startsWith('justify')),
+    'the desktop rule does not release the button from the grid stretch, so it is as wide as the textarea')
+})
+
+/* A media query adds no specificity, so an override placed above the rule it overrides is dead
+   code that reads as correct. This repo shipped exactly that once. The cap has to come after the
+   unconditional .fire-form rules it narrows. */
+
+test('the desktop measure cap comes after the rule it overrides', () => {
+  const [cap] = rulesFor('.add-panel .fire-form', { desktop: true })
+  const base = rulesFor('.fire-form').filter((rule) => rule.selector === '.fire-form')
+  assert.ok(cap && base.length, 'one of the two rules is missing')
+  assert.ok(cap.at > base[0].at,
+    'the desktop cap is written above the .fire-form rule it narrows - a media query adds no specificity, so it never reaches a pixel')
+})

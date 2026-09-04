@@ -416,6 +416,17 @@
     .days7 { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); }
     .days7 .d7-day { border-top: 0; border-left: 1px solid var(--line); }
     .days7 .d7-day:first-child { border-left: 0; }
+    /* The add forms are the only full-width thing on Skills and Team, and on a wide screen the
+       phone layout stretched: a 1225px textarea for one sentence, the explanation on one long
+       line, and a 1225px submit button. Every test passed and four reads of the stylesheet
+       missed it - it was obvious in a screenshot. Running text keeps a readable measure here,
+       the same rule the rest of the desktop layout already follows.
+
+       This block sits AFTER the unconditional .fire-form rules on purpose. A media query adds
+       no specificity, so an override placed above the rule it overrides is dead code that still
+       reads as correct - this repo has shipped that bug once already. */
+    .add-panel .fire-form { max-width: 34rem; }
+    .add-panel .fire-form .fire { justify-self: start; }
   }
   .d7-date { font-size: .6875rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin-bottom: .35rem; }
   .d7-row {
