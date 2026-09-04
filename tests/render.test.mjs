@@ -1143,9 +1143,26 @@ const cssRules = () => {
   // written for, which is the same shape as the defect it is here to catch.
   const sheet = css.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '')
 
+  /* `inMedia` used to mean "@media saw it", tracked in a single variable, and review broke that
+     two ways at once.
+
+     Only `@media` counted as gating. Wrapping the form-field rules in `@supports not (display:
+     grid)` - a condition no browser in use matches, so the rules apply NOWHERE - left them
+     reading as unconditional and the suite green. Worse than the desktop-only case that fix was
+     written for: that one worked on a laptop.
+
+     And one variable cannot hold nesting. An inner `@media` closing reset it while the outer one
+     was still open, so every rule after it read as unconditional though none of them applied on a
+     phone. Neither shape is in this sheet today - and neither was the desktop-only wrap, which is
+     the point of attacking the instrument rather than the stylesheet.
+
+     So: a stack, and every conditional at-rule on it. `@layer` is deliberately not one - its
+     contents do apply. */
+  const CONDITIONAL_AT_RULE = /^@(media|supports|container)\b/
+
   const rules = []
+  const conditions = []
   let depth = 0
-  let mediaDepth = null
   let index = 0
   let selectorStart = 0
   while (index < sheet.length) {
@@ -1153,20 +1170,21 @@ const cssRules = () => {
     if (char === '{') {
       const head = sheet.slice(selectorStart, index).trim()
       depth += 1
-      if (head.startsWith('@media')) {
-        mediaDepth = depth
+      if (CONDITIONAL_AT_RULE.test(head)) {
+        conditions.push(depth)
       } else if (head && !head.startsWith('@')) {
         const bodyEnd = sheet.indexOf('}', index)
         rules.push({
           selector: head.split('\n').map((line) => line.trim()).filter(Boolean).join(' '),
           body: sheet.slice(index + 1, bodyEnd),
           at: index,
-          inMedia: mediaDepth !== null
+          // "Behind a condition of some kind", not "the last @media is still open".
+          inMedia: conditions.length > 0
         })
       }
       selectorStart = index + 1
     } else if (char === '}') {
-      if (mediaDepth === depth) mediaDepth = null
+      if (conditions.at(-1) === depth) conditions.pop()
       depth -= 1
       selectorStart = index + 1
     }
@@ -2312,10 +2330,24 @@ const styles = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? ''
 // not exist on a phone at all. Counting one would let an entire fix be gated to desktop with the
 // suite staying green — found by mutation in review, twice, against both of the last commit's own
 // fixes. A laptop would have looked right and every phone would have carried the bug back.
+//
+// A token matches wherever it appears in a selector, not only at the front: `.fire` is written as
+// `button.fire`, and a matcher anchored to the start reported that nothing styles the button
+// behind every action on this board. What it must not do is match a longer name — `.fire` is not
+// `.fire-form` — so whatever follows the token has to be something that ends a name.
+const NAME_CHAR = /[A-Za-z0-9_-]/
+
 const rulesFor = (token, { desktop = false } = {}) => cssRules().filter((rule) =>
   Boolean(rule.inMedia) === desktop &&
-  rule.selector.split(',').map((one) => one.trim()).some((selector) =>
-    selector === token || (selector.startsWith(token) && /^[\s.:[>+~]/.test(selector.slice(token.length)))))
+  rule.selector.split(',').map((one) => one.trim()).some((selector) => {
+    let from = selector.indexOf(token)
+    while (from !== -1) {
+      const after = selector[from + token.length]
+      if (after === undefined || !NAME_CHAR.test(after)) return true
+      from = selector.indexOf(token, from + 1)
+    }
+    return false
+  }))
 
 const declarationsIn = (rule) =>
   rule.body.split(';').map((one) => one.split(':')[0].trim()).filter(Boolean)
@@ -2446,5 +2478,58 @@ test('both add forms say plainly that nothing gets switched on', () => {
     const form = drawn.replace(/\s+/g, ' ')
     assert.match(form, /[Nn]othing is switched on|[Nn]othing is armed/,
       `the ${kind} form never promises that nothing gets switched on, which is the one reassurance this whole design rests on`)
+  }
+})
+
+/* The same defect class as everything above, found once more and this time on the rule with the
+   widest reach in the whole app. Emptying `.panel { }` - background, border, radius, the three
+   properties that make every card on every screen look like a card - left the suite green. The
+   only test naming `.panel` at all matched a class STRING in the markup, which says nothing about
+   whether the class does anything.
+
+   So these name the properties whose absence would be visible, for the handful of classes the
+   board's controls are actually built out of. Not every class in the sheet - a list nobody
+   maintains is worse than none - just the ones a dispatch control cannot look right without. */
+
+const VISIBLE_RULES = {
+  '.panel': ['background', 'border'],
+  '.add-task': ['padding'],
+  '.fire': ['background', 'color'],
+  '.fire-note': ['font-size'],
+  '.fire-form .row': ['flex-wrap'],
+  '.fire-form select': ['flex']
+}
+
+for (const [selector, properties] of Object.entries(VISIBLE_RULES)) {
+  test(`${selector} is a rule that does something, not just a class name in the markup`, () => {
+    const rules = rulesFor(selector)
+    assert.ok(rules.length, `nothing in the stylesheet targets ${selector} outside a media query`)
+    const declared = new Set(rules.flatMap(declarationsIn))
+    for (const property of properties) {
+      assert.ok(declared.has(property),
+        `${selector} declares no ${property} - the class is in the markup and does nothing there`)
+    }
+  })
+}
+
+/* Every class the board's own controls put in the markup has to be one the stylesheet knows.
+   This is the general form of the two defects that shipped: a class string is free to write and
+   proves nothing. Only the classes these controls emit - the sweep stays narrow on purpose. */
+
+test('every class the add forms emit is one the stylesheet actually styles', () => {
+  const emitted = new Set()
+  for (const source of [
+    script.split('function createFormHtml')[1]?.split('\n}')[0] ?? '',
+    script.split('function addTaskHtml')[1]?.split('\n}')[0] ?? ''
+  ]) {
+    assert.ok(source, 'one of the two form builders is gone')
+    for (const found of source.matchAll(/class="([a-z0-9 -]+)"/g)) {
+      for (const name of found[1].split(/\s+/).filter(Boolean)) emitted.add(name)
+    }
+  }
+  assert.ok(emitted.size >= 5, `only found ${emitted.size} classes on the forms - the sweep is not reading them`)
+  for (const name of emitted) {
+    assert.ok(rulesFor(`.${name}`).length || rulesFor(`.${name}`, { desktop: true }).length,
+      `the forms put class "${name}" in the markup and no rule anywhere targets it`)
   }
 })
