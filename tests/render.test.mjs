@@ -2289,8 +2289,40 @@ test('the two creations post their own action, not a task card', () => {
 
 const styles = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? ''
 
+/* Reading the stylesheet as one string was not enough, and both ways it failed were found by
+   mutation in review.
+
+   Substring-searching it counts COMMENT PROSE as a rule. The comment explaining this very
+   refactor names `#task-form` and `#wf-form` in a sentence, so `styles.includes('#task-form')`
+   was true whether or not any rule targeted it - and stripping the shared class off the live
+   Add-task form, the one on the default screen that people use every day, left the suite green
+   while reintroducing the exact bug this block exists to stop.
+
+   And a selector that exists proves nothing about what it does. Emptying the body of
+   `.fire-form textarea` - deleting every property that stops a bare browser-default textarea on
+   a dark page - also left it green.
+
+   So: comments go, and the sheet is read as rules with bodies. */
+
+// Reusing the parser the cascade tests already built rather than adding a second one — it strips
+// comments and understands media queries, and two CSS parsers in one file is how they diverge.
+const rulesFor = (token) => cssRules().filter((rule) =>
+  rule.selector.split(',').map((one) => one.trim()).some((selector) =>
+    selector === token || (selector.startsWith(token) && /^[\s.:[>+~]/.test(selector.slice(token.length)))))
+
+const declarationsIn = (rule) =>
+  rule.body.split(';').map((one) => one.split(':')[0].trim()).filter(Boolean)
+
 test('the page has a stylesheet these tests can actually read', () => {
   assert.ok(styles.length > 500, 'no stylesheet was found, so every check below would pass on nothing')
+})
+
+test('the stylesheet is read as rules, not as text that happens to contain a selector', () => {
+  // The guard on the guard. If comments ever leak back in, the sweep below silently stops
+  // meaning anything, and this is the only place that would say so.
+  assert.ok(/#task-form/.test(styles), 'the comment naming #task-form is gone - this check needs updating')
+  assert.equal(rulesFor('#task-form').length, 0,
+    'a rule is being found for #task-form, which is only mentioned in a comment - comment stripping has broken')
 })
 
 test('every form the page draws is covered by the stylesheet', () => {
@@ -2301,31 +2333,46 @@ test('every form the page draws is covered by the stylesheet', () => {
   }
   for (const found of script.matchAll(/<form id="([a-z-]+)"/g)) ids.add(found[1])
 
-  assert.ok(ids.size >= 4, `only found ${ids.size} forms on the page - the sweep is not finding them`)
-  for (const id of ids) {
-    const byId = styles.includes(`#${id}`)
-    // Or by a class the form carries, which is how they are all styled now.
-    const classes = [...script.matchAll(new RegExp(`<form id="[^"]*${id.replace(/^(skill|agent)/, '\\\\$\\\\{kind\\\\}')}"[^>]*class="([^"]+)"`, 'g'))]
-    const byClass = script.includes(`id="${id}" class="fire-form"`) ||
-      /<form id="\$\{kind\}-form" class="fire-form"/.test(script)
-    assert.ok(byId || byClass || classes.length,
-      `the ${id} form is drawn by the page and the stylesheet does not mention it - it will render as a browser default on a dark page`)
-  }
+  assert.ok(ids.size >= 3, `only found ${ids.size} forms on the page - the sweep is not finding them`)
 })
 
-test('the shared form class is the one the stylesheet actually styles', () => {
-  for (const rule of ['.fire-form textarea', '.fire-form label', '.fire-form[hidden]']) {
-    assert.ok(styles.includes(rule), `the stylesheet lost ${rule}, which every inline form depends on`)
-  }
-  // Every form is styled by SOMETHING: either a rule of its own, like the unlock form, or the
-  // shared class. A form styled by neither is the defect this whole block exists for.
+test('every form the page draws is styled by a real rule, not by prose', () => {
+  // Every form in the file, template placeholder included. Each is styled by a rule of its own -
+  // the unlock form has one - or by carrying the shared class. Nothing else counts.
   const forms = [...html.matchAll(/<form id="([^"]+)"([^>]*)>/g)]
   assert.ok(forms.length >= 4, `the form sweep found ${forms.length} forms - it is not finding them`)
   for (const [, id, attributes] of forms) {
-    const own = styles.includes(`#${id.replace('${kind}', 'skill')}`) || styles.includes(`#${id}`)
-    assert.ok(own || /class="fire-form"/.test(attributes),
-      `the ${id} form has no rule of its own and does not carry the shared class - nothing styles it`)
+    if (/class="[^"]*\bfire-form\b/.test(attributes)) continue
+    const own = rulesFor(`#${id}`)
+    assert.ok(own.length,
+      `the ${id} form neither carries the shared class nor has a rule of its own - it will render as a browser default on a dark page`)
+    assert.ok(own.some((rule) => declarationsIn(rule).length),
+      `every rule for #${id} has an empty body, so nothing is actually styled`)
   }
+})
+
+/* A selector that exists and a selector that does something are different claims. These name the
+   properties whose ABSENCE was the shipped bug: a textarea with no width, no background and no
+   border is the bare browser default this whole commit exists to stop. */
+
+test('the shared form rules carry the properties that stop a bare browser default', () => {
+  const declaredBy = (token) => new Set(rulesFor(token).flatMap(declarationsIn))
+
+  const layout = declaredBy('.fire-form')
+  for (const property of ['display', 'gap']) {
+    assert.ok(layout.has(property),
+      `.fire-form declares no ${property}, so every inline form on the page loses its layout`)
+  }
+
+  const field = declaredBy('.fire-form textarea')
+  for (const property of ['width', 'background', 'border', 'color', 'padding']) {
+    assert.ok(field.has(property),
+      `nothing declares ${property} for a .fire-form textarea - that is the bare browser default on a dark page, which is the bug this exists to stop`)
+  }
+
+  assert.ok(declaredBy('.fire-form label').has('color'), 'the form label lost its colour')
+  assert.ok(declaredBy('.fire-form[hidden]').has('display'),
+    'a hidden form no longer hides, so both forms are open on every load')
 })
 
 /* The new forms sit on Skills and Team as siblings of the panels rather than inside one, and
@@ -2340,9 +2387,28 @@ test('the add forms render inside a panel on the two screens that have no column
   ]) {
     const drawn = render(payload).get(screen).innerHTML
     const opening = drawn.slice(0, drawn.indexOf('add-task'))
-    assert.match(opening, /class="panel"/,
+    assert.match(opening, /class="panel /,
       `the add form on ${screen} is not inside a panel, so it renders on the bare page background`)
   }
+})
+
+/* Two layout details a reviewer found by reading the box model, neither visible to any test
+   before this one. `.add-task` carries a bottom border to separate it from the cards under it in
+   a board column; as the only child of its own panel that border sits directly on the panel's own
+   bottom border. And `.panel` declares no margin - the .6rem between panels comes from
+   `.stack > .panel`, which the Team screen has no wrapper for - so the add form and the agents
+   list would render flush, borders touching, reading as one card with a seam. */
+
+test('the add form panel is spaced from what follows it and does not double its own border', () => {
+  const drawn = render({ ...base, agents: [] }).get('team').innerHTML
+  assert.match(drawn, /class="panel add-panel"/,
+    'the add form panel has no class of its own, so nothing can space it without also changing Today')
+  const spacing = new Set(rulesFor('.add-panel').flatMap(declarationsIn))
+  assert.ok(spacing.has('margin-bottom'),
+    'nothing spaces the add form from the panel below it - .panel has no margin of its own, and Team has no .stack wrapper')
+  const inner = rulesFor('.add-panel .add-task')
+  assert.ok(inner.length && inner.flatMap(declarationsIn).includes('border-bottom'),
+    'the add-task bottom border is not cancelled inside its own panel, so it doubles up with the panel border')
 })
 
 /* Design rule two - nothing is armed or scheduled by a tap - is the most load-bearing rule in

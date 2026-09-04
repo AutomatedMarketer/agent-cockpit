@@ -177,6 +177,14 @@
   .fire-form textarea { resize: vertical; min-height: 4.4rem; }
   .fire-form .row { flex-wrap: nowrap; }
   .fire-form select { flex: 1; min-width: 0; }
+  /* On Today this block is one part of a board column and its bottom border separates it from the
+     cards below. On Skills and Team it is the only child of a panel of its own, so that border
+     lands directly on the panel's own bottom border - two hairlines, one gap apart - and .panel
+     carries no margin, so the next panel starts flush against it and the two read as one fused
+     card. Both are only visible on the two new screens, which is why they are fixed here and not
+     on .panel or .add-task, where they would change Today. */
+  .add-panel { margin-bottom: .6rem; }
+  .add-panel .add-task { border-bottom: 0; }
 
   /* Week calendar - the Schedule strip with dates and outcomes. A pill is done when a run
      for that workflow landed that day, missed when the day has passed without one. */
@@ -753,7 +761,7 @@ function createFormHtml(kind) {
   // board - and .add-task declares no background of its own. On Skills and Team it is a sibling
   // of the panels rather than inside one, so without this it renders on the bare page background
   // while every other block on those two screens sits on a card.
-  return `<div class="panel"><div class="add-task">
+  return `<div class="panel add-panel"><div class="add-task">
     <button class="fire" type="button" id="${kind}-open">${form.button}</button>
     <form id="${kind}-form" class="fire-form" hidden>
       <label for="${kind}-text">${form.label}</label>

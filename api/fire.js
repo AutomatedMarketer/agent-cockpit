@@ -311,9 +311,10 @@ export function creationDispatchPayload(kind, item) {
       `Nobody is sitting in front of this session, so the questions ${spec.command} asks have ` +
       'no one to answer them: work out the answers from the sentence yourself, and where you ' +
       'have to choose, choose the smaller and safer option. Run ' + spec.checks + ' and only ' +
-      'commit and push if they pass. If they do not pass, commit nothing, file no card, and say ' +
-      'plainly what failed — a review card describing guesses about a file that was never ' +
-      'written is worse than no card at all. ' +
+      'commit and push if they pass. If they do not pass, commit nothing, file no card, and ' +
+      'write a run log saying what failed, following .claude/skills/run-log/SKILL.md — a review ' +
+      'card describing guesses about a file that was never written is worse than no card at all, ' +
+      'and nobody is here to be told, so a failure with no run log is a tap that vanished. ' +
       'When they pass, file a review card at tasks/YYYY-MM-DD-review-<slug>.md with status: todo and no ' +
       'for: field, whose body opens with the line "This one needs you, not an agent — nobody ' +
       'but the owner can say whether these guesses are right.", then quotes the sentence you ' +

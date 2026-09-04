@@ -877,6 +877,12 @@ for (const kind of ['skill', 'agent']) {
     const failure = /[^.]*(?:if they do not pass|if the checks fail|if they fail)[^.]*\./i.exec(instruction)[0]
     assert.ok(/file no card|no review card|do not file/i.test(failure),
       'the failure branch never says to withhold the review card, so it can describe a file that was never written')
+    // Found by mutation in review: dropping the reporting half left the suite green, and the
+    // wording it left behind - "say plainly what failed" - had no sink. The instruction's own
+    // first line says nobody is sitting there, so a failure said out loud is a failure nobody
+    // hears. The pause branch already writes a run log; this one does now too.
+    assert.ok(/run log/i.test(failure),
+      'the failure branch never writes a run log, so a failed tap leaves no trace anywhere the owner looks')
   })
 
   test(`the ${kind} instruction reads as English, article and all`, () => {
