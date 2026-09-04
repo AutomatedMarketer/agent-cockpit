@@ -2306,7 +2306,14 @@ const styles = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? ''
 
 // Reusing the parser the cascade tests already built rather than adding a second one — it strips
 // comments and understands media queries, and two CSS parsers in one file is how they diverge.
-const rulesFor = (token) => cssRules().filter((rule) =>
+//
+// UNCONDITIONAL rules only, and that word is the whole point. This page is phone-first: every
+// desktop rule lives inside `@media (min-width: 48rem)`, so a rule that exists only in there does
+// not exist on a phone at all. Counting one would let an entire fix be gated to desktop with the
+// suite staying green — found by mutation in review, twice, against both of the last commit's own
+// fixes. A laptop would have looked right and every phone would have carried the bug back.
+const rulesFor = (token, { desktop = false } = {}) => cssRules().filter((rule) =>
+  Boolean(rule.inMedia) === desktop &&
   rule.selector.split(',').map((one) => one.trim()).some((selector) =>
     selector === token || (selector.startsWith(token) && /^[\s.:[>+~]/.test(selector.slice(token.length)))))
 
@@ -2317,12 +2324,22 @@ test('the page has a stylesheet these tests can actually read', () => {
   assert.ok(styles.length > 500, 'no stylesheet was found, so every check below would pass on nothing')
 })
 
+/* The guard on the guard. If comment-stripping ever breaks, every check below quietly stops
+   meaning anything, and something has to say so in its own name rather than leaving the fallout
+   to be noticed elsewhere.
+
+   The first version of this asked whether `#task-form` — a name that appears only in a comment —
+   resolved to zero rules. Review proved it decorative: with stripping off, a comment and the
+   selector after it are read as one head, so the head starts with the comment and never with
+   `#task-form`, and the check passed either way. This asks the direct question instead — no
+   selector the parser hands back may contain comment syntax. */
+
 test('the stylesheet is read as rules, not as text that happens to contain a selector', () => {
-  // The guard on the guard. If comments ever leak back in, the sweep below silently stops
-  // meaning anything, and this is the only place that would say so.
-  assert.ok(/#task-form/.test(styles), 'the comment naming #task-form is gone - this check needs updating')
-  assert.equal(rulesFor('#task-form').length, 0,
-    'a rule is being found for #task-form, which is only mentioned in a comment - comment stripping has broken')
+  assert.ok(/#task-form/.test(styles),
+    'the comment naming #task-form is gone - this check needs updating')
+  const leaking = cssRules().filter((rule) => /\/\*|\*\//.test(rule.selector))
+  assert.deepEqual(leaking.map((rule) => rule.selector), [],
+    'a parsed selector contains comment syntax, so comments are leaking into the rules and every check below is reading prose')
 })
 
 test('every form the page draws is covered by the stylesheet', () => {
