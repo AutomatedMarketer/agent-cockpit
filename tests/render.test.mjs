@@ -2161,3 +2161,116 @@ test('a real runtime is still drawn with its state and its last heartbeat', () =
   assert.match(drawn, /heartbeat/)
   assert.ok(!drawn.includes('No machines listed'), 'a listed machine was reported as missing')
 })
+
+/* ---------- Add skill, and add an agent ---------------------------------------------------
+ *
+ * The last two of the five asks. Both are the same shape as "+ Add task": a sentence goes to
+ * /api/fire, a session writes the file, this page writes nothing.
+ *
+ * These render the screens rather than grepping the source, because the defect this project
+ * keeps hitting is a control that exists in the markup and cannot be reached on the screen.
+ */
+
+const agent = (over = {}) => ({
+  slug: 'research', description: 'Looks something up.', model: 'sonnet',
+  lastRun: null, lastStatus: null, runsThisWeek: 0, totalRuns: 0, state: 'never-run', ...over
+})
+
+const withSkills = (over = {}) => ({
+  ...base,
+  skills: [{ slug: 'draft-replies', path: '.claude/skills/draft-replies/SKILL.md', description: 'Drafts replies.', usedBy: [], stalled: [], stalledOwners: [] }],
+  ...over
+})
+
+test('the Skills screen offers a way to add one', () => {
+  const drawn = render(withSkills()).get('skills').innerHTML
+  assert.ok(drawn.includes('Add skill'), 'the Skills screen has no Add skill button')
+  assert.match(drawn, /id="skill-open"/, 'the Add skill button has no id to bind a handler to')
+  assert.match(drawn, /id="skill-form"/, 'there is no form behind the Add skill button')
+})
+
+test('the Team screen offers a way to add an agent', () => {
+  const drawn = render({ ...base, agents: [agent()], runs: [] }).get('team').innerHTML
+  assert.ok(drawn.includes('Add agent'), 'the Team screen has no Add agent button')
+  assert.match(drawn, /id="agent-open"/)
+  assert.match(drawn, /id="agent-form"/)
+})
+
+/* The empty state is the one that matters most and is the easiest to forget. Somebody with no
+   skills and no agents is exactly the person who wants to add one, and on the old screens the
+   empty state was a paragraph telling them to go and run a command somewhere else. Both empty
+   states replaced their whole innerHTML, so a button appended after the list would vanish. */
+
+test('the add buttons survive the empty state, where they are needed most', () => {
+  const skills = render({ ...base, skills: [] }).get('skills').innerHTML
+  assert.ok(skills.includes('Add skill'),
+    'a repo with no skills is exactly when somebody wants to add one, and the button is gone')
+  const team = render({ ...base, agents: [] }).get('team').innerHTML
+  assert.ok(team.includes('Add agent'),
+    'a repo with no agents is exactly when somebody wants to add one, and the button is gone')
+})
+
+/* Both forms promise something this board cannot see happen, so the wording is checked rather
+   than left to taste - the same rule the Start/Done buttons are held to. Two things have to be
+   said: it lands in about a minute, and it is written from a guess that the owner gets to read.
+   The whole design rests on the review card; a form that does not mention it is asking somebody
+   to trust an unattended session with nothing said out loud. */
+
+for (const [kind, noun] of [['skill', 'skill'], ['agent', 'agent']]) {
+  test(`the Add ${noun} form says when it lands and that it comes back to be checked`, () => {
+    const screen = kind === 'skill' ? 'skills' : 'team'
+    const payload = kind === 'skill' ? withSkills() : { ...base, agents: [agent()], runs: [] }
+    const drawn = render(payload).get(screen).innerHTML
+    const form = drawn.split(`id="${kind}-form"`)[1] ?? ''
+    assert.ok(form, `the ${kind} form did not render`)
+    assert.match(form, /minute/i, 'it never says roughly how long the change takes to land')
+    assert.ok(/check|review|guess/i.test(form),
+      'it never says the file is written from a guess that comes back for the owner to check')
+  })
+
+  test(`the Add ${noun} form does not promise it will be switched on`, () => {
+    const screen = kind === 'skill' ? 'skills' : 'team'
+    const payload = kind === 'skill' ? withSkills() : { ...base, agents: [agent()], runs: [] }
+    const form = (render(payload).get(screen).innerHTML.split(`id="${kind}-form"`)[1] ?? '')
+    // Without this the assertion below passes on an empty string, which is how a test for a
+    // control that does not exist yet reports green.
+    assert.ok(form, `the ${kind} form did not render`)
+    assert.doesNotMatch(form, /schedul|armed|starts running|runs every/i,
+      'nothing here is armed or scheduled, and a form that implies otherwise manufactures the one state this course exists to stop')
+  })
+}
+
+/* The placeholder is the single most-read piece of copy on a board, and the employee walkthrough
+   found that the Add-task one assumed the reader had customers. Half the people this is built for
+   have a job. Both new placeholders get the same rule. */
+
+test('neither placeholder assumes the reader owns a business', () => {
+  const skills = render(withSkills()).get('skills').innerHTML
+  const team = render({ ...base, agents: [agent()], runs: [] }).get('team').innerHTML
+  for (const [where, drawn] of [['skills', skills], ['team', team]]) {
+    for (const placeholder of [...drawn.matchAll(/placeholder="([^"]*)"/g)].map((m) => m[1])) {
+      assert.doesNotMatch(placeholder, /\bclients?\b|\bcustomers?\b|\brevenue\b|\bsales\b/i,
+        `the ${where} placeholder assumes the reader has customers: "${placeholder}"`)
+    }
+  }
+})
+
+/* The first version of this grepped the source for `action: 'skill'` - a literal the code never
+   contains, because one submit path posts `action: kind` for both. The test was wrong and the
+   code was right, which is its own warning: a source grep tests the spelling of an implementation,
+   not what it does. This checks the two things that actually matter - that the kinds offered are
+   exactly the two the endpoint accepts, and that the kind is what gets posted as the action. */
+
+test('the two creations post their own action, not a task card', () => {
+  const declared = /const CREATE_FORMS = \{([\s\S]*?)\n\}/.exec(script)
+  assert.ok(declared, 'the page no longer declares which creations it offers')
+  const kinds = [...declared[1].matchAll(/^  ([a-z]+): \{/gm)].map((m) => m[1])
+  assert.deepEqual(kinds, ['skill', 'agent'],
+    'the page offers creations the fire endpoint does not accept, or has lost one it does')
+  const submit = script.split('async function submitCreation')[1] ?? ''
+  assert.ok(submit, 'there is no submitCreation on the page')
+  assert.match(submit, /action: kind/,
+    'the form posts something other than the kind as its action, so Add skill and Add agent cannot both be right')
+  assert.doesNotMatch(submit.split('async function')[0], /action: 'task'/,
+    'a creation is being smuggled through as a task card, which skips /new-skill and /new-agent entirely')
+})

@@ -712,6 +712,113 @@ function addTaskHtml() {
   </div>`
 }
 
+// The "+ Add skill" and "+ Add agent" forms. One function, because from a phone a skill and an
+// agent are described exactly the same way: one sentence. What differs is the word on the button,
+// the example, and the action the sentence is posted under.
+//
+// It sits at the TOP of its screen and renders in the empty state too. Somebody with no skills is
+// the person most likely to want one, and both empty states replace their whole innerHTML — a
+// button appended after the list would simply not exist on the screen that needs it most.
+//
+// The copy carries two facts this page cannot show happening. It lands in about a minute, same as
+// every other dispatch here. And the file is written from a guess: nobody is in front of the
+// session that writes it, so it works the answers out from the sentence and leaves a card in the
+// To-do column listing what it filled in. That card is the whole safety net, so the form says so
+// rather than leaving somebody to discover it.
+//
+// Nothing is armed or scheduled by this. Saying so is not padding — the most expensive state in
+// this whole course is a job that rings without anyone approving it, and a button that quietly
+// created one from a sentence would be the easiest way yet to manufacture it.
+//
+// The examples avoid clients, customers and revenue on purpose. Half the people this is built for
+// have a job, not a business, and the Add-task placeholder assuming otherwise is the single most
+// common defect the employee walkthrough found.
+const CREATE_FORMS = {
+  skill: {
+    button: '+ Add skill',
+    label: 'What should your team know how to do?',
+    example: 'e.g. Turn my meeting notes into a short summary I can send on'
+  },
+  agent: {
+    button: '+ Add agent',
+    label: 'What should this specialist look after?',
+    example: 'e.g. Watches the sites I care about and tells me what changed'
+  }
+}
+
+function createFormHtml(kind) {
+  const form = CREATE_FORMS[kind]
+  return `<div class="add-task">
+    <button class="fire" type="button" id="${kind}-open">${form.button}</button>
+    <form id="${kind}-form" hidden>
+      <label for="${kind}-text">${form.label}</label>
+      <textarea id="${kind}-text" rows="3" maxlength="2200"
+        placeholder="${escapeHtml(form.example)}"></textarea>
+      <span class="small muted">Your team writes the file and commits it &mdash; about a minute.
+        Nobody is there to ask you questions, so it works the rest out from your sentence and
+        leaves a card in <b>To do</b> listing what it guessed, for you to check. Nothing is
+        switched on.</span>
+      <button class="fire" type="submit" id="${kind}-send">Ask for it</button>
+      <span class="fire-note" id="${kind}-note"></span>
+    </form>
+  </div>`
+}
+
+// One submit path for both, for the same reason there is one form: the only difference is the
+// action, and two near-identical copies of this is how the two drift apart.
+async function submitCreation(kind) {
+  const note = el(`${kind}-note`)
+  const send = el(`${kind}-send`)
+  note.className = 'fire-note'
+  note.textContent = ''
+  const parts = splitTaskText(el(`${kind}-text`).value)
+  if (!parts) {
+    note.className = 'fire-note bad'
+    note.textContent = `Say what the ${kind} should do first.`
+    return
+  }
+  const body = { action: kind, title: parts.title }
+  if (parts.details) body.details = parts.details
+  send.disabled = true
+  send.textContent = 'Sending…'
+  try {
+    const result = await postFire(body)
+    if (result.ok) {
+      note.className = 'fire-note ok'
+      // Says what was ASKED, like every other note on this board. The file is not there until the
+      // session commits it, and this page does not get to guess in between.
+      note.textContent =
+        `Asked for — your team writes it and commits in about a minute, then leaves you a card ` +
+        `saying what it guessed.`
+      el(`${kind}-text`).value = ''
+    } else {
+      note.className = 'fire-note bad'
+      note.textContent = result.payload.error || `Dispatch failed (${result.status}).`
+    }
+  } catch {
+    note.className = 'fire-note bad'
+    note.textContent = 'Could not reach the fire endpoint.'
+  }
+  send.disabled = false
+  send.textContent = 'Ask for it'
+}
+
+// Binding is separate from drawing because both screens re-render on every load, and a listener
+// attached to a node that has since been replaced is a button that silently does nothing.
+function bindCreateForm(kind, container) {
+  const open = container.querySelector(`#${kind}-open`)
+  const form = container.querySelector(`#${kind}-form`)
+  if (!open || !form) return
+  open.addEventListener('click', () => {
+    form.hidden = !form.hidden
+    if (!form.hidden) container.querySelector(`#${kind}-text`)?.focus()
+  })
+  form.addEventListener('submit', (event) => {
+    event.preventDefault()
+    submitCreation(kind)
+  })
+}
+
 function boardHtml(board) {
   // To do cards come from tasks/*.md in the team repo — read-only here. "+ Add task" and the
   // Start / Done buttons below both dispatch through /api/fire to the task-intake routine, whose
@@ -994,9 +1101,10 @@ function renderTeam() {
     // owner_type: business | job | both, and the walkthrough's employee persona is a bid
     // coordinator who does not price work, choose what to bid, or spend anything. It is the empty
     // state, so it is the FIRST sentence a brand-new student reads on this screen.
-    el('team').innerHTML = `<div class="panel empty"><b>You have no agents yet.</b>
+    el('team').innerHTML = `${createFormHtml('agent')}<div class="panel empty"><b>You have no agents yet.</b>
       <span class="small">Run <code>/onboard</code> in your team repo. It asks about your work
       and writes the first agents into <code>.claude/agents/</code>, and they appear here.</span></div>`
+    bindCreateForm('agent', el('team'))
     return
   }
   const cards = data.agents.map((agent) => {
@@ -1055,7 +1163,8 @@ function renderTeam() {
       <div class="agent-runs">${runRows || '<div class="empty">No runs logged yet.</div>'}</div>
     </details>`
   }).join('')
-  el('team').innerHTML = `<div class="panel">${cards}</div>`
+  el('team').innerHTML = `${createFormHtml('agent')}<div class="panel">${cards}</div>`
+  bindCreateForm('agent', el('team'))
 }
 
 /* ---------- Workflows ---------- */
@@ -2171,6 +2280,7 @@ function renderSkills() {
        <div class="panel">${list.map(skillRow).join('')}</div>`
     : ''
   el('skills').innerHTML = `
+    ${createFormHtml('skill')}
     <h2>Starter stack &middot; ${stack.length}</h2>
     ${stack.length ? `<div class="panel">${stackCards}</div>` : '<div class="panel empty">No <code>stack.yml</code> in this repo yet. Run <code>/install-stack</code> and it appears here.</div>'}
     <h2>This team's skills &middot; ${skills.length}</h2>
@@ -2186,6 +2296,7 @@ function renderSkills() {
       <span class="small">Skills are the single tasks your jobs are built from. Run <code>/onboard</code>
       to get the starter set, or ask your team for one in plain words &mdash; you never write the file
       yourself.</span></div>`}`
+  bindCreateForm('skill', el('skills'))
   el('skills').querySelectorAll('[data-open]').forEach((link) =>
     link.addEventListener('click', (event) => { event.preventDefault(); openFile(link.dataset.open) }))
 }
