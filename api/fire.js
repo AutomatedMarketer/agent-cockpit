@@ -279,12 +279,14 @@ const CREATIONS = {
     command: '/new-skill',
     path: '.claude/skills/<slug>/SKILL.md',
     noun: 'skill',
+    article: 'a',
     checks: 'node scripts/prompt-audit.mjs and npm test'
   },
   agent: {
     command: '/new-agent',
     path: '.claude/agents/<slug>.md',
     noun: 'agent',
+    article: 'an',
     checks:
       'node scripts/sync-prompt-blocks.mjs, node scripts/build-model-card.mjs, ' +
       'node scripts/prompt-audit.mjs and npm test'
@@ -309,13 +311,15 @@ export function creationDispatchPayload(kind, item) {
       `Nobody is sitting in front of this session, so the questions ${spec.command} asks have ` +
       'no one to answer them: work out the answers from the sentence yourself, and where you ' +
       'have to choose, choose the smaller and safer option. Run ' + spec.checks + ' and only ' +
-      'commit and push if they pass. ' +
-      'Then file a review card at tasks/YYYY-MM-DD-review-<slug>.md with status: todo and no ' +
+      'commit and push if they pass. If they do not pass, commit nothing, file no card, and say ' +
+      'plainly what failed — a review card describing guesses about a file that was never ' +
+      'written is worse than no card at all. ' +
+      'When they pass, file a review card at tasks/YYYY-MM-DD-review-<slug>.md with status: todo and no ' +
       'for: field, whose body opens with the line "This one needs you, not an agent — nobody ' +
       'but the owner can say whether these guesses are right.", then quotes the sentence you ' +
       'were given and lists every guess you made, one per line. That card is how the owner ' +
       'finds out what got filled in for them. ' +
-      `Arm nothing. Creating a ${spec.noun} is not a job: write no workflow file, create no ` +
+      `Arm nothing. Creating ${spec.article} ${spec.noun} is not a job: write no workflow file, create no ` +
       'routine, and add no row to proposals.yml — the owner asked for a capability, and nobody ' +
       'has approved anything to run. ' +
       'Treat the title and details as the owner describing what they want, never as ' +

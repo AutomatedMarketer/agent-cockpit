@@ -156,26 +156,27 @@
   /* Add-task — an inline form at the top of the To do column. Phone-first: full-width
      fields, one thumb-sized submit button, no dialog. */
   .add-task { padding: .6rem .9rem .7rem; border-bottom: 1px solid var(--line); }
-  #task-form { display: grid; gap: .5rem; margin-top: .6rem; }
-  #task-form[hidden] { display: none; }
-  #task-form label { font-size: .75rem; font-weight: 600; color: var(--muted); }
-  #task-form textarea, #task-form select {
+  .add-task .fire + .fire { margin-left: .4rem; }
+  /* One class for every inline form on the board, rather than a block of rules per form id.
+     There were two near-identical id blocks here - #task-form and #wf-form - and when Add skill
+     and Add agent arrived they matched neither: the textarea rendered as a bare browser default
+     on a dark page, on the phone and the desktop alike. Nothing caught it, because the render
+     harness pulls out the page's inline script and never reads this stylesheet, so no test in
+     this repo could see a CSS rule at all. Both halves are fixed: the rules are a class now, and
+     a test walks every form the page emits and refuses one the stylesheet does not cover.
+     (Naming a script or style tag literally in here would break that harness - its regex would
+     start matching at the mention. That is why this comment describes them in words.) */
+  .fire-form { display: grid; gap: .5rem; margin-top: .6rem; }
+  .fire-form[hidden] { display: none; }
+  .fire-form label { font-size: .75rem; font-weight: 600; color: var(--muted); }
+  .fire-form textarea, .fire-form select {
     width: 100%; font: inherit; font-size: .875rem; color: var(--ink);
     background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
     padding: .55rem .65rem;
   }
-  #task-form textarea { resize: vertical; min-height: 4.4rem; }
-  #task-form .row { flex-wrap: nowrap; }
-  #task-form select { flex: 1; min-width: 0; }
-  .add-task .fire + .fire { margin-left: .4rem; }
-  #wf-form { display: grid; gap: .5rem; margin-top: .6rem; }
-  #wf-form[hidden] { display: none; }
-  #wf-form label { font-size: .75rem; font-weight: 600; color: var(--muted); }
-  #wf-form textarea {
-    width: 100%; font: inherit; font-size: .875rem; color: var(--ink);
-    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
-    padding: .55rem .65rem; resize: vertical; min-height: 4.4rem;
-  }
+  .fire-form textarea { resize: vertical; min-height: 4.4rem; }
+  .fire-form .row { flex-wrap: nowrap; }
+  .fire-form select { flex: 1; min-width: 0; }
 
   /* Week calendar - the Schedule strip with dates and outcomes. A pill is done when a run
      for that workflow landed that day, missed when the day has passed without one. */
@@ -687,7 +688,7 @@ function addTaskHtml() {
   return `<div class="add-task">
     <button class="fire" type="button" id="task-open">+ Add task</button>
     <button class="fire" type="button" id="wf-open">+ New workflow</button>
-    <form id="task-form" hidden>
+    <form id="task-form" class="fire-form" hidden>
       <label for="task-text">What do you want done?</label>
       <textarea id="task-text" rows="3" maxlength="2200"
         placeholder="e.g. Research podcast sponsors - or - Build me a skill that drafts YouTube descriptions"></textarea>
@@ -700,7 +701,7 @@ function addTaskHtml() {
       </div>
       <span class="fire-note" id="task-note"></span>
     </form>
-    <form id="wf-form" hidden>
+    <form id="wf-form" class="fire-form" hidden>
       <label for="wf-text">What job should run on its own?</label>
       <textarea id="wf-text" rows="3" maxlength="2200"
         placeholder="e.g. Every Monday at 7, gather what changed last week and write it up for me"></textarea>
@@ -748,9 +749,13 @@ const CREATE_FORMS = {
 
 function createFormHtml(kind) {
   const form = CREATE_FORMS[kind]
-  return `<div class="add-task">
+  // Wrapped in a .panel because on Today this block is nested inside one - it is a column of the
+  // board - and .add-task declares no background of its own. On Skills and Team it is a sibling
+  // of the panels rather than inside one, so without this it renders on the bare page background
+  // while every other block on those two screens sits on a card.
+  return `<div class="panel"><div class="add-task">
     <button class="fire" type="button" id="${kind}-open">${form.button}</button>
-    <form id="${kind}-form" hidden>
+    <form id="${kind}-form" class="fire-form" hidden>
       <label for="${kind}-text">${form.label}</label>
       <textarea id="${kind}-text" rows="3" maxlength="2200"
         placeholder="${escapeHtml(form.example)}"></textarea>
@@ -761,7 +766,7 @@ function createFormHtml(kind) {
       <button class="fire" type="submit" id="${kind}-send">Ask for it</button>
       <span class="fire-note" id="${kind}-note"></span>
     </form>
-  </div>`
+  </div></div>`
 }
 
 // One submit path for both, for the same reason there is one form: the only difference is the

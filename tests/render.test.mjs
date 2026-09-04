@@ -2274,3 +2274,94 @@ test('the two creations post their own action, not a task card', () => {
   assert.doesNotMatch(submit.split('async function')[0], /action: 'task'/,
     'a creation is being smuggled through as a task card, which skips /new-skill and /new-agent entirely')
 })
+
+/* ---------- the stylesheet, which nothing here could see ---------------------------------
+ *
+ * Add skill and Add agent shipped with NO matching CSS. Every rule styling an inline form was
+ * written against the literal id `#task-form`, the new forms are `#skill-form` and
+ * `#agent-form`, and the textarea rendered as a bare browser default on a dark page - on the
+ * phone and the desktop alike. A reject-reviewer found it by reading, because no test could:
+ * the render harness above pulls out the page's inline script and never reads the stylesheet.
+ *
+ * That blind spot is the actual defect. A form the page draws and the stylesheet has never
+ * heard of is a whole class of bug, and it is checkable without a browser.
+ */
+
+const styles = /<style>([\s\S]*?)<\/style>/.exec(html)?.[1] ?? ''
+
+test('the page has a stylesheet these tests can actually read', () => {
+  assert.ok(styles.length > 500, 'no stylesheet was found, so every check below would pass on nothing')
+})
+
+test('every form the page draws is covered by the stylesheet', () => {
+  // Every `id="…-form"` the script emits, including the one built from a template placeholder.
+  const ids = new Set()
+  for (const found of script.matchAll(/<form id="([a-z-]*)\$\{kind\}-form"/g)) {
+    for (const kind of Object.keys({ skill: 1, agent: 1 })) ids.add(`${found[1]}${kind}-form`)
+  }
+  for (const found of script.matchAll(/<form id="([a-z-]+)"/g)) ids.add(found[1])
+
+  assert.ok(ids.size >= 4, `only found ${ids.size} forms on the page - the sweep is not finding them`)
+  for (const id of ids) {
+    const byId = styles.includes(`#${id}`)
+    // Or by a class the form carries, which is how they are all styled now.
+    const classes = [...script.matchAll(new RegExp(`<form id="[^"]*${id.replace(/^(skill|agent)/, '\\\\$\\\\{kind\\\\}')}"[^>]*class="([^"]+)"`, 'g'))]
+    const byClass = script.includes(`id="${id}" class="fire-form"`) ||
+      /<form id="\$\{kind\}-form" class="fire-form"/.test(script)
+    assert.ok(byId || byClass || classes.length,
+      `the ${id} form is drawn by the page and the stylesheet does not mention it - it will render as a browser default on a dark page`)
+  }
+})
+
+test('the shared form class is the one the stylesheet actually styles', () => {
+  for (const rule of ['.fire-form textarea', '.fire-form label', '.fire-form[hidden]']) {
+    assert.ok(styles.includes(rule), `the stylesheet lost ${rule}, which every inline form depends on`)
+  }
+  // Every form is styled by SOMETHING: either a rule of its own, like the unlock form, or the
+  // shared class. A form styled by neither is the defect this whole block exists for.
+  const forms = [...html.matchAll(/<form id="([^"]+)"([^>]*)>/g)]
+  assert.ok(forms.length >= 4, `the form sweep found ${forms.length} forms - it is not finding them`)
+  for (const [, id, attributes] of forms) {
+    const own = styles.includes(`#${id.replace('${kind}', 'skill')}`) || styles.includes(`#${id}`)
+    assert.ok(own || /class="fire-form"/.test(attributes),
+      `the ${id} form has no rule of its own and does not carry the shared class - nothing styles it`)
+  }
+})
+
+/* The new forms sit on Skills and Team as siblings of the panels rather than inside one, and
+   `.add-task` declares no background of its own - on Today it inherits the board column's card.
+   Without a wrapper they float on the bare page background while everything around them sits on
+   a card. Checked on the rendered screen, not the source. */
+
+test('the add forms render inside a panel on the two screens that have no column to sit in', () => {
+  for (const [screen, payload] of [
+    ['skills', { ...base, skills: [] }],
+    ['team', { ...base, agents: [] }]
+  ]) {
+    const drawn = render(payload).get(screen).innerHTML
+    const opening = drawn.slice(0, drawn.indexOf('add-task'))
+    assert.match(opening, /class="panel"/,
+      `the add form on ${screen} is not inside a panel, so it renders on the bare page background`)
+  }
+})
+
+/* Design rule two - nothing is armed or scheduled by a tap - is the most load-bearing rule in
+   this feature, and its one piece of user-facing copy could be deleted with the suite staying
+   green: the test beside this one only refuses forbidden words, it never required the promise to
+   be made. Found by mutation, in review. */
+
+test('both add forms say plainly that nothing gets switched on', () => {
+  for (const [kind, screen, payload] of [
+    ['skill', 'skills', { ...base, skills: [] }],
+    ['agent', 'team', { ...base, agents: [] }]
+  ]) {
+    const drawn = render(payload).get(screen).innerHTML.split(`id="${kind}-form"`)[1] ?? ''
+    assert.ok(drawn, `the ${kind} form did not render`)
+    // Collapsed first: this copy wraps onto a second line in the source, and a check that reads
+    // one line at a time is blind to half of what it claims to watch - the exact hole the voice
+    // pass found in its own instruments.
+    const form = drawn.replace(/\s+/g, ' ')
+    assert.match(form, /[Nn]othing is switched on|[Nn]othing is armed/,
+      `the ${kind} form never promises that nothing gets switched on, which is the one reassurance this whole design rests on`)
+  }
+})

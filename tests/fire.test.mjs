@@ -861,3 +861,27 @@ test('an unknown creation kind produces nothing rather than a guess', () => {
   assert.throws(() => creationDispatchPayload('workflow', { title: 'A thing' }),
     'an unrecognised kind must not fall through to one of the two real ones')
 })
+
+/* Review found this by comparing the three payload builders side by side. `armDispatchPayload`
+   says "if the confirm fails, leave the file alone and say so"; `moveDispatchPayload` says "if
+   the file does not exist, change nothing and say so". This one said "only commit and push if
+   they pass" and then "Then file a review card" - with the card not conditioned on the commit.
+   A session whose checks failed had no instruction covering it, and the reading closest to the
+   words is: commit nothing, then file a card describing guesses about a file nobody wrote. */
+
+for (const kind of ['skill', 'agent']) {
+  test(`the ${kind} instruction says what to do when the checks fail`, () => {
+    const { instruction } = creationDispatchPayload(kind, { title: 'A thing' })
+    assert.ok(/if they do not pass|if the checks fail|if they fail/i.test(instruction),
+      'there is no failure branch, so a session whose checks failed is left to invent one')
+    const failure = /[^.]*(?:if they do not pass|if the checks fail|if they fail)[^.]*\./i.exec(instruction)[0]
+    assert.ok(/file no card|no review card|do not file/i.test(failure),
+      'the failure branch never says to withhold the review card, so it can describe a file that was never written')
+  })
+
+  test(`the ${kind} instruction reads as English, article and all`, () => {
+    const { instruction } = creationDispatchPayload(kind, { title: 'A thing' })
+    assert.doesNotMatch(instruction, /\ba (?=[aeiou])/i,
+      'an interpolated noun left "a agent" in the text a session reads')
+  })
+}
