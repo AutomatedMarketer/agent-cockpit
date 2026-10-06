@@ -11,6 +11,7 @@ import {
   slotKind,
   PICTURE_BUDGET,
   sniffImage,
+  imageSize,
   cleanName,
   cleanStyle,
   cleanDescription,
@@ -75,6 +76,55 @@ test('webp, jpeg and png are recognised by their bytes', () => {
   assert.equal(sniffImage(jpeg), 'image/jpeg')
   assert.equal(sniffImage(png), 'image/png')
   assert.equal(sniffImage(new Uint8Array(png)), 'image/png', 'a plain Uint8Array is bytes too')
+})
+
+test('a picture\'s width and height are read from its header, for all three formats', () => {
+  // From the security review: a 10 KB webp can declare 16383 x 16383 pixels - about a gigabyte
+  // once decoded - and the board stored it for every viewer's browser to open. The size is in
+  // the first few dozen bytes of each format, so it is read there, before anything is stored.
+  const le16 = (value) => [value & 0xff, value >> 8]
+  const le24 = (value) => [value & 0xff, (value >> 8) & 0xff, value >> 16]
+  const be16 = (value) => [value >> 8, value & 0xff]
+  const be32 = (value) => [value >>> 24, (value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff]
+  const riff = (chunk, data) => bytes('RIFF', [26, 0, 0, 0], 'WEBP', chunk, [10, 0, 0, 0], data)
+  const vp8l = (width, height) => {
+    const bits = (width - 1) | ((height - 1) << 14)
+    return riff('VP8L', [0x2f, bits & 0xff, (bits >> 8) & 0xff, (bits >> 16) & 0xff, (bits >>> 24) & 0xff])
+  }
+  assert.deepEqual(imageSize(riff('VP8 ', [0x10, 0x02, 0x00, 0x9d, 0x01, 0x2a, ...le16(1600), ...le16(686)])), { width: 1600, height: 686 })
+  assert.deepEqual(imageSize(vp8l(480, 480)), { width: 480, height: 480 })
+  assert.deepEqual(imageSize(vp8l(16383, 16383)), { width: 16383, height: 16383 })
+  assert.deepEqual(imageSize(riff('VP8X', [0x10, 0, 0, 0, ...le24(4999), ...le24(299)])), { width: 5000, height: 300 })
+  assert.deepEqual(imageSize(bytes(PNG_SIGNATURE, [0, 0, 0, 13], 'IHDR', be32(100000), be32(1), [8, 6, 0, 0, 0])), { width: 100000, height: 1 })
+  // A JPEG keeps its size in a start-of-frame marker, after any number of other segments.
+  const segment = (marker, body) => [0xff, marker, ...be16(body.length + 2), ...body]
+  const sof = (marker, width, height) => segment(marker, [8, ...be16(height), ...be16(width), 3, 1, 0x22, 0])
+  const jfif = segment(0xe0, [0x4a, 0x46, 0x49, 0x46, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0])
+  const exif = segment(0xe1, new Array(3000).fill(7))
+  assert.deepEqual(imageSize(bytes([0xff, 0xd8], jfif, exif, sof(0xc0, 640, 480))), { width: 640, height: 480 })
+  assert.deepEqual(imageSize(bytes([0xff, 0xd8], jfif, sof(0xc2, 3000, 2000))), { width: 3000, height: 2000 }, 'a progressive JPEG')
+  assert.deepEqual(imageSize(bytes([0xff, 0xd8], jfif, [0xff, 0xff], sof(0xc1, 64, 32))), { width: 64, height: 32 }, 'fill bytes before a marker')
+})
+
+test('a header whose size cannot be read gives no size, and reading it never runs off the end', () => {
+  const unreadable = [
+    bytes('RIFF', [26, 0, 0, 0], 'WEBP', 'VP8 ', [10, 0, 0, 0], [0x10, 0x02, 0x00, 0x00, 0x00, 0x00, 1, 0, 1, 0]), // no start code
+    bytes('RIFF', [26, 0, 0, 0], 'WEBP', 'VP8 ', [10, 0, 0, 0], [0x10, 0x02]), // cut short
+    bytes('RIFF', [26, 0, 0, 0], 'WEBP', 'VP8L', [10, 0, 0, 0], [0x00, 1, 2, 3, 4]), // no VP8L signature
+    bytes('RIFF', [26, 0, 0, 0], 'WEBP', 'VP8X', [10, 0, 0, 0], [0, 0, 0]), // cut short
+    bytes(PNG_SIGNATURE, [0, 0, 0, 13], 'IHDR', [0, 0, 1]), // cut short
+    bytes(PNG_SIGNATURE, [0, 0, 0, 13], 'IHDR', [0, 0, 0, 0, 0, 0, 0, 5]), // zero wide
+    bytes([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10], 'JFIF'), // a segment longer than the file
+    bytes([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x01, 0, 0]), // a segment length under 2
+    bytes([0xff, 0xd8, 0xff, 0xda, 0x00, 0x04, 0, 0, 0xff, 0xc0]), // the picture data begins before any size
+    bytes([0xff, 0xd8, 0x00, 0x00, 0xff, 0xc0]), // not a marker where one must be
+    bytes([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 8, 0, 1]), // a frame header cut short
+    bytes([0xff, 0xd8, ...new Array(5000).fill(0xff)]), // nothing but fill
+    Buffer.from('<svg/>'),
+    Buffer.alloc(0)
+  ]
+  for (const data of unreadable) assert.equal(imageSize(data), null, data.subarray(0, 24).toString('hex'))
+  assert.equal(imageSize('not bytes'), null)
 })
 
 test('anything that is not one of those three is refused, whatever it calls itself', () => {

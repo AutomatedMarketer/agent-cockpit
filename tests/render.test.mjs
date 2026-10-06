@@ -4183,6 +4183,22 @@ test('a photo is opened the right way up, and one the quick way cannot open is t
   assert.equal(neither.objectUrls.revoked.length, 1, 'a file that would not open kept its address')
 })
 
+test('a picture that opens bigger than 12000 pixels on a side is refused before any canvas is made', async () => {
+  // A canvas that size is gigabytes; a phone tab dies drawing it. Refused with a sentence, and the
+  // decoded picture let go of at once.
+  const canvases = []
+  let closed = 0
+  for (const [width, height] of [[16383, 16383], [12001, 10], [10, 12001]]) {
+    const { shrinkPicture } = pipeline({
+      createImageBitmap: async () => ({ width, height, close() { closed += 1 } }),
+      create: (tag) => (tag === 'canvas' ? (canvases.push(tag), { getContext: () => ({ drawImage() {} }), toBlob: (done, type) => done({ type, size: 1 }) }) : undefined)
+    })
+    await assert.rejects(shrinkPicture({ type: 'image/webp' }, 'portrait'), (error) => /too big/.test(error.message) && /\.$/.test(error.message))
+  }
+  assert.equal(canvases.length, 0, 'a canvas was made for a picture too big to draw')
+  assert.equal(closed, 3, 'a decoded picture too big to draw was kept in memory')
+})
+
 test('a chosen picture is drawn from its centre crop at the size it is sent at, and what was opened is closed', async () => {
   const drawn = []
   const canvases = []

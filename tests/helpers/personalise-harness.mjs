@@ -12,13 +12,27 @@ export const VIEW_KEY = 'a-long-enough-view-key'
 export const STORE_ENV = { VIEW_KEY, BLOB_STORE_ID: 'store_fake' }
 export const NOON = () => new Date('2026-10-06T12:00:00Z')
 
-// A minimal valid header for each format sniffImage accepts, padded to `size` bytes.
+// A minimal valid header for each format the board accepts - type AND pixel size, which is what
+// imageSize reads - padded to `size` bytes. Every one is `side` pixels square (480 unless asked).
 const pad = (head, size) => Buffer.concat([head, Buffer.alloc(Math.max(0, size - head.length))])
-export const webp = (size = 64) =>
-  pad(Buffer.concat([Buffer.from('RIFF'), Buffer.from([26, 0, 0, 0]), Buffer.from('WEBPVP8 ')]), size)
-export const png = (size = 64) =>
-  pad(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from([0, 0, 0, 13]), Buffer.from('IHDR')]), size)
-export const jpeg = (size = 64) => pad(Buffer.from([0xff, 0xd8, 0xff, 0xe0]), size)
+const le16 = (value) => Buffer.from([value & 0xff, (value >> 8) & 0xff])
+const be16 = (value) => Buffer.from([(value >> 8) & 0xff, value & 0xff])
+const be32 = (value) => Buffer.from([(value >>> 24) & 0xff, (value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff])
+export const webp = (size = 64, side = 480) =>
+  pad(Buffer.concat([
+    Buffer.from('RIFF'), Buffer.from([26, 0, 0, 0]), Buffer.from('WEBPVP8 '), Buffer.from([10, 0, 0, 0]),
+    Buffer.from([0x10, 0x02, 0x00, 0x9d, 0x01, 0x2a]), le16(side), le16(side)
+  ]), size)
+export const png = (size = 64, side = 480) =>
+  pad(Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from([0, 0, 0, 13]), Buffer.from('IHDR'),
+    be32(side), be32(side), Buffer.from([8, 6, 0, 0, 0])
+  ]), size)
+export const jpeg = (size = 64, side = 480) =>
+  pad(Buffer.concat([
+    Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]), Buffer.from('JFIF\0'), Buffer.from([1, 1, 0, 0, 1, 0, 1, 0, 0]),
+    Buffer.from([0xff, 0xc0, 0x00, 0x11, 0x08]), be16(side), be16(side), Buffer.from([3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1])
+  ]), size)
 
 export function connectedStore(env = STORE_ENV, fakeOptions = {}) {
   const fake = fakeBlob(fakeOptions)

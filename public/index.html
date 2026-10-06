@@ -3544,6 +3544,10 @@ const PICTURE_SIZE = {
 }
 const QUALITY_STEPS = [0.85, 0.75, 0.65, 0.55, 0.45, 0.35]
 const PICTURE_UNREADABLE = 'This picture could not be opened here. Save it as a JPEG or PNG and choose it again.'
+// A canvas this big is gigabytes, and a phone's tab dies drawing it. Nothing a camera makes comes
+// near it; a file built to be enormous once opened does.
+const PICTURE_MAX_SIDE = 12000
+const PICTURE_TOO_BIG_TO_DRAW = 'This picture is too big to open here, so choose a smaller one.'
 const PICTURE_UNWRITABLE = 'This browser could not make a small copy of the picture. Try it again in Chrome, Edge or Safari.'
 const pictureTooBig = (kind) =>
   `This picture would not shrink under ${PICTURE_BUDGET[kind] / 1024} KB, even small and soft, so it was not sent. ` +
@@ -3632,6 +3636,7 @@ async function shrinkPicture(file, kind) {
     const width = source.naturalWidth || source.width
     const height = source.naturalHeight || source.height
     if (!width || !height) throw new Error(PICTURE_UNREADABLE)
+    if (width > PICTURE_MAX_SIDE || height > PICTURE_MAX_SIDE) throw new Error(PICTURE_TOO_BIG_TO_DRAW)
     const box = cropBox(width, height, PICTURE_SIZE[kind].aspect)
     return await encodeUnderCap((targetWidth, targetHeight) => {
       const canvas = document.createElement('canvas')

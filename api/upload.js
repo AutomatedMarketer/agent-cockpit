@@ -4,8 +4,8 @@
 // be made) and sends the raw bytes as application/octet-stream. Nothing here trusts that: the
 // order of checks below is the contract, and each one refuses before anything is written.
 //
-//   write gate -> a store is connected -> the slot -> real picture bytes -> under the size
-//   budget -> count the change AND point settings.json at the new version, in one save ->
+//   write gate -> a store is connected -> the slot -> real picture bytes, with a readable size
+//   of at most 2048 pixels a side -> under the size budget -> count the change AND point settings.json at the new version, in one save ->
 //   store the picture -> remove the picture it replaced (best effort)
 //
 // Counting comes first, in the same save as the pointer, because that save is the only place the
@@ -22,7 +22,7 @@
 // cached copy of it can never be the wrong picture.
 
 import { randomBytes } from 'node:crypto'
-import { writeGate, parseSlot, slotKind, PICTURE_BUDGET, sniffImage } from './lib.js'
+import { writeGate, parseSlot, slotKind, PICTURE_BUDGET, sniffImage, imageSize } from './lib.js'
 import {
   pictureStore,
   NOT_CONNECTED,
@@ -38,6 +38,11 @@ import {
 export const newVersion = () => randomBytes(8).toString('hex')
 
 const NOT_A_PICTURE = 'That is not a picture this board accepts: send a webp, JPEG or PNG.'
+
+// The board's own pictures are at most 1600 pixels wide (a banner), so 2048 is room to spare. A
+// picture can be a few KB as a file and gigabytes once decoded, and every viewer's browser
+// decodes what is kept here.
+export const MAX_PICTURE_SIDE = 2048
 
 // The body as bytes, read no further than one byte past the limit - enough to know it is too
 // big, without holding all of something that is. Vercel hands an octet-stream body over as a
@@ -109,8 +114,15 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, versi
     const budget = PICTURE_BUDGET[kind]
     const bytes = await readBytes(request, budget)
     const type = sniffImage(bytes)
-    if (!type) {
+    const size = imageSize(bytes)
+    if (!type || !size) {
       response.status(415).json({ error: NOT_A_PICTURE })
+      return
+    }
+    if (size.width > MAX_PICTURE_SIDE || size.height > MAX_PICTURE_SIDE) {
+      response.status(413).json({
+        error: `That picture is ${size.width} by ${size.height} pixels, and the board keeps nothing over ${MAX_PICTURE_SIDE} on a side, so shrink it and try again.`
+      })
       return
     }
     if (bytes.length > budget) {

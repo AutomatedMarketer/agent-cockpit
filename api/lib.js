@@ -173,6 +173,77 @@ export function sniffImage(data) {
   return null
 }
 
+// How many pixels a picture says it is, from its header: { width, height }, or null when the
+// header does not say plainly. A picture is small as a file and can still be enormous once a
+// browser decodes it - a 10 KB webp may declare 16383 x 16383, about a gigabyte of pixels - and
+// every viewer's browser decodes what the board keeps. Each format puts its size in its first few
+// dozen bytes (a JPEG after any number of segments), and every read below is bounds-checked: a
+// header that is cut short, contradicts itself or runs off the end is null, never a guess.
+const MAX_JPEG_SEGMENTS = 64
+
+const be16 = (data, at) => (data[at] << 8) | data[at + 1]
+const le16 = (data, at) => data[at] | (data[at + 1] << 8)
+const le24 = (data, at) => data[at] | (data[at + 1] << 8) | (data[at + 2] << 16)
+const be32 = (data, at) => ((data[at] << 24) >>> 0) + ((data[at + 1] << 16) | (data[at + 2] << 8) | data[at + 3])
+const sized = (width, height) => (width > 0 && height > 0 ? { width, height } : null)
+
+function webpSize(data) {
+  const at = 20 // where the first chunk's own data begins
+  const chunk = String.fromCharCode(...data.subarray(12, 16))
+  if (chunk === 'VP8 ') {
+    // A key frame: 3 bytes of frame tag, the start code 9d 01 2a, then 14-bit width and height.
+    if (data.length < at + 10 || data[at + 3] !== 0x9d || data[at + 4] !== 0x01 || data[at + 5] !== 0x2a) return null
+    return sized(le16(data, at + 6) & 0x3fff, le16(data, at + 8) & 0x3fff)
+  }
+  if (chunk === 'VP8L') {
+    // The signature byte 2f, then width - 1 and height - 1 in 14 bits each.
+    if (data.length < at + 5 || data[at] !== 0x2f) return null
+    const bits = data[at + 1] | (data[at + 2] << 8) | (data[at + 3] << 16) | (data[at + 4] << 24)
+    return sized((bits & 0x3fff) + 1, ((bits >>> 14) & 0x3fff) + 1)
+  }
+  if (chunk === 'VP8X') {
+    // Flags and 3 reserved bytes, then the canvas: width - 1 and height - 1 in 24 bits each.
+    if (data.length < at + 10) return null
+    return sized(le24(data, at + 4) + 1, le24(data, at + 7) + 1)
+  }
+  return null
+}
+
+// Start-of-frame markers carry the size: C0 to CF, except C4 (Huffman tables), C8 (reserved) and
+// CC (arithmetic coding), which share the range.
+const isStartOfFrame = (marker) => marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)
+
+function jpegSize(data) {
+  let at = 2 // past FF D8
+  for (let segments = 0; segments < MAX_JPEG_SEGMENTS; segments += 1) {
+    if (data[at] !== 0xff) return null
+    while (at < data.length && data[at] === 0xff) at += 1 // fill bytes before a marker are allowed
+    if (at >= data.length) return null
+    const marker = data[at]
+    at += 1
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue // markers with no length
+    if (marker === 0xd9 || marker === 0xda) return null // the end, or the picture data, before any size
+    if (at + 2 > data.length) return null
+    const length = be16(data, at)
+    if (length < 2 || at + length > data.length) return null
+    if (isStartOfFrame(marker)) {
+      if (length < 7) return null
+      return sized(be16(data, at + 5), be16(data, at + 3))
+    }
+    at += length
+  }
+  return null
+}
+
+export function imageSize(data) {
+  switch (sniffImage(data)) {
+    case 'image/webp': return webpSize(data)
+    case 'image/png': return data.length >= 24 ? sized(be32(data, 16), be32(data, 20)) : null
+    case 'image/jpeg': return jpegSize(data)
+    default: return null
+  }
+}
+
 // C0 and C1 controls plus DEL, and the bidirectional overrides and isolates (U+202A-202E,
 // U+2066-2069). A name is printed next to other text; an override would keep reversing
 // whatever the page prints after it. Ordinary whitespace - tabs, newlines - is collapsed to a

@@ -135,6 +135,35 @@ test('with no store connected, an upload is refused with the sentence that says 
   assert.equal(response.body.error, NOT_CONNECTED)
 })
 
+test('a picture that declares more than 2048 pixels on a side is refused before the store is touched', async () => {
+  // From the security review (bomb.mjs): a 10 KB webp declaring 16383 x 16383 - about a gigabyte
+  // once a browser decodes it - was stored, for every viewer's browser to open. The board's own
+  // pictures are at most 1600 wide, so 2048 is room to spare; anything bigger, or a size that
+  // cannot be read, is not one of them.
+  const vp8l = (side) => {
+    const bits = (side - 1) | ((side - 1) << 14)
+    return Buffer.concat([Buffer.from('RIFF'), Buffer.from([26, 0, 0, 0]), Buffer.from('WEBPVP8L'), Buffer.from([10, 0, 0, 0]),
+      Buffer.from([0x2f, bits & 0xff, (bits >> 8) & 0xff, (bits >> 16) & 0xff, (bits >>> 24) & 0xff]), Buffer.alloc(10_000)])
+  }
+  for (const [what, body] of [
+    ['the review\'s 16383 x 16383 webp', vp8l(16383)],
+    ['a 2049 pixel webp', webp(2000, 2049)],
+    ['a 5000 pixel PNG', png(2000, 5000)],
+    ['a 3000 pixel JPEG', jpeg(2000, 3000)]
+  ]) {
+    const { upload, fake } = board()
+    const response = await upload('agent-content', body)
+    assert.equal(response.statusCode, 413, `${what} was not refused`)
+    assert.match(response.body.error, /2048/)
+    assert.equal(storeCalls(fake), 0, `${what} reached the store`)
+  }
+  const unreadable = Buffer.concat([Buffer.from('RIFF'), Buffer.from([26, 0, 0, 0]), Buffer.from('WEBPVP8 '), Buffer.alloc(40)])
+  const { upload, fake } = board()
+  assert.equal((await upload('team', unreadable)).statusCode, 415, 'a picture whose size cannot be read was kept')
+  assert.equal(storeCalls(fake), 0)
+  assert.equal((await upload('team', webp(2000, 2048))).statusCode, 200, 'a 2048 pixel picture was refused')
+})
+
 test('the stored type comes from the bytes, never from what the request says it is', async () => {
   // A PNG sent with every hint saying webp. The path, the stored content type and the pointer
   // must all say PNG: /api/art will re-check the bytes, but nothing should disagree with them.
