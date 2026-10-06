@@ -152,8 +152,15 @@ test('two first-ever saves at the same moment both survive', async () => {
   assert.equal(settings.names.content, 'Penny')
 })
 
-test('a save that keeps colliding gives up after three tries, with a sentence', async () => {
-  const { fake, store, elsewhere } = connected()
+test('a save that collides is tried once more after a random pause, then gives up with a sentence', async () => {
+  // From the second review: every try is a put, and a put refused by ifMatch still counts against
+  // the month's 2,000. Saves from different instances cannot take turns, so a burst from several
+  // devices at once collides - three tries each spent 136 puts on 20 counted uploads. Now a save
+  // waits 100 to 400 ms at random (so the instances drift apart) and tries once more, no further.
+  const fake = fakeBlob()
+  const pauses = []
+  const store = pictureStore(STORE, async () => fake.sdk, { pause: async (ms) => { pauses.push(ms) } })
+  const elsewhere = pictureStore(STORE, async () => fake.sdk)
   await store.saveSettings((settings) => settings)
   const before = fake.calls.put.length
   let counter = 0
@@ -174,7 +181,9 @@ test('a save that keeps colliding gives up after three tries, with a sentence', 
     }
   )
   const mine = fake.calls.put.slice(before).filter((call, index) => index % 2 === 1)
-  assert.equal(mine.length, 3, 'exactly three attempts of its own, not one more')
+  assert.equal(mine.length, 2, 'exactly two attempts of its own, not one more')
+  assert.equal(pauses.length, 1, 'the second try did not wait first')
+  assert.ok(pauses[0] >= 100 && pauses[0] <= 400, `a pause of ${pauses[0]} ms`)
 })
 
 test('saves take turns, but one that hangs holds the others up for ten seconds at most', async (t) => {

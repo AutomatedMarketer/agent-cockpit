@@ -154,6 +154,12 @@ the rest of the 2,000 for retries and for you looking at the store in Vercel:
 - The defaults, 20 changes and 10 pictures from words, are 50 a day
 - The Blob library retries a failed write up to 10 times on its own, and a retry can count. Set
   `VERCEL_BLOB_RETRIES=2` in Vercel to keep that small
+- **The budget does not cover changes from many devices at the same moment.** Vercel may run several
+  copies of the board at once, and two copies saving together collide: the loser tries once more after
+  a short random pause, and every attempt counts as a write. A burst costs at most
+  `2 × changes saved + (copies running − 1) × changes saved` writes; in a test of 200 uploads at once
+  over 10 copies, 20 were saved for 80 writes. One person using one screen never collides. Fixing
+  this fully would need a counter outside the picture store
 - **Showing the board reads the cached copy, which is free.** Each running copy of the board also
   remembers what it last read for 30 seconds, so a burst of page loads costs one read. A change made
   on one screen can take up to about a minute and a half to show on another (the screen that made it
@@ -263,7 +269,7 @@ Locally:
 npm test
 ```
 
-853 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+854 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

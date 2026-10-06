@@ -40,7 +40,12 @@ const MAX_NAMED_AGENTS = 64
 const MAX_PICTURES = MAX_NAMED_AGENTS + 2 // and the Today and Team banners
 // A banner's budget is 100 KB; a little headroom, and nothing like room for something else.
 const PICTURE_MAX_BYTES = 110 * 1024
-const SAVE_TRIES = 3
+// A save that collides (another instance saved between its read and its write) is tried once more,
+// after a random pause so instances colliding together drift apart - and no more than that. Every
+// try is a put, and a put that ifMatch refuses still counts against the month's 2,000.
+const SAVE_TRIES = 2
+const RETRY_PAUSE_MS = { least: 100, most: 400 }
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const YEAR_SECONDS = 365 * 24 * 60 * 60
 
 // A settings file the board cannot read is never read as the defaults: the next save would then
@@ -203,10 +208,16 @@ export function failureAnswer(error) {
 //
 //   2 x WRITE_DAILY_CAP + GENERATE_DAILY_CAP <= ADVANCED_OPS_PER_DAY = 55
 //
-// 55 a day is 1,705 in a 31-day month, which keeps 295 of the 2,000 for what no cap can see: a
-// save that collides with one from another instance, the SDK retrying a failed put (up to
-// VERCEL_BLOB_RETRIES times, 10 unless set), a slot pointed back after a failed upload, and the
-// owner browsing the store in Vercel's dashboard, which Vercel counts too. The defaults, 20 and
+// 55 a day is 1,705 in a 31-day month, which keeps 295 of the 2,000 for the SDK retrying a failed
+// put (up to VERCEL_BLOB_RETRIES times, 10 unless set), a slot pointed back after a failed upload,
+// and the owner browsing the store in Vercel's dashboard, which Vercel counts too.
+//
+// What the budget does NOT cover: saves from several instances at once. Saves from one instance
+// take turns (takeTurn, below), but two instances cannot, so a burst from several devices at the
+// same moment collides on ifMatch, and every collided put counts. Each save tries at most twice,
+// and each settings save that lands can make at most one save in flight on each other instance
+// collide, so a burst costs at most 2 x counted + (instances - 1) x counted puts. Only a counter
+// outside Blob that changes atomically would remove that; this board does not have one. The defaults, 20 and
 // 10, are 50 a day. Asked for more, the caps are clamped (dailyCaps, below), never trusted: so
 // raising a cap is never the advice, because past the budget it is the advice that locks the store.
 //
@@ -318,7 +329,8 @@ function takeTurn(key, work) {
 
 // Returns null when no store is connected - callers answer with NOT_CONNECTED. `loadSdk` is
 // injectable so the tests hand in an in-memory fake; in production it is the lazy import above.
-export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
+// `pause` and `random` are injectable so tests can keep the pause between a save's tries short.
+export function pictureStore(env = process.env, loadSdk = loadRealSdk, { pause = sleep, random = Math.random } = {}) {
   if (!storeConnected(env)) return null
 
   let loading = null
@@ -390,6 +402,7 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
 
   async function saveNow(mutate) {
     for (let tries = 1; tries <= SAVE_TRIES; tries += 1) {
+      if (tries > 1) await pause(RETRY_PAUSE_MS.least + random() * (RETRY_PAUSE_MS.most - RETRY_PAUSE_MS.least))
       const { settings, etag } = await readSettings({ fresh: true })
       const draft = structuredClone(settings)
       const next = normaliseSettings((await mutate(draft)) ?? draft)

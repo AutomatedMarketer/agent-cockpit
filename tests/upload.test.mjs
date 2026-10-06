@@ -252,6 +252,10 @@ function jittery(fake) {
   return sdk
 }
 
+// The pause between a save's two tries, a tenth of the real 100-400 ms: the fake store answers in
+// 0-3 ms where the real one takes tens, so this keeps the same proportion and the tests quick.
+const shortPause = (ms) => new Promise((resolve) => setTimeout(resolve, ms / 10))
+
 test('two hundred uploads at once store no more pictures than the day allows', async () => {
   // From the security review: the allowance used to be checked on a copy, then the picture
   // stored, then the change counted - so uploads arriving together all passed the check and
@@ -262,7 +266,7 @@ test('two hundred uploads at once store no more pictures than the day allows', a
   const fake = fakeBlob()
   const sdk = jittery(fake)
   const env = { ...STORE_ENV, WRITE_DAILY_CAP: '25' }
-  const handlers = Array.from({ length: 4 }, () => makeHandler({ store: pictureStore(env, async () => sdk), env, now: NOON }))
+  const handlers = Array.from({ length: 4 }, () => makeHandler({ store: pictureStore(env, async () => sdk, { pause: shortPause }), env, now: NOON }))
   const N = 200
   const results = await Promise.all(Array.from({ length: N }, (_, index) =>
     call(handlers[index % 4], { method: 'POST', headers: asTheBoard(BYTES), query: { slot: 'today' }, body: webp(2000) })))
@@ -273,9 +277,31 @@ test('two hundred uploads at once store no more pictures than the day allows', a
   assert.equal(pictures, stored, 'a picture was stored for an upload that was refused')
   assert.equal(settingsOf(fake).usage.writes, stored, 'what was counted is not what was stored')
   assert.ok(results.every((result) => [200, 409, 429].includes(result.statusCode)), 'an upload failed some other way')
-  // Each request may try its settings write three times when it collides; never more, and no
-  // picture on top of that unless it was counted.
-  assert.ok(fake.calls.put.length <= 3 * N + 25, `${fake.calls.put.length} writes for ${N} uploads`)
+  assert.ok(fake.calls.put.length <= (4 + 1) * stored, `${fake.calls.put.length} writes for ${stored} counted uploads`)
+})
+
+test('a burst of uploads from ten instances at once spends a bounded number of writes', async () => {
+  // From the second review (attack2, part B): uploads from many devices land on different
+  // instances, which cannot take turns, so their settings saves collide on ifMatch - and every
+  // collided put still counts. Each save now tries at most twice, with a random pause between.
+  //
+  // The bound this holds to, and the one the README states: every counted upload is two puts (its
+  // picture and its settings save), and each settings save that lands can make at most one save
+  // in flight on each OTHER instance collide - so at most 2 x counted + (instances - 1) x counted.
+  // Nothing smaller can be promised without a counter outside Blob that changes atomically.
+  const fake = fakeBlob()
+  const sdk = jittery(fake)
+  const instances = 10
+  const handlers = Array.from({ length: instances }, () =>
+    makeHandler({ store: pictureStore(STORE_ENV, async () => sdk, { pause: shortPause }), env: STORE_ENV, now: NOON }))
+  const results = await Promise.all(Array.from({ length: 200 }, (_, index) =>
+    call(handlers[index % instances], { method: 'POST', headers: asTheBoard(BYTES), query: { slot: 'today' }, body: webp(2000) })))
+  const counted = settingsOf(fake).usage.writes
+  assert.ok(counted >= 1 && counted <= 20)
+  assert.equal(picturePuts(fake).length, counted, 'a picture was stored uncounted')
+  assert.ok(results.every((result) => [200, 409, 429].includes(result.statusCode)), 'an upload failed some other way')
+  const bound = 2 * counted + (instances - 1) * counted
+  assert.ok(fake.calls.put.length <= bound, `${fake.calls.put.length} writes for ${counted} counted uploads (bound ${bound})`)
 })
 
 test('a burst of uploads to one instance spends no writes on settings saves that collide', async () => {
