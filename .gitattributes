@@ -1,1 +1,5 @@
 * text=auto eol=lf
+# Pictures and the font are bytes, not lines. Without these, eol=lf above is free to decide one
+# of them looks like text and rewrite it on commit - and a rewritten picture is a broken one.
+*.webp binary
+*.woff2 binary
