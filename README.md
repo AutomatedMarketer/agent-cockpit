@@ -128,6 +128,9 @@ why **Make it** is missing.
   resets). The counts start again at **midnight UTC**. You can lower them with `GENERATE_DAILY_CAP`
   and `WRITE_DAILY_CAP` (`0` switches that kind of change off). You can only raise them a little:
   they are held under the picture store's monthly limit, below
+- **Making a picture holds one of today's changes** for the upload that keeps it, so two **Make it**
+  at once with one change left cannot both pay OpenAI. The held change shows as used. If the picture
+  is never kept (the tab closed), the change is free again after 10 minutes
 - **What leaves the board:** only the description you typed and your art style, sent to OpenAI
 
 ### The picture store's free limit, and why the caps are where they are
@@ -269,7 +272,7 @@ Locally:
 npm test
 ```
 
-854 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+857 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

@@ -89,7 +89,7 @@ export function emptySettings() {
     artStyle: '',
     names: {},
     pictures: {},
-    usage: { day: '', writes: 0, generated: 0 }
+    usage: { day: '', writes: 0, generated: 0, pending: [] }
   }
 }
 
@@ -117,10 +117,16 @@ function normaliseSettings(raw) {
     }
   }
   if (plainObject(raw.usage)) {
+    const pending = Array.isArray(raw.usage.pending) ? raw.usage.pending : []
     settings.usage = {
       day: typeof raw.usage.day === 'string' ? raw.usage.day : '',
       writes: count(raw.usage.writes),
-      generated: count(raw.usage.generated)
+      generated: count(raw.usage.generated),
+      // At most one per picture from words a day can ever be held, so anything past that is not ours.
+      pending: pending
+        .filter((held) => plainObject(held) && parseSlot(held.slot) && typeof held.at === 'string' && !Number.isNaN(Date.parse(held.at)))
+        .slice(0, ADVANCED_OPS_PER_DAY)
+        .map((held) => ({ slot: held.slot, at: held.at }))
     }
   }
   return settings
@@ -262,23 +268,61 @@ export function dailyCaps(env = process.env) {
 
 export const usageDay = (date) => date.toISOString().slice(0, 10)
 
+// A picture from words HOLDS the change that will keep it. It is counted in the same save as the
+// picture (usage.pending: which slot, and when), so two Make it at once with one change left
+// cannot both pay OpenAI - the second finds no change free. The upload of that slot then uses
+// the held change; nothing else can spend it. A picture made and never kept (the tab closed, the
+// shrink failed) lets its change go after PENDING_MS - far longer than making and keeping one
+// takes - with no write needed to let it go: an old hold is simply not counted, and is dropped by
+// the next save. A new day starts with nothing held.
+const PENDING_MS = 10 * 60_000
+
+const NO_CHANGE_LEFT =
+  'No changes are left today to keep a new picture with, so nothing was made and nothing was ' +
+  'spent: try again tomorrow (the count starts again at midnight UTC).'
+
+// The holds still counting at `now` (all of them when no clock is given).
+const held = (usage, now) => (now ? usage.pending.filter((hold) => Date.parse(hold.at) > now.getTime() - PENDING_MS) : usage.pending)
+
 // The day only moves forward. A request whose clock still says yesterday can reach the store
 // after another has started today's count; its "day" is then behind the file's, and it is held to
-// the file's count rather than handed a fresh one. (ISO dates compare as strings.)
-export function allowanceLeft(settings, caps, day) {
-  const used = settings.usage.day >= day ? settings.usage : { writes: 0, generated: 0 }
+// the file's count rather than handed a fresh one. (ISO dates compare as strings.) A change held
+// by a picture from words is not left: it is spoken for.
+export function allowanceLeft(settings, caps, day, now = null) {
+  const today = settings.usage.day >= day
+  const used = today ? settings.usage : { writes: 0, generated: 0 }
+  const holding = today ? held(settings.usage, now).length : 0
   return {
-    writes: Math.max(0, caps.writes - used.writes),
+    writes: Math.max(0, caps.writes - used.writes - holding),
     generated: Math.max(0, caps.generated - used.generated)
   }
 }
 
 // Called inside a saveSettings change, so the count and the change land in the same write - or,
-// at the cap, the throw stops the write and nothing is saved at all.
-export function spendAllowance(settings, kind, caps, day) {
-  if (settings.usage.day < day) settings.usage = { day, writes: 0, generated: 0 }
-  if (settings.usage[kind] >= caps[kind]) throw new PictureStoreError(429, CAP_SENTENCES[kind])
-  settings.usage[kind] += 1
+// at the cap, the throw stops the write and nothing is saved at all. A change for `slot` uses the
+// change a picture from words is holding for that slot, if there is one; any other change must
+// leave every held change alone.
+export function spendAllowance(settings, kind, caps, day, { now = null, slot = null } = {}) {
+  if (settings.usage.day < day) settings.usage = { day, writes: 0, generated: 0, pending: [] }
+  const usage = settings.usage
+  usage.pending = held(usage, now)
+  if (kind === 'writes') {
+    const mine = slot ? usage.pending.findIndex((hold) => hold.slot === slot) : -1
+    const others = usage.pending.length - (mine >= 0 ? 1 : 0)
+    if (usage.writes + others >= caps.writes) throw new PictureStoreError(429, CAP_SENTENCES.writes)
+    if (mine >= 0) usage.pending.splice(mine, 1)
+    usage.writes += 1
+    return
+  }
+  if (usage[kind] >= caps[kind]) throw new PictureStoreError(429, CAP_SENTENCES[kind])
+  usage[kind] += 1
+}
+
+// A picture from words, counted, with the change that will keep it held for `slot`.
+export function spendOnPicture(settings, slot, caps, day, now) {
+  if (allowanceLeft(settings, caps, day, now).writes === 0) throw new PictureStoreError(429, NO_CHANGE_LEFT)
+  spendAllowance(settings, 'generated', caps, day, { now })
+  settings.usage.pending.push({ slot, at: now.toISOString() })
 }
 
 // Before a save, the same charge run on the CACHED copy (`charge` is the save's own counting, so

@@ -10,6 +10,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { makeHandler } from '../api/generate.js'
+import { makeHandler as makeUpload } from '../api/upload.js'
+import { makeHandler as makeBrand } from '../api/brand.js'
 import { NOT_CONNECTED } from '../api/_picture-store.js'
 import { DEFAULT_ART_STYLE } from '../api/lib.js'
 import {
@@ -214,7 +216,8 @@ test('making a picture does not spend the day\'s changes - only storing it does'
   const { generate, store } = board()
   await generate(PORTRAIT)
   const { settings } = await store.readSettings()
-  assert.deepEqual(settings.usage, { day: '2026-10-06', writes: 0, generated: 1 })
+  // The picture is counted, and the change that will keep it is held - not yet spent.
+  assert.deepEqual(settings.usage, { day: '2026-10-06', writes: 0, generated: 1, pending: [{ slot: 'agent-content', at: '2026-10-06T12:00:00.000Z' }] })
 })
 
 test('with no change left today to store it with, no picture is made and OpenAI is never paid', async (t) => {
@@ -233,6 +236,67 @@ test('with no change left today to store it with, no picture is made and OpenAI 
     assert.equal((await store.readSettings()).settings.usage.generated, 0, 'a picture nobody made was counted')
   }
   assert.equal(calls.length, 0, 'OpenAI was paid for a picture that could not be kept')
+})
+
+// A board with the day's changes used up to `used`, and the three endpoints a made picture goes
+// through, all on one store and one clock.
+async function dayWith(used, { clock = NOON } = {}) {
+  const { store, fake } = connectedStore(ENV)
+  await store.saveSettings((draft) => { draft.usage = { day: '2026-10-06', writes: used, generated: 0, pending: [] } })
+  const generate = makeHandler({ store, env: ENV, now: clock })
+  const upload = makeUpload({ store, env: ENV, now: clock })
+  const brand = makeBrand({ store, env: ENV, now: clock })
+  return {
+    store,
+    fake,
+    make: () => call(generate, { method: 'POST', headers: asTheBoard(JSON_TYPE), body: { slot: 'today', description: 'a harbour' } }),
+    keep: (bytes, slot = 'today') => call(upload, { method: 'POST', headers: asTheBoard({ 'content-type': 'application/octet-stream' }), query: { slot }, body: bytes }),
+    rename: (value) => call(brand, { method: 'POST', headers: asTheBoard(JSON_TYPE), body: { change: 'name', slug: 'content', value } }),
+    left: async () => (await call(brand, { method: 'GET', headers: asTheBoard() })).body.left
+  }
+}
+
+test('with one change left, two Make it at once pay OpenAI once, and the picture made is kept', async (t) => {
+  // From the second review (attack3, part D): both requests saw one change left and both paid
+  // OpenAI; only one picture could then be kept. A picture from words now holds the change that
+  // will keep it, in the same save that counts the picture, so the second finds none free.
+  const calls = stubOpenAI(t, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    return imageAnswer(webp(500))()
+  })
+  const day = await dayWith(19)
+  const made = await Promise.all([day.make(), day.make()])
+  assert.deepEqual(made.map((answer) => answer.statusCode).sort(), [200, 429])
+  assert.match(made.find((answer) => answer.statusCode === 429).body.error, /No changes are left today/)
+  assert.equal(calls.length, 1, 'OpenAI was paid for a picture there was no change left to keep')
+  const kept = await day.keep(made.find((answer) => answer.statusCode === 200).sent)
+  assert.equal(kept.statusCode, 200, 'the picture made could not be kept')
+})
+
+test('the change a made picture holds cannot be spent by anything else, and is shown as used', async (t) => {
+  stubOpenAI(t, imageAnswer(webp(500)))
+  const day = await dayWith(19)
+  const made = await day.make()
+  assert.equal(made.statusCode, 200)
+  assert.equal((await day.left()).writes, 0, 'the held change is offered on the page')
+  assert.equal((await day.rename('Penny')).statusCode, 429, 'a rename took the change the picture was holding')
+  assert.equal((await day.keep(webp(500), 'team')).statusCode, 429, 'an upload to another slot took it')
+  assert.equal((await day.keep(made.sent)).statusCode, 200, 'the picture itself could not use it')
+  assert.deepEqual((await day.store.readSettings({ fresh: true })).settings.usage.pending, [], 'the change stayed held after it was used')
+})
+
+test('a made picture that is never kept lets its change go after ten minutes', async (t) => {
+  // A picture can be made and then never stored: the tab closed, OpenAI's answer refused, the
+  // shrink failed. Its change is held for ten minutes - far longer than making and storing one
+  // takes - and then free again, with no extra write needed to let it go.
+  stubOpenAI(t, imageAnswer(webp(500)))
+  let clock = Date.parse('2026-10-06T12:00:00Z')
+  const day = await dayWith(19, { clock: () => new Date(clock) })
+  assert.equal((await day.make()).statusCode, 200)
+  clock += 9 * 60_000
+  assert.equal((await day.rename('Penny')).statusCode, 429)
+  clock += 2 * 60_000
+  assert.equal((await day.rename('Penny')).statusCode, 200, 'a change was held for good by a picture nobody kept')
 })
 
 /* ---------- whatever OpenAI answers ---------- */

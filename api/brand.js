@@ -44,7 +44,7 @@ const CHANGES = 'change must be "name", "assistant", "style" or "reset-picture".
 
 // What the page is told. Pictures carry only what it needs to fetch one - never a store path
 // or URL, which stay on the server.
-function brandView(settings, { env, caps, day }) {
+function brandView(settings, { env, caps, day, moment }) {
   const canGenerate = Boolean(env.OPENAI_API_KEY)
   const pictures = {}
   for (const [slot, picture] of Object.entries(settings.pictures)) {
@@ -59,7 +59,7 @@ function brandView(settings, { env, caps, day }) {
     defaultArtStyle: DEFAULT_ART_STYLE,
     names: { ...settings.names },
     pictures,
-    left: allowanceLeft(settings, caps, day)
+    left: allowanceLeft(settings, caps, day, moment)
   }
 }
 
@@ -145,7 +145,8 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
       return
     }
 
-    const context = { env: environment, caps: dailyCaps(environment), day: usageDay(now()) }
+    const moment = now()
+    const context = { env: environment, caps: dailyCaps(environment), day: usageDay(moment), moment }
     const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
 
     if (method === 'GET') {
@@ -176,7 +177,7 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
 
     try {
       let removed = null
-      const charge = (settings) => spendAllowance(settings, 'writes', context.caps, context.day)
+      const charge = (settings) => spendAllowance(settings, 'writes', context.caps, context.day, { now: moment })
       await refuseIfSpent(pictures, charge)
       const saved = await pictures.saveSettings((draft) => {
         charge(draft)

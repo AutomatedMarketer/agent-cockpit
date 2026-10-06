@@ -139,7 +139,8 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, versi
     try {
       const v = version()
       let replaced = null
-      const charge = (settings) => spendAllowance(settings, 'writes', caps, day)
+      // The change a picture from words is holding for this slot, if there is one.
+      const charge = (settings) => spendAllowance(settings, 'writes', caps, day, { now: moment, slot })
       await refuseIfSpent(pictures, charge)
       const saved = await pictures.saveSettings((draft) => {
         charge(draft)
@@ -156,7 +157,7 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, versi
       // Only now that nothing points at it. A failed delete leaves a file nobody points at.
       if (replaced) await pictures.dropPicture(slot, replaced.v, replaced.type).catch(() => {})
 
-      response.status(200).json({ slot, picture: { v, type }, left: allowanceLeft(saved, caps, day) })
+      response.status(200).json({ slot, picture: { v, type }, left: allowanceLeft(saved, caps, day, moment) })
     } catch (error) {
       const { status, error: sentence } = failureAnswer(error)
       response.status(status).json({ error: sentence })

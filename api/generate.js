@@ -30,10 +30,8 @@ import {
   failureAnswer,
   dailyCaps,
   usageDay,
-  allowanceLeft,
-  spendAllowance,
-  refuseIfSpent,
-  PictureStoreError
+  spendOnPicture,
+  refuseIfSpent
 } from './_picture-store.js'
 
 const ENDPOINT = 'https://api.openai.com/v1/images/generations'
@@ -58,10 +56,6 @@ async function cappedJson(upstream, limit) {
   return text === null ? null : JSON.parse(text.toString('utf8'))
 }
 const timedOut = (error) => error?.name === 'TimeoutError' || error?.name === 'AbortError'
-
-const NO_CHANGE_LEFT =
-  'No changes are left today to keep a new picture with, so nothing was made and nothing was ' +
-  'spent: try again tomorrow (the count starts again at midnight UTC).'
 
 export const NO_OPENAI_KEY =
   'Making pictures from words needs OPENAI_API_KEY: set it in Vercel (the same key the voice ' +
@@ -175,13 +169,11 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
     let style
     try {
       const caps = dailyCaps(environment)
-      const day = usageDay(now())
-      // Checked in the same save that counts the picture, so it is the count as it is now - and
-      // first against the cached copy, so a refusal costs no read that skips the cache.
-      const charge = (settings) => {
-        if (allowanceLeft(settings, caps, day).writes === 0) throw new PictureStoreError(429, NO_CHANGE_LEFT)
-        spendAllowance(settings, 'generated', caps, day)
-      }
+      const moment = now()
+      const day = usageDay(moment)
+      // Counted, with the change that will keep it held, in one save - so it is the count as it is
+      // now - and first against the cached copy, so a refusal costs no read that skips the cache.
+      const charge = (settings) => spendOnPicture(settings, slot, caps, day, moment)
       await refuseIfSpent(pictures, charge)
       await pictures.saveSettings((draft) => {
         charge(draft)

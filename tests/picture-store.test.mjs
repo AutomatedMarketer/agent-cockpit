@@ -295,7 +295,10 @@ test('settings entries that could not have been written by the board are dropped
       today: { v: V2, type: 'image/svg+xml' },
       'team.webp': { v: V2, type: 'image/png' }
     },
-    usage: { day: '2026-10-06', writes: 3, generated: 'lots' }
+    usage: {
+      day: '2026-10-06', writes: 3, generated: 'lots',
+      pending: [{ slot: 'today', at: '2026-10-06T11:00:00.000Z', extra: 'dropped' }, { slot: '../x', at: '2026-10-06T11:00:00.000Z' }, { slot: 'team', at: 'never' }, 'today']
+    }
   }
   await fake.sdk.put(SETTINGS_PATH, JSON.stringify(planted), { access: 'private' })
   const { settings } = await store.readSettings()
@@ -303,7 +306,7 @@ test('settings entries that could not have been written by the board are dropped
   assert.equal(settings.artStyle, '')
   assert.deepEqual(settings.names, { content: 'Penny' })
   assert.deepEqual(Object.keys(settings.pictures), ['agent-content'])
-  assert.deepEqual(settings.usage, { day: '2026-10-06', writes: 3, generated: 0 })
+  assert.deepEqual(settings.usage, { day: '2026-10-06', writes: 3, generated: 0, pending: [{ slot: 'today', at: '2026-10-06T11:00:00.000Z' }] })
 })
 
 /* ---------- pictures ---------- */
