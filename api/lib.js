@@ -193,6 +193,29 @@ export const cleanName = (value) => cleanText(value, 1, 40)
 export const cleanStyle = (value) => cleanText(value, 1, 600)
 export const cleanDescription = (value) => cleanText(value, 3, 400)
 
+// The style new pictures are made in until the owner writes their own: the look of the built-in
+// art, in words. "No text" because image models letter badly, and a word baked into a picture
+// cannot be renamed or read by a screen reader.
+export const DEFAULT_ART_STYLE =
+  'A painterly, cinematic digital painting: dusk or night sky, soft glowing light, a calm space, ' +
+  'dark edges framing the scene. Friendly robot characters. Deep navy blue and warm red as accent ' +
+  'light. No text, letters or logos anywhere in the picture.'
+
+// The JSON body of a write that has already passed writeGate (so its type is application/json).
+// The platform usually hands over an object; a string is parsed here. Anything that is not a
+// plain object is null, and the endpoint refuses it - an array or a bare string is not a change.
+export function readJsonBody(request) {
+  let body = request?.body
+  if (typeof body === 'string') {
+    try {
+      body = JSON.parse(body)
+    } catch {
+      return null
+    }
+  }
+  return body !== null && typeof body === 'object' && !Array.isArray(body) ? body : null
+}
+
 // Pure helpers, kept out of the handler so they can be tested without a network.
 
 // The three statuses a task card can be in — the contract in the template's tasks/README.md.

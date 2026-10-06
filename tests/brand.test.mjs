@@ -1,0 +1,296 @@
+// /api/brand: the names, the art style and the assistant's name, kept in the picture store's
+// settings.json. GET is how the page learns whether personalising is on at all; POST is the one
+// way to change a name or the style, or to put a picture back to the built-in one.
+//
+// What these tests hold it to: a board with no store says so in one sentence and nothing else
+// changes; nothing the person typed reaches the store until it has passed its check; a picture
+// is never deleted while settings.json still points at it; and a day's changes are capped.
+
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { makeHandler } from '../api/brand.js'
+import { NOT_CONNECTED, SETTINGS_PATH } from '../api/_picture-store.js'
+import { DEFAULT_ART_STYLE } from '../api/lib.js'
+import { BlobServiceNotAvailable } from './helpers/fake-blob.mjs'
+import {
+  STORE_ENV,
+  NOON,
+  webp,
+  connectedStore,
+  storeCalls,
+  asTheBoard,
+  call
+} from './helpers/personalise-harness.mjs'
+
+const JSON_TYPE = { 'content-type': 'application/json' }
+
+function board({ env = STORE_ENV, now = NOON } = {}) {
+  const connected = connectedStore(env)
+  const handler = makeHandler({ store: connected.store, env, now })
+  const get = () => call(handler, { method: 'GET', headers: asTheBoard() })
+  const post = (body) => call(handler, { method: 'POST', headers: asTheBoard(JSON_TYPE), body })
+  return { ...connected, handler, get, post }
+}
+
+const readSettings = async (fake) => JSON.parse(fake.files.get(SETTINGS_PATH).bytes.toString('utf8'))
+
+/* ---------- no store: one sentence, nothing else ---------- */
+
+test('with no store connected, GET says personalising is off, in the one sentence that says how to switch it on', async () => {
+  const handler = makeHandler({ store: null, env: { VIEW_KEY: STORE_ENV.VIEW_KEY }, now: NOON })
+  const response = await call(handler, { method: 'GET', headers: asTheBoard() })
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.body.enabled, false)
+  assert.equal(response.body.canGenerate, false)
+  assert.equal(response.body.why, NOT_CONNECTED)
+  assert.match(NOT_CONNECTED, /Private Blob store/, 'the sentence names the kind of store to make')
+  assert.match(NOT_CONNECTED, /redeploy/, 'and the step people forget')
+  assert.deepEqual(response.body.names, {})
+  assert.deepEqual(response.body.pictures, {})
+  assert.equal(response.headers['Cache-Control'], 'no-store')
+})
+
+test('with no store in the environment at all, GET is off and the SDK is never loaded', async () => {
+  // The default wiring builds the store from the environment; with no store there must be no
+  // store object and so no SDK, rather than a request that fails half-way through.
+  let loads = 0
+  const handler = makeHandler({ env: { VIEW_KEY: STORE_ENV.VIEW_KEY }, now: NOON, loadSdk: async () => { loads += 1 } })
+  const response = await call(handler, { method: 'GET', headers: asTheBoard() })
+  assert.equal(response.body.enabled, false)
+  assert.equal(loads, 0)
+})
+
+test('with no store connected, a change is refused with the same sentence', async () => {
+  const handler = makeHandler({ store: null, env: { VIEW_KEY: STORE_ENV.VIEW_KEY }, now: NOON })
+  const response = await call(handler, {
+    method: 'POST',
+    headers: asTheBoard(JSON_TYPE),
+    body: { change: 'name', slug: 'content', value: 'Penny' }
+  })
+  assert.equal(response.statusCode, 503)
+  assert.equal(response.body.error, NOT_CONNECTED)
+})
+
+/* ---------- what GET says when a store is there ---------- */
+
+test('a connected, empty store reads as the defaults, uncached, with the full day\'s allowance', async () => {
+  const { get, fake } = board()
+  const response = await get()
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.headers['Cache-Control'], 'no-store', 'a cached answer would show a name the owner already changed')
+  assert.deepEqual(response.body, {
+    enabled: true,
+    canGenerate: false,
+    why: response.body.why,
+    assistantName: '',
+    artStyle: '',
+    defaultArtStyle: DEFAULT_ART_STYLE,
+    names: {},
+    pictures: {},
+    left: { writes: 25, generated: 10 }
+  })
+  assert.equal(fake.calls.get.length, 1, 'a page load is one read of settings.json')
+  assert.equal(fake.calls.put.length, 0, 'reading never writes')
+})
+
+test('making pictures from words is on only with OPENAI_API_KEY, and the reason names it', async () => {
+  const without = await board().get()
+  assert.equal(without.body.canGenerate, false)
+  assert.match(without.body.why, /OPENAI_API_KEY/)
+
+  const withKey = await board({ env: { ...STORE_ENV, OPENAI_API_KEY: 'sk-test-never-shown' } }).get()
+  assert.equal(withKey.body.canGenerate, true)
+  assert.equal(withKey.body.why, undefined)
+  assert.ok(!JSON.stringify(withKey.body).includes('sk-test-never-shown'), 'the key itself is never sent')
+})
+
+test('the daily caps come from the environment, and a nonsense value keeps the default', async () => {
+  const set = await board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: '7', GENERATE_DAILY_CAP: '3' } }).get()
+  assert.deepEqual(set.body.left, { writes: 7, generated: 3 })
+  const nonsense = await board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: 'lots', GENERATE_DAILY_CAP: '-1' } }).get()
+  assert.deepEqual(nonsense.body.left, { writes: 25, generated: 10 })
+})
+
+test('GET is behind the view key', async () => {
+  const { handler, fake } = board()
+  const response = await call(handler, { method: 'GET', headers: {} })
+  assert.equal(response.statusCode, 401)
+  assert.equal(storeCalls(fake), 0, 'nothing is read for a caller without the key')
+})
+
+test('a store that refuses to answer turns personalising off with its sentence, not a broken page', async () => {
+  const { get, fake } = board()
+  fake.failNext.get = new BlobServiceNotAvailable()
+  const response = await get()
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.body.enabled, false)
+  assert.match(response.body.why, /not answering/)
+})
+
+/* ---------- names ---------- */
+
+test('a name is saved, shown, and an empty one puts the slug back', async () => {
+  const { get, post } = board()
+  const saved = await post({ change: 'name', slug: 'content', value: '  Penny  ' })
+  assert.equal(saved.statusCode, 200)
+  assert.deepEqual(saved.body.names, { content: 'Penny' }, 'the answer to a change is the board as it now is')
+  assert.deepEqual((await get()).body.names, { content: 'Penny' })
+
+  await post({ change: 'name', slug: 'content', value: '' })
+  assert.deepEqual((await get()).body.names, {}, 'an empty name means "back to the slug"')
+})
+
+test('a name that looks like markup is kept as the text it is', async () => {
+  // The page escapes every name. Deciding here what markup is "safe" would be a second defence
+  // that drifts from the real one - so it is stored exactly, and the render test escapes it.
+  const { get, post } = board()
+  await post({ change: 'name', slug: 'sales', value: '<img src=x onerror=alert(1)>' })
+  assert.equal((await get()).body.names.sales, '<img src=x onerror=alert(1)>')
+})
+
+test('an invalid slug, name or change is refused before the store is touched at all', async () => {
+  const refusals = [
+    { change: 'name', slug: '../settings', value: 'x' },
+    { change: 'name', slug: 'Content', value: 'x' },
+    { change: 'name', value: 'x' },
+    { change: 'name', slug: 'content', value: 'Pen‮ny' },
+    { change: 'name', slug: 'content', value: 'x'.repeat(41) },
+    { change: 'name', slug: 'content', value: 42 },
+    { change: 'assistant', value: 'a'.repeat(41) },
+    { change: 'style', value: 's'.repeat(601) },
+    { change: 'reset-picture', slot: 'agent-../x' },
+    { change: 'reset-picture', slot: 'team.webp' },
+    { change: 'rename-everything' },
+    {},
+    null,
+    'name'
+  ]
+  for (const body of refusals) {
+    const { post, fake } = board()
+    const response = await post(body)
+    assert.equal(response.statusCode, 400, `${JSON.stringify(body)} was not refused`)
+    assert.equal(typeof response.body.error, 'string')
+    assert.equal(storeCalls(fake), 0, `${JSON.stringify(body)} reached the store before it was checked`)
+  }
+})
+
+/* ---------- the assistant and the art style ---------- */
+
+test('the assistant\'s name and the art style are saved, and empty means the default', async () => {
+  const { get, post } = board()
+  await post({ change: 'assistant', value: 'Ada' })
+  await post({ change: 'style', value: 'Soft watercolour animals, morning light.' })
+  let shown = (await get()).body
+  assert.equal(shown.assistantName, 'Ada')
+  assert.equal(shown.artStyle, 'Soft watercolour animals, morning light.')
+  assert.equal(shown.defaultArtStyle, DEFAULT_ART_STYLE, 'the default is still offered, to go back to')
+
+  await post({ change: 'style', value: '' })
+  await post({ change: 'assistant', value: '' })
+  shown = (await get()).body
+  assert.equal(shown.artStyle, '')
+  assert.equal(shown.assistantName, '')
+})
+
+/* ---------- putting a picture back to the built-in one ---------- */
+
+async function withPicture() {
+  const setup = board()
+  const v = 'abcdefgh1234'
+  const path = await setup.store.putPicture('agent-content', v, webp(), 'image/webp')
+  await setup.store.saveSettings((settings) => {
+    settings.pictures['agent-content'] = { v, type: 'image/webp', bytes: 64, at: '2026-10-06T11:00:00.000Z' }
+  })
+  return { ...setup, v, path }
+}
+
+test('back to the default removes the pointer and then the picture', async () => {
+  const { post, get, fake, path } = await withPicture()
+  assert.deepEqual((await get()).body.pictures, { 'agent-content': { v: 'abcdefgh1234', type: 'image/webp' } },
+    'GET shows which version to fetch and its type, nothing more')
+  const response = await post({ change: 'reset-picture', slot: 'agent-content' })
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.body.pictures, {})
+  assert.deepEqual((await readSettings(fake)).pictures, {})
+  assert.equal(fake.files.has(path), false, 'the picture itself is gone, not left to fill the store')
+})
+
+test('if the pointer cannot be removed, the picture it points at survives', async () => {
+  // Pointer first, picture second. The other order, with a failed save, leaves settings.json
+  // pointing at a file that no longer exists: a broken picture on every page load.
+  const { post, fake, path, v } = await withPicture()
+  fake.failNext.put = new BlobServiceNotAvailable()
+  const response = await post({ change: 'reset-picture', slot: 'agent-content' })
+  assert.equal(response.statusCode, 503)
+  assert.match(response.body.error, /not answering/)
+  assert.equal(fake.files.has(path), true, 'the picture was deleted while settings.json still pointed at it')
+  assert.equal((await readSettings(fake)).pictures['agent-content'].v, v)
+  assert.equal(fake.calls.del.length, 0)
+})
+
+test('if the picture cannot be deleted after the pointer is gone, the reset still succeeds', async () => {
+  const { post, fake } = await withPicture()
+  fake.failNext.del = new BlobServiceNotAvailable()
+  const response = await post({ change: 'reset-picture', slot: 'agent-content' })
+  assert.equal(response.statusCode, 200, 'a leftover file nobody points at is untidy, not broken')
+  assert.deepEqual(response.body.pictures, {})
+})
+
+/* ---------- the daily cap ---------- */
+
+test('changes stop at the daily cap with a sentence, and nothing is written past it', async () => {
+  const { post, get, fake } = board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: '2' } })
+  assert.equal((await post({ change: 'name', slug: 'content', value: 'One' })).statusCode, 200)
+  assert.equal((await post({ change: 'name', slug: 'sales', value: 'Two' })).statusCode, 200)
+  assert.equal((await get()).body.left.writes, 0)
+  const puts = fake.calls.put.length
+
+  const refused = await post({ change: 'name', slug: 'email', value: 'Three' })
+  assert.equal(refused.statusCode, 429)
+  assert.match(refused.body.error, /tomorrow/)
+  assert.match(refused.body.error, /WRITE_DAILY_CAP/, 'the owner is told which setting raises it')
+  assert.equal(fake.calls.put.length, puts, 'a refused change wrote nothing')
+  assert.equal((await readSettings(fake)).names.email, undefined)
+})
+
+test('the day the cap counts is the UTC day: it starts again at midnight UTC', async () => {
+  let clock = new Date('2026-10-06T23:59:00Z')
+  const { post } = board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: '1' }, now: () => clock })
+  assert.equal((await post({ change: 'assistant', value: 'Ada' })).statusCode, 200)
+  assert.equal((await post({ change: 'assistant', value: 'Bea' })).statusCode, 429)
+  clock = new Date('2026-10-07T00:01:00Z')
+  const nextDay = await post({ change: 'assistant', value: 'Cy' })
+  assert.equal(nextDay.statusCode, 200)
+  assert.equal(nextDay.body.left.writes, 0)
+})
+
+/* ---------- the rest of the contract ---------- */
+
+test('only GET and POST are answered', async () => {
+  const { handler } = board()
+  const response = await call(handler, { method: 'DELETE', headers: asTheBoard(JSON_TYPE) })
+  assert.equal(response.statusCode, 405)
+  assert.equal(response.headers.Allow, 'GET, POST')
+})
+
+test('a change goes through the write gate: the wrong body type is refused before the store', async () => {
+  const { handler, fake } = board()
+  const response = await call(handler, {
+    method: 'POST',
+    headers: asTheBoard({ 'content-type': 'text/plain' }),
+    body: '{"change":"name","slug":"content","value":"Penny"}'
+  })
+  assert.equal(response.statusCode, 415)
+  assert.equal(storeCalls(fake), 0)
+})
+
+test('a JSON body that arrives as a string is read the same way', async () => {
+  const { handler, get } = board()
+  const response = await call(handler, {
+    method: 'POST',
+    headers: asTheBoard(JSON_TYPE),
+    body: JSON.stringify({ change: 'name', slug: 'content', value: 'Penny' })
+  })
+  assert.equal(response.statusCode, 200)
+  assert.equal((await get()).body.names.content, 'Penny')
+})

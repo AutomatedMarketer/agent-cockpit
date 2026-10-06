@@ -171,6 +171,62 @@ export function storeFailure(error, sdk = {}) {
   }
 }
 
+// The sentence and status for anything a personalise endpoint catches. A store failure already
+// is a sentence; anything else is a bug, and its message is for a developer, never the page.
+export function failureAnswer(error) {
+  if (error instanceof PictureStoreError) return { status: error.status, error: error.message }
+  return { status: 500, error: 'Something went wrong on the board\'s side, so try again in a minute.' }
+}
+
+// --- the daily caps ----------------------------------------------------------------------
+// Every change costs one or two of the store's "advanced operations" (2,000 a month on Hobby,
+// and going over locks the store for 30 days), and every made picture costs the owner OpenAI
+// money. So both are capped per day, counted inside settings.json - the file every change
+// writes anyway, so counting costs no extra operation.
+//
+// The day is the UTC day: the count starts again at midnight UTC. The server cannot know which
+// timezone the owner lives in, Vercel's servers run in UTC anyway, and one fixed boundary is one
+// the sentence below and the README can state plainly.
+
+const DEFAULT_CAPS = { writes: 25, generated: 10 }
+
+const CAP_SENTENCES = {
+  writes:
+    'This board has made all the changes it allows today, so try again tomorrow (the count ' +
+    'starts again at midnight UTC), or raise WRITE_DAILY_CAP in Vercel and redeploy.',
+  generated:
+    'This board has made all the pictures it allows today, so try again tomorrow (the count ' +
+    'starts again at midnight UTC), or raise GENERATE_DAILY_CAP in Vercel and redeploy.'
+}
+
+// A whole number, zero or more; anything else keeps the default rather than guessing. Zero is a
+// real choice: it turns that kind of change off.
+export function dailyCaps(env = process.env) {
+  const read = (value, fallback) => (/^\d+$/.test(String(value ?? '').trim()) ? Number(value) : fallback)
+  return {
+    writes: read(env.WRITE_DAILY_CAP, DEFAULT_CAPS.writes),
+    generated: read(env.GENERATE_DAILY_CAP, DEFAULT_CAPS.generated)
+  }
+}
+
+export const usageDay = (date) => date.toISOString().slice(0, 10)
+
+export function allowanceLeft(settings, caps, day) {
+  const used = settings.usage.day === day ? settings.usage : { writes: 0, generated: 0 }
+  return {
+    writes: Math.max(0, caps.writes - used.writes),
+    generated: Math.max(0, caps.generated - used.generated)
+  }
+}
+
+// Called inside a saveSettings change, so the count and the change land in the same write - or,
+// at the cap, the throw stops the write and nothing is saved at all.
+export function spendAllowance(settings, kind, caps, day) {
+  if (settings.usage.day !== day) settings.usage = { day, writes: 0, generated: 0 }
+  if (settings.usage[kind] >= caps[kind]) throw new PictureStoreError(429, CAP_SENTENCES[kind])
+  settings.usage[kind] += 1
+}
+
 // --- the store ---------------------------------------------------------------------------
 
 const loadRealSdk = () => import('@vercel/blob')
