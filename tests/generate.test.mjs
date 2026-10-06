@@ -200,6 +200,24 @@ test('making a picture does not spend the day\'s changes - only storing it does'
   assert.deepEqual(settings.usage, { day: '2026-10-06', writes: 0, generated: 1 })
 })
 
+test('with no change left today to store it with, no picture is made and OpenAI is never paid', async (t) => {
+  // From the security review (waste.mjs): a made picture is stored by an upload, which is a
+  // change. With the day's changes used up - or switched off with WRITE_DAILY_CAP=0 - Make it
+  // still charged OpenAI for a picture the upload then refused to keep.
+  const calls = stubOpenAI(t, imageAnswer(webp()))
+  for (const writes of ['0', '2']) {
+    const env = { ...ENV, WRITE_DAILY_CAP: writes }
+    const { generate, store } = board({ env })
+    await store.saveSettings((draft) => { draft.usage = { day: '2026-10-06', writes: Number(writes), generated: 0 } })
+    const refused = await generate(PORTRAIT)
+    assert.equal(refused.statusCode, 429, `WRITE_DAILY_CAP=${writes}`)
+    assert.match(refused.body.error, /No changes are left today/)
+    assert.match(refused.body.error, /nothing was made/)
+    assert.equal((await store.readSettings()).settings.usage.generated, 0, 'a picture nobody made was counted')
+  }
+  assert.equal(calls.length, 0, 'OpenAI was paid for a picture that could not be kept')
+})
+
 /* ---------- whatever OpenAI answers ---------- */
 
 test('a refusal on safety grounds is a plain sentence, not OpenAI\'s message', async (t) => {

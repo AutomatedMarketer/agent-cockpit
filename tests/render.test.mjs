@@ -4464,6 +4464,34 @@ test('each card opens to Personalise: a name, Choose a picture, Describe it and 
   assert.match(drawer, /<button class="fire" type="button" data-reset="agent-research">Back to the default<\/button>/)
 })
 
+test('with no change left today, every Make it is off and says why, and pressing it sends nothing', async () => {
+  // A made picture is kept by an upload, which is a change. With none left, Make it would only
+  // charge OpenAI for a picture the board could not keep (the server refuses it too).
+  const none = render(pinnedPayload, { state: { brand: brandMaking({ left: { writes: 0, generated: 3 } }) } })
+  const drawn = none.get('today').innerHTML + none.get('team').innerHTML
+  const makes = [...drawn.matchAll(/<form class="fire-form" data-make="[^"]+">[\s\S]*?<\/form>/g)].map((found) => found[0])
+  assert.equal(makes.length, 2 + pinnedPayload.agents.length)
+  for (const make of makes) {
+    assert.match(make, /<button class="fire" type="submit" disabled>Make it<\/button>/, 'Make it can still be pressed')
+    assert.match(make, /<span class="small muted no-change-left">No changes are left today/, 'nothing says why Make it is off')
+  }
+  // With a change left, Make it is on and the sentence is drawn hidden, for the moment one runs out.
+  const some = render(pinnedPayload, { state: { brand: brandMaking({ left: { writes: 1, generated: 3 } }) } })
+  const today = some.get('today').innerHTML
+  assert.ok(!/type="submit" disabled>Make it/.test(today), 'Make it is off with a change still left')
+  assert.match(today, /<span class="small muted no-change-left" hidden>No changes are left today/, 'the sentence shows with a change still left')
+
+  // Pressed anyway (a stale screen, a keyboard): refused on the page, before OpenAI is asked.
+  const browser = writingBrowser({ brand: brandMaking({ left: { writes: 0, generated: 3 } }) })
+  const nodes = render(pinnedPayload, { fetch: browser.fetch, storage: keyStorage(VIEW_ONLY) })
+  await flush()
+  const box = pictureBox()
+  await dispatch(nodes, 'submit', makeForm('team', 'a lighthouse at dusk', box))
+  assert.equal(browser.posts().length, 0, 'a picture was asked for with no change left to keep it')
+  assert.equal(box.note.className, 'fire-note bad')
+  assert.match(box.note.textContent, /No changes are left today/)
+})
+
 test('with no OpenAI key, Make it is not offered anywhere and one sentence says why', () => {
   const why = 'Making pictures from words is off: set OPENAI_API_KEY in Vercel (the same key the voice assistant uses) and redeploy. Choosing your own picture still works.'
   const nodes = render(pinnedPayload, { state: { brand: { ...brandOn(), why } } })

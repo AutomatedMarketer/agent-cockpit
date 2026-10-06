@@ -7,7 +7,9 @@
 // This is the one endpoint that spends the owner's money, so it spends only after every check:
 // the write gate, a store (the count lives there), OPENAI_API_KEY, a real slot and description,
 // and today's allowance - which is counted BEFORE OpenAI is called, so a failing or slow upstream
-// cannot be retried past the cap either.
+// cannot be retried past the cap either. That includes a change left today: a made picture is
+// kept by an upload, which is a change, so with none left OpenAI would be paid for a picture the
+// board could not keep.
 //
 // The key goes to OpenAI in one header and nowhere else. Nothing OpenAI sends back is passed on
 // as text - every failure is one of our own sentences - and nothing here writes to the logs.
@@ -19,7 +21,9 @@ import {
   failureAnswer,
   dailyCaps,
   usageDay,
-  spendAllowance
+  allowanceLeft,
+  spendAllowance,
+  PictureStoreError
 } from './_picture-store.js'
 
 const ENDPOINT = 'https://api.openai.com/v1/images/generations'
@@ -30,6 +34,10 @@ const TIMEOUT_MS = 55_000
 // Vercel caps a function's response at 4.5 MB.
 const MAX_PICTURE_BYTES = 4 * 1024 * 1024
 const MAX_BASE64_LENGTH = Math.ceil(MAX_PICTURE_BYTES / 3) * 4
+
+const NO_CHANGE_LEFT =
+  'No changes are left today to keep a new picture with, so nothing was made and nothing was ' +
+  'spent: try again tomorrow (the count starts again at midnight UTC).'
 
 export const NO_OPENAI_KEY =
   'Making pictures from words needs OPENAI_API_KEY: set it in Vercel (the same key the voice ' +
@@ -142,6 +150,8 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
       const caps = dailyCaps(environment)
       const day = usageDay(now())
       await pictures.saveSettings((draft) => {
+        // Checked in the same save that counts the picture, so it is the count as it is now.
+        if (allowanceLeft(draft, caps, day).writes === 0) throw new PictureStoreError(429, NO_CHANGE_LEFT)
         spendAllowance(draft, 'generated', caps, day)
         style = draft.artStyle || DEFAULT_ART_STYLE
       })

@@ -513,6 +513,7 @@
   .picture-controls { display: grid; gap: .55rem; }
   .picture-controls > .fire-form { margin-top: 0; }
   .allowance { margin: 0; font-size: .75rem; }
+  .no-change-left { display: block; font-size: .75rem; }
   .brand-field {
     flex: 1; min-width: 0; min-height: 2.9rem; font: inherit; font-size: .9375rem; color: var(--ink);
     width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
@@ -3684,9 +3685,16 @@ function allowanceText() {
     : `Left today: ${changes}.`
 }
 
+// A made picture is kept by an upload, which is a change: with none left today, Make it would only
+// charge OpenAI for a picture the board could not keep (the server refuses it as well).
+const NO_CHANGE_LEFT = 'No changes are left today to keep a new picture with, so Make it is off until midnight UTC.'
+
 function showAllowance() {
   if (!brand) return
   for (const line of document.querySelectorAll('.allowance')) line.textContent = allowanceText()
+  const none = brand.left.writes === 0
+  for (const button of document.querySelectorAll('form[data-make] button[type="submit"]')) button.disabled = none
+  for (const line of document.querySelectorAll('.no-change-left')) line.hidden = !none
 }
 
 // The buttons on a banner. Off, Today gets none and Team gets only Make it yours.
@@ -3709,7 +3717,8 @@ function pictureControlsHtml(slot) {
         <label for="describe-${slot}">Describe it</label>
         <textarea id="describe-${slot}" rows="2" maxlength="400"
           placeholder="${pictureKind(slot) === 'portrait' ? 'e.g. a cheerful fox in a tweed waistcoat, holding a lantern' : 'e.g. a quiet harbour at dusk, the lamps coming on'}"></textarea>
-        <button class="fire" type="submit">Make it</button>
+        <button class="fire" type="submit"${brand.left.writes === 0 ? ' disabled' : ''}>Make it</button>
+        <span class="small muted no-change-left"${brand.left.writes === 0 ? '' : ' hidden'}>${NO_CHANGE_LEFT}</span>
       </form>`
     : `<p class="small muted">${escapeHtml(brand.why || 'Making pictures from words is off on this board.')}</p>`
   return `<div class="picture-controls">
@@ -3911,6 +3920,8 @@ async function personaliseDo(control, working, work) {
     tell(note, error?.message || 'That did not work, so nothing was changed.', 'bad')
   } finally {
     for (const part of parts) part.disabled = false
+    // Everything went back on above; Make it stays off if the day's changes ran out meanwhile.
+    showAllowance()
   }
 }
 
@@ -3934,6 +3945,7 @@ async function makePicture(form) {
   const field = form.querySelector('textarea')
   const description = String(field?.value ?? '').trim()
   await personaliseDo(form, 'Making the picture. This can take up to a minute…', async (say) => {
+    if (brand.left.writes === 0) throw new Error(NO_CHANGE_LEFT)
     if (description.length < 3) throw new Error('Describe the picture in a few words first.')
     const response = await storeWrite('/api/generate', JSON.stringify({ slot, description }), 'application/json')
     // Spent the moment OpenAI was asked, whatever happens next.
