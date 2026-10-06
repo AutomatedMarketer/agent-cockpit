@@ -3,7 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="theme-color" content="#0d0f13" />
+<!-- One per scheme, so the phone's status bar matches the page before any script runs. When
+     someone picks a theme, the script repaints both from THEME_BG. -->
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b0f17" />
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f6fa" />
 <title>Agent OS</title>
 <!-- The course tells every attendee to bookmark this on their phone before they leave the
      room. Without these it lands as a blank tile. Rebuild: node scripts/build-icons.mjs -->
@@ -14,19 +17,108 @@
 <meta name="apple-mobile-web-app-title" content="Agent OS" />
 <meta name="mobile-web-app-capable" content="yes" />
 <style>
+  /* Every colour on this page is one of these tokens, and a rule never writes a colour of its own.
+     The board was dark-only with its colours typed into the rules, so a light theme was a hunt for
+     hex values; this way it is one block of values, and tests/theme.test.mjs refuses a colour
+     written anywhere else and measures every text colour against every surface it sits on.
+
+     Dark comes FIRST: the icon builder and its test take the first background and accent in this
+     file as the app's own colours. Light is written twice with the same values - once for a phone
+     set to light that has made no choice here, once for someone who pressed the switch - and both
+     come AFTER the dark block, because a media query adds no specificity and the later rule wins.
+
+     --link is not --accent on purpose. The accent is red, and a red link reads as an error before
+     it reads as a link. --agent-ink is how far an owner chip's agent hue is pulled toward the ink:
+     nothing on the dark chip, where the palette's bright hues read fine, and most of the way on the
+     light one, where amber and teal would be close to invisible. The --kpi tokens are the three
+     number cards on Today. */
   :root {
     color-scheme: dark;
-    --bg: #0d0f13;
-    --panel: #151920;
-    --panel-2: #1a1f28;
-    --ink: #e8eaee;
-    --muted: #8b93a1;
-    --line: #262b35;
-    --accent: #6ea8ff;
-    --ok: #4ade80;
-    --warn: #fbbf24;
+    --bg: #0b0f17;
+    --panel: #121826;
+    --panel-2: #172033;
+    --line: #232b3d;
+    --chip: #1c2436;
+    --ink: #eef1f7;
+    --muted: #8d97ab;
+    --accent: #f0596a;
+    --accent-soft: #2a1820;
+    --link: #9db8ff;
+    --ok: #5fd3a6;
+    --warn: #f5b14c;
     --bad: #f87171;
-    --chip: #202632;
+    --on-art: #f3f5fb;
+    --agent-ink: 0%;
+    --kpi-work: #5fd3a6;
+    --kpi-agents: #a48bf5;
+    --kpi-ledger: #f5b14c;
+    --shadow: 0 1px 0 rgba(255, 255, 255, .04) inset, 0 20px 40px -24px rgba(0, 0, 0, .6);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --bg: #f5f6fa;
+      --panel: #ffffff;
+      --panel-2: #eef1f6;
+      --line: #e1e5ee;
+      --chip: #eaeef4;
+      --ink: #172033;
+      --muted: #5e6880;
+      --accent: #be202e;
+      --accent-soft: #fbe9eb;
+      --link: #2b5cb8;
+      --ok: #17785a;
+      --warn: #9e5c00;
+      --bad: #c62828;
+      --on-art: #f3f5fb;
+      --agent-ink: 60%;
+      --kpi-work: #1f8f66;
+      --kpi-agents: #6a4fd1;
+      --kpi-ledger: #b8730c;
+      --shadow: 0 1px 2px rgba(20, 30, 60, .06), 0 16px 32px -24px rgba(20, 30, 60, .25);
+    }
+  }
+  /* Word for word the block above. The test holds them identical, so a value changed in one place
+     cannot leave "light because my phone is" and "light because I chose it" looking different. */
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f5f6fa;
+    --panel: #ffffff;
+    --panel-2: #eef1f6;
+    --line: #e1e5ee;
+    --chip: #eaeef4;
+    --ink: #172033;
+    --muted: #5e6880;
+    --accent: #be202e;
+    --accent-soft: #fbe9eb;
+    --link: #2b5cb8;
+    --ok: #17785a;
+    --warn: #9e5c00;
+    --bad: #c62828;
+    --on-art: #f3f5fb;
+    --agent-ink: 60%;
+    --kpi-work: #1f8f66;
+    --kpi-agents: #6a4fd1;
+    --kpi-ledger: #b8730c;
+    --shadow: 0 1px 2px rgba(20, 30, 60, .06), 0 16px 32px -24px rgba(20, 30, 60, .25);
+  }
+
+  /* Inter, served from this site: the content security policy allows fonts from nowhere else, and
+     a phone on conference wifi should not wait on a third party for its letters.
+     @fontsource-variable/inter 5.3.0, files/inter-latin-wght-normal.woff2 (Latin, weights 100 to
+     900), SHA-256 3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62. Under the SIL
+     Open Font License 1.1, which travels with it as public/fonts/OFL.txt. swap: the words show at
+     once in the fallback face and change when Inter lands, instead of being invisible while it
+     loads. */
+  @font-face {
+    font-family: Inter;
+    src: url('/fonts/inter-latin-var.woff2') format('woff2');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+  }
+
+  :root {
     --radius: 12px;
     --nav-row: 3.2rem;
     --nav-h: calc(var(--nav-row) * 2); /* the phone nav is two rows; see nav .tabs */
@@ -38,7 +130,7 @@
     margin: 0;
     background: var(--bg);
     color: var(--ink);
-    font: 16px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font: 16px/1.5 Inter, ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-text-size-adjust: 100%;
     padding-top: calc(var(--nav-h) + env(safe-area-inset-top, 0px) + 1rem);
   }
@@ -52,7 +144,7 @@
   header { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; margin-bottom: .15rem; }
   h1 { font-size: 1.25rem; margin: 0; letter-spacing: -.01em; }
   h2 { font-size: .8rem; margin: 1.4rem 0 .5rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
-  a { color: var(--accent); text-decoration: none; }
+  a { color: var(--link); text-decoration: none; }
   a:hover { text-decoration: underline; }
   .sub { color: var(--muted); font-size: .8125rem; margin: 0 0 .75rem; }
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
@@ -68,6 +160,14 @@
   .chip.on { color: var(--ink); }
   .chip.ok { color: var(--ok); }
   .chip.warn { color: var(--warn); }
+  /* Whose job this is, in that agent's own hue - handed in as --agent by ownerChipHtml. It used to
+     arrive as a finished colour in a style attribute, which a light theme could not touch: amber on
+     a near-white chip. The palette stays as it is (every team's colours hang off it), and the theme
+     decides how far to pull the hue toward the ink so the name stays readable. */
+  .chip.owner {
+    color: color-mix(in srgb, var(--agent), var(--ink) var(--agent-ink));
+    border: 1px solid color-mix(in srgb, var(--agent), var(--ink) var(--agent-ink));
+  }
   .dot { width: .55rem; height: .55rem; border-radius: 50%; display: inline-block; flex: none; background: var(--muted); }
   .working .dot, .live .dot { background: var(--ok); }
   .quiet .dot, .attention .dot, .silent .dot { background: var(--warn); }
@@ -191,9 +291,9 @@
   .day.today .dayname { color: var(--ink); font-weight: 700; }
   .daydate { font-size: .68rem; color: var(--muted); font-weight: 400; }
   .pill .mark { font-size: .72rem; margin-left: .3rem; }
-  .pill.done .mark { color: var(--ok, #3fb950); }
+  .pill.done .mark { color: var(--ok); }
   .pill.missed { opacity: .55; }
-  .pill.missed .mark { color: var(--bad, #d29922); }
+  .pill.missed .mark { color: var(--bad); }
   .cal-key { display: flex; gap: .9rem; flex-wrap: wrap; margin-top: .5rem; font-size: .72rem; color: var(--muted); }
 
   /* Board — four columns stack on a phone (one-handed rule), pair up on medium screens,
@@ -307,7 +407,7 @@
   /* Top nav on a phone — the screens are the first thing you see, not the last */
   nav {
     position: fixed; left: 0; right: 0; top: 0; z-index: 10;
-    background: rgba(13, 15, 19, .92); backdrop-filter: blur(10px);
+    background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(10px);
     border-bottom: 1px solid var(--line);
     padding-top: env(safe-area-inset-top, 0px);
   }
@@ -329,6 +429,31 @@
      In the header on every size; the sidebar copy only exists on desktop. */
   .talk-header { margin-left: auto; font-size: .8125rem; white-space: nowrap; }
   nav .talk { display: none; }
+
+  /* Light or dark. A real button with role="switch", so a screen reader says "Light theme, on" and
+     a keyboard can reach it. The button is the full 2.75rem a thumb needs; the track and knob are
+     drawn smaller inside it, and the knob's side comes from aria-checked - the same attribute the
+     screen reader reads, so what is shown and what is announced cannot disagree. */
+  .theme-switch {
+    position: relative; flex: none; align-self: center;
+    width: 3.5rem; min-height: 2.75rem; padding: 0;
+    background: none; border: 0; border-radius: 999px; color: inherit; cursor: pointer;
+  }
+  .theme-switch::before {
+    content: ""; position: absolute; left: .25rem; right: .25rem; top: 50%; height: 1.6rem;
+    transform: translateY(-50%); border-radius: 999px;
+    background: var(--panel-2); border: 1px solid var(--line);
+  }
+  .theme-switch::after {
+    content: ""; position: absolute; left: .5rem; top: 50%; width: 1.1rem; height: 1.1rem;
+    transform: translateY(-50%); border-radius: 50%; background: var(--muted);
+    transition: transform .2s ease;
+  }
+  .theme-switch[aria-checked="true"]::after { transform: translate(1.4rem, -50%); background: var(--warn); }
+  .theme-switch:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    .theme-switch::after { transition: none; }
+  }
 
   /* Desktop: the same nav markup becomes a fixed LEFT sidebar; below 48rem nothing changes
      and the top bar stays exactly as it is. Pure CSS, no script involved. */
@@ -462,6 +587,10 @@
     <span id="repo-link" class="small"></span>
     <a class="talk-header" href="https://claude.ai/code" target="_blank" rel="noreferrer noopener"
        title="Open a Claude session on your team repo - your orchestrator, your rules">Talk to your team</a>
+    <!-- Here until the new top bar exists to hold it. aria-checked is set by the script from the
+         theme actually showing, before anyone can reach it. -->
+    <button type="button" id="theme-switch" class="theme-switch" role="switch" aria-checked="false"
+      aria-label="Light theme" title="Light or dark"></button>
   </header>
   <p class="sub" id="strap">Reading your repo…</p>
 
@@ -501,6 +630,71 @@
 
 <script>
 'use strict'
+
+/* ---------- Storage that is allowed to fail ----------
+   A private window, or a browser told to block site data, throws on the first touch of
+   localStorage. Every read and write on this page goes through these two, so a refused one costs
+   a remembered choice and never the page. (tests/theme.test.mjs refuses a bare call anywhere else.) */
+// storage-guard:start
+const readStore = (key) => {
+  try { return localStorage.getItem(key) } catch (error) { return null }
+}
+const writeStore = (key, value) => {
+  try {
+    if (value === null) localStorage.removeItem(key)
+    else localStorage.setItem(key, value)
+    return true
+  } catch (error) { return false }
+}
+// storage-guard:end
+
+/* ---------- Light or dark ----------
+   First in the script so the theme is settled before anything else draws. With no choice made
+   here the page sets nothing at all and the stylesheet's prefers-color-scheme block follows the
+   phone - including when it flips at sunset. A choice is stored, and wins over the phone. There is
+   no script in the head to apply it any earlier (the page has exactly one script block), so someone
+   whose choice differs from their phone sees one frame of the phone's theme on load. Accepted.
+
+   THEME_BG is each theme's --bg, for the phone's status bar. tests/theme.test.mjs holds the two in
+   step with the stylesheet. */
+const THEME_STORE = 'agent-cockpit-theme'
+const THEME_BG = { dark: '#0b0f17', light: '#f5f6fa' }
+const phoneIsLight = window.matchMedia('(prefers-color-scheme: light)')
+
+function storedTheme() {
+  const value = readStore(THEME_STORE)
+  return value === 'light' || value === 'dark' ? value : null
+}
+
+// Kept here as well as in storage: when storage refuses the write, the choice still holds for
+// this visit instead of the switch doing nothing.
+let themeChoice = storedTheme()
+
+function applyTheme() {
+  const root = document.documentElement
+  if (themeChoice) root.dataset.theme = themeChoice
+  else delete root.dataset.theme
+  const showing = themeChoice ?? (phoneIsLight.matches ? 'light' : 'dark')
+  // Each meta answers its own media query. With no choice, each keeps its own scheme's colour; with
+  // one, both say the chosen colour, whichever the phone is set to.
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) {
+    const scheme = /light/.test(meta.getAttribute('media') ?? '') ? 'light' : 'dark'
+    meta.setAttribute('content', THEME_BG[themeChoice ?? scheme])
+  }
+  const button = document.getElementById('theme-switch')
+  if (button) button.setAttribute('aria-checked', String(showing === 'light'))
+}
+
+applyTheme()
+// Older Safari has no addEventListener on a media query list; there the switch simply catches up
+// on the next load.
+phoneIsLight.addEventListener?.('change', () => { if (!themeChoice) applyTheme() })
+document.getElementById('theme-switch')?.addEventListener('click', () => {
+  const showing = themeChoice ?? (phoneIsLight.matches ? 'light' : 'dark')
+  themeChoice = showing === 'light' ? 'dark' : 'light'
+  writeStore(THEME_STORE, themeChoice)
+  applyTheme()
+})
 
 /* One list, in nav order. TITLES was maintained by hand alongside SCREENS and lost `ledger`
    somewhere, so tapping Ledger - the screen the whole measured-week idea lives on - put the
@@ -593,7 +787,7 @@ const accentStyle = (slug) => {
 const ownerChipHtml = (slug) => {
   if (!slug) return ''
   const hex = agentColor(slug)
-  return `<span class="chip" style="color:${hex};border:1px solid ${hex}">owner: ${escapeHtml(slug)}</span>`
+  return `<span class="chip owner" style="--agent:${hex}">owner: ${escapeHtml(slug)}</span>`
 }
 
 function ago(iso) {
@@ -1831,7 +2025,7 @@ el('viewer-close').addEventListener('click', () => el('viewer').classList.remove
 // sessionStorage: this is a phone dashboard opened many times a day, and a key you retype
 // every tab is a key you turn off. On a shared device, use Log out.
 const VIEW_KEY_STORE = 'agent-cockpit-view-key'
-const viewKey = () => localStorage.getItem(VIEW_KEY_STORE) || ''
+const viewKey = () => readStore(VIEW_KEY_STORE) || ''
 
 async function apiGet(path) {
   const key = viewKey()
@@ -2399,7 +2593,7 @@ function renderUnlock(message) {
     event.preventDefault()
     const entered = el('unlock-key').value.trim()
     if (!entered) return
-    localStorage.setItem(VIEW_KEY_STORE, entered)
+    writeStore(VIEW_KEY_STORE, entered)
     location.reload()
   })
 }
@@ -2409,7 +2603,7 @@ async function boot() {
   if (result.status === 401) {
     // A stored key that stopped working is dropped, so the next attempt is a clean one
     // rather than a loop against a key the deployment no longer accepts.
-    localStorage.removeItem(VIEW_KEY_STORE)
+    writeStore(VIEW_KEY_STORE, null)
     renderUnlock('This dashboard needs its view key.')
     return
   }

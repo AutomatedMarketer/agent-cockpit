@@ -18,9 +18,11 @@ import path from 'node:path'
 
 const OUT = path.join(process.cwd(), 'public')
 
-// Straight from the stylesheet at the top of public/index.html. If those change, change these.
-const BG = [0x0d, 0x0f, 0x13]
-const ACCENT = [0x6e, 0xa8, 0xff]
+// Straight from the DARK token block at the top of public/index.html - the icon is the app at rest,
+// and a home screen does not know which theme someone picked. If those change, change these;
+// tests/icons.test.mjs fails until they match.
+const BG = [0x0b, 0x0f, 0x17]
+const ACCENT = [0xf0, 0x59, 0x6a]
 
 const SS = 4 // supersample factor, so the circles come out smooth without a graphics library
 

@@ -4,8 +4,8 @@
   "description": "Your agent team: what ran, what is waiting, and what needs you.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0d0f13",
-  "theme_color": "#0d0f13",
+  "background_color": "#0b0f17",
+  "theme_color": "#0b0f17",
   "icons": [
     {
       "src": "/icon.svg",

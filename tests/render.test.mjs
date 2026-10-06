@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { shapeHero } from '../api/state.js'
+import { cssRules } from './helpers/css-rules.mjs'
 
 /* Every other test in this repo checks the API, or greps the page source for a string. None of
    them has ever RENDERED a screen. A verifier had to build its own DOM shim to find that the week
@@ -26,11 +27,15 @@ function render(payload, options = {}) {
         className: '',
         dataset: {},
         classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-        setAttribute() {},
-        removeAttribute() {},
+        // Attributes and listeners are RECORDED, never acted on: a test can read what the page set
+        // (aria-checked on the theme switch) and call a handler itself, and nothing fires on its own.
+        attributes: {},
+        setAttribute(name, value) { this.attributes[name] = String(value) },
+        removeAttribute(name) { delete this.attributes[name] },
         querySelectorAll: () => [],
         querySelector: () => null,
-        addEventListener() {},
+        listeners: {},
+        addEventListener(type, handler) { (this.listeners[type] ??= []).push(handler) },
         closest: () => null,
         appendChild() {},
         focus() {},
@@ -51,11 +56,16 @@ function render(payload, options = {}) {
   }
 
   const hash = options.hash ?? ''
+  // `options.media` answers matchMedia by query - { '(prefers-color-scheme: light)': true } is a
+  // phone set to light mode. A query it does not name does not match, which is what every test got
+  // before this option existed. `options.storage` stands in for localStorage, including one whose
+  // every method throws - what a private window or blocked site data hands the page.
+  const media = options.media ?? {}
   const context = {
     document,
-    window: { addEventListener() {}, matchMedia: () => ({ matches: false, addEventListener() {} }), location: { hash }, scrollTo() {}, requestAnimationFrame: (fn) => fn() },
+    window: { addEventListener() {}, matchMedia: (query) => ({ matches: Boolean(media[query]), addEventListener() {} }), location: { hash }, scrollTo() {}, requestAnimationFrame: (fn) => fn() },
     location: { hash, search: '' },
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    localStorage: options.storage ?? { getItem: () => null, setItem() {}, removeItem() {} },
     fetch: async () => ({ ok: true, status: 200, json: async () => payload }),
     console,
     setTimeout,
@@ -1129,70 +1139,8 @@ test('the week grid on Workflows uses the width instead of stretching seven rows
 
    So this checks the cascade, not the text: for any selector written both inside a min-width
    query and unconditionally, the media query has to come LATER whenever they set the same
-   property. It is the one part of precedence a file can be read for. */
-
-const cssRules = () => {
-  const css = stylesheet()
-  const start = css.indexOf('<style>')
-  const end = css.indexOf('</style>', start)
-  assert.ok(start > 0 && end > start, 'the stylesheet is no longer in a <style> block')
-  // Comments OUT first. Without this the text between one rule's closing brace and the next
-  // rule's opening one includes any comment sitting between them, so the selector read for
-  // `.days7 .d7-day` was "/* Next 7 days - a list, so it reads... */ .days7 .d7-day", matched
-  // nothing, and the check below could never fire. It reported clean against the very bug it was
-  // written for, which is the same shape as the defect it is here to catch.
-  const sheet = css.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '')
-
-  /* `inMedia` used to mean "@media saw it", tracked in a single variable, and review broke that
-     two ways at once.
-
-     Only `@media` counted as gating. Wrapping the form-field rules in `@supports not (display:
-     grid)` - a condition no browser in use matches, so the rules apply NOWHERE - left them
-     reading as unconditional and the suite green. Worse than the desktop-only case that fix was
-     written for: that one worked on a laptop.
-
-     And one variable cannot hold nesting. An inner `@media` closing reset it while the outer one
-     was still open, so every rule after it read as unconditional though none of them applied on a
-     phone. Neither shape is in this sheet today - and neither was the desktop-only wrap, which is
-     the point of attacking the instrument rather than the stylesheet.
-
-     So: a stack, and every conditional at-rule on it. `@layer` is deliberately not one - its
-     contents do apply. */
-  const CONDITIONAL_AT_RULE = /^@(media|supports|container)\b/
-
-  const rules = []
-  const conditions = []
-  let depth = 0
-  let index = 0
-  let selectorStart = 0
-  while (index < sheet.length) {
-    const char = sheet[index]
-    if (char === '{') {
-      const head = sheet.slice(selectorStart, index).trim()
-      depth += 1
-      if (CONDITIONAL_AT_RULE.test(head)) {
-        conditions.push(depth)
-      } else if (head && !head.startsWith('@')) {
-        const bodyEnd = sheet.indexOf('}', index)
-        rules.push({
-          selector: head.split('\n').map((line) => line.trim()).filter(Boolean).join(' '),
-          body: sheet.slice(index + 1, bodyEnd),
-          at: index,
-          // "Behind a condition of some kind", not "the last @media is still open".
-          inMedia: conditions.length > 0
-        })
-      }
-      selectorStart = index + 1
-    } else if (char === '}') {
-      if (conditions.at(-1) === depth) conditions.pop()
-      depth -= 1
-      selectorStart = index + 1
-    }
-    index += 1
-  }
-  assert.ok(rules.length > 40, `only ${rules.length} rules parsed - the parser has stopped seeing the sheet`)
-  return rules
-}
+   property. It is the one part of precedence a file can be read for. The parser that reads the
+   sheet as rules is `cssRules`, in tests/helpers/css-rules.mjs. */
 
 /* A shorthand resets the longhands it covers, so `border: 1px solid red` further down cancels a
    `border-top: 0` above it just as surely as another `border-top` would. Comparing property names
@@ -2573,4 +2521,94 @@ test('the desktop measure cap comes after the rule it overrides', () => {
   assert.ok(cap && base.length, 'one of the two rules is missing')
   assert.ok(cap.at > base[0].at,
     'the desktop cap is written above the .fire-form rule it narrows - a media query adds no specificity, so it never reaches a pixel')
+})
+
+/* ---------- Light or dark ----------------------------------------------------------------------
+   The choice is the person's, the default is their phone's, and storage is allowed to fail. The
+   stylesheet half of this - the tokens, the contrast, the two light blocks agreeing - is in
+   tests/theme.test.mjs. This half draws the page and reads what the theme code actually did to it:
+   the attribute on <html> that picks a token block, and aria-checked on the switch, which is what
+   a screen reader announces and what the switch's own drawing keys off. */
+
+const LIGHT_PHONE = { '(prefers-color-scheme: light)': true }
+
+// A storage stub that holds one theme choice and records every write.
+const themeStorage = (stored) => {
+  const writes = []
+  return {
+    writes,
+    getItem: (key) => (/theme/.test(key) ? stored : null),
+    setItem: (key, value) => { writes.push([key, value]) },
+    removeItem: (key) => { writes.push([key, null]) }
+  }
+}
+
+test('a stored theme choice wins over the phone setting', () => {
+  const light = render(base, { storage: themeStorage('light') })
+  assert.equal(light.get('html').dataset.theme, 'light', 'a stored light choice was not applied on a dark phone')
+  assert.equal(light.get('theme-switch').attributes['aria-checked'], 'true')
+
+  const dark = render(base, { storage: themeStorage('dark'), media: LIGHT_PHONE })
+  assert.equal(dark.get('html').dataset.theme, 'dark', 'a stored dark choice lost to a light phone')
+  assert.equal(dark.get('theme-switch').attributes['aria-checked'], 'false')
+})
+
+test('with no stored choice the page follows the phone and stores nothing', () => {
+  for (const [media, checked] of [[LIGHT_PHONE, 'true'], [{}, 'false']]) {
+    // A value nobody could have chosen counts as no choice, rather than as a theme with no tokens.
+    for (const stored of [null, 'purple']) {
+      const storage = themeStorage(stored)
+      const nodes = render(base, { storage, media })
+      // No attribute at all, so the stylesheet's own prefers-color-scheme block decides - and keeps
+      // deciding if the phone flips to dark at sunset.
+      assert.equal('theme' in nodes.get('html').dataset, false,
+        `with ${stored ?? 'nothing'} stored the page pinned a theme instead of following the phone`)
+      assert.equal(nodes.get('theme-switch').attributes['aria-checked'], checked,
+        'the switch does not show the theme the phone is actually in')
+      assert.deepEqual(storage.writes, [], 'loading the page wrote a theme nobody chose')
+    }
+  }
+})
+
+test('pressing the switch flips the theme and remembers the choice', () => {
+  const storage = themeStorage(null)
+  const nodes = render(base, { storage })
+  const press = () => nodes.get('theme-switch').listeners.click.forEach((handler) => handler({}))
+  assert.equal(nodes.get('theme-switch').listeners.click?.length, 1, 'nothing listens for a press on the switch')
+
+  press()
+  assert.equal(nodes.get('html').dataset.theme, 'light')
+  assert.equal(nodes.get('theme-switch').attributes['aria-checked'], 'true')
+  assert.deepEqual(storage.writes.at(-1)?.[1], 'light', 'the choice was not stored, so it is gone on the next visit')
+
+  press()
+  assert.equal(nodes.get('html').dataset.theme, 'dark')
+  assert.equal(nodes.get('theme-switch').attributes['aria-checked'], 'false')
+  assert.deepEqual(storage.writes.at(-1)?.[1], 'dark')
+})
+
+test('storage that throws on every call breaks nothing - the page draws and the switch still works', async () => {
+  const refuse = () => { throw new Error('SecurityError: storage is blocked') }
+  const nodes = render(base, { storage: { getItem: refuse, setItem: refuse, removeItem: refuse }, media: LIGHT_PHONE })
+  assert.ok(nodes.get('today').innerHTML.length > 0, 'the page did not draw')
+  assert.equal('theme' in nodes.get('html').dataset, false)
+  assert.equal(nodes.get('theme-switch').attributes['aria-checked'], 'true', 'the switch lost track of the phone setting')
+
+  // The choice cannot be kept, but it still has to happen for this visit.
+  nodes.get('theme-switch').listeners.click.forEach((handler) => handler({}))
+  assert.equal(nodes.get('html').dataset.theme, 'dark', 'pressing the switch did nothing because storage refused the write')
+
+  // boot() reads the view key on its way to the first fetch. Let it run: a bare localStorage call
+  // there is a rejected promise and a page that never loads, and this is where it would surface.
+  await new Promise((resolve) => setTimeout(resolve, 10))
+})
+
+test('an owner chip takes its colour from the theme, not from a hex written into it', () => {
+  // The chip used to carry style="color:#…;border:1px solid #…": a dark-theme hue with nothing a
+  // light theme could reach. Now it hands the stylesheet the agent's hue and the stylesheet decides
+  // how to draw it - see the contrast check for every palette hue in tests/theme.test.mjs.
+  const drawn = render({ ...base, workflows: [workflow({ owner: 'research' })] }, { hash: '#workflows' }).get('workflows').innerHTML
+  const chip = /<span class="chip owner" style="([^"]*)">owner: research<\/span>/.exec(drawn)
+  assert.ok(chip, 'the owner chip is missing or lost its class')
+  assert.match(chip[1], /^--agent:#[0-9a-f]{6}$/, `the owner chip sets more than its agent hue: ${chip[1]}`)
 })

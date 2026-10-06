@@ -81,6 +81,22 @@ test('the icons use the stylesheet\'s own background and accent', () => {
   assert.equal(manifest.theme_color.toLowerCase(), bg)
 })
 
+test('build-icons.mjs draws with the stylesheet\'s tokens', () => {
+  // The test above reads the OUTPUTS. Those can be hand-edited back into agreement while the script
+  // still holds the old colours, and the next person to run it repaints every icon wrong. So the
+  // script's own constants have to match too.
+  const source = readFileSync(path.join(root, 'scripts', 'build-icons.mjs'), 'utf8')
+  const constant = (name) => {
+    const found = new RegExp(`const ${name} = \\[\\s*0x([0-9a-f]{2}),\\s*0x([0-9a-f]{2}),\\s*0x([0-9a-f]{2})\\s*\\]`, 'i').exec(source)
+    assert.ok(found, `could not read ${name} out of scripts/build-icons.mjs`)
+    return `#${found.slice(1).join('')}`.toLowerCase()
+  }
+  const bg = html.match(/--bg:\s*(#[0-9a-f]{6})/i)?.[1]?.toLowerCase()
+  const accent = html.match(/--accent:\s*(#[0-9a-f]{6})/i)?.[1]?.toLowerCase()
+  assert.equal(constant('BG'), bg, 'build-icons.mjs BG is not the stylesheet --bg')
+  assert.equal(constant('ACCENT'), accent, 'build-icons.mjs ACCENT is not the stylesheet --accent')
+})
+
 test('the unlock form carries a username field so a password manager can save the key', () => {
   // Without it, managers decline to save and the key gets hand-typed on every device —
   // and the course asks people to open this on their phone.
