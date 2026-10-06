@@ -39,6 +39,8 @@ function render(payload, options = {}) {
         closest: () => null,
         appendChild() {},
         focus() {},
+        // Recorded like the attributes above, so a test can ask whether a jump landed on this node.
+        scrollIntoView(how) { this.scrolledIntoView = how ?? true },
         style: {}
       })
     }
@@ -61,12 +63,15 @@ function render(payload, options = {}) {
   // before this option existed. `options.storage` stands in for localStorage, including one whose
   // every method throws - what a private window or blocked site data hands the page.
   const media = options.media ?? {}
+  // `options.history` and `options.fetch` stand in for the browser's own, so a test can read what
+  // a control pushed onto the history and every request the page made. Left out, history is
+  // absent - as it was before these existed - and fetch answers with the payload.
   const context = {
     document,
-    window: { addEventListener() {}, matchMedia: (query) => ({ matches: Boolean(media[query]), addEventListener() {} }), location: { hash }, scrollTo() {}, requestAnimationFrame: (fn) => fn() },
+    window: { addEventListener() {}, matchMedia: (query) => ({ matches: Boolean(media[query]), addEventListener() {} }), location: { hash }, scrollTo() {}, requestAnimationFrame: (fn) => fn(), history: options.history },
     location: { hash, search: '' },
     localStorage: options.storage ?? { getItem: () => null, setItem() {}, removeItem() {} },
-    fetch: async () => ({ ok: true, status: 200, json: async () => payload }),
+    fetch: options.fetch ?? (async () => ({ ok: true, status: 200, json: async () => payload })),
     console,
     setTimeout,
     clearTimeout,
@@ -2611,4 +2616,222 @@ test('an owner chip takes its colour from the theme, not from a hex written into
   const chip = /<span class="chip owner" style="([^"]*)">owner: research<\/span>/.exec(drawn)
   assert.ok(chip, 'the owner chip is missing or lost its class')
   assert.match(chip[1], /^--agent:#[0-9a-f]{6}$/, `the owner chip sets more than its agent hue: ${chip[1]}`)
+})
+
+/* ---------- The shell: sidebar, phone tabs, top bar ---------------------------------------------
+   v2 gives a wide screen a sidebar - the board's name and line, a picture that says what is going
+   on, and whose board it is - and puts a bar along the top holding the two things somebody comes
+   here to do. On a phone the nav stays the two rows of tabs across the top: screens first, and a
+   drawer is a menu you have to open before you can see anything. So half of what these check is
+   what must NOT reach a phone, and "unconditional" is the word that carries it: a rule inside the
+   desktop query does not exist on a phone at all. */
+
+const tabsMarkup = () => html.split('<div class="tabs">')[1].split('</div>')[0]
+
+const valuesIn = (rule) => Object.fromEntries(rule.body.split(';')
+  .map((part) => part.trim()).filter(Boolean)
+  .map((part) => [part.slice(0, part.indexOf(':')).trim(), part.slice(part.indexOf(':') + 1).trim()]))
+
+// Rules whose selector list holds exactly this selector: `.profile` is not `.profile .who`.
+const exactRules = (selector) => cssRules().filter((rule) =>
+  rule.selector.split(',').map((one) => one.trim()).includes(selector))
+
+const WIDE = /min-width:\s*48rem/
+const TAB_LABEL = { today: 'Today', ledger: 'Ledger', team: 'Team', workflows: 'Workflows', skills: 'Skills', memory: 'Memory', connections: 'Connections' }
+
+test('every tab is a drawn icon and its name - no character from a font standing in for a picture', () => {
+  // The glyphs were whatever the phone's font made of &#9881; and &#9673; - a gear on one phone, an
+  // emoji on the next, a box on a third.
+  const links = [...tabsMarkup().matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)]
+    .map(([, attributes, inside]) => ({ screen: /data-screen="([a-z]+)"/.exec(attributes)?.[1], inside }))
+  assert.deepEqual(links.map((link) => link.screen), SCREENS, 'the tabs are not one per screen, in nav order')
+  for (const { screen, inside } of links) {
+    const icon = /<svg\b([^>]*)>([\s\S]*?)<\/svg>/.exec(inside)
+    assert.ok(icon, `the ${screen} tab has no drawn icon`)
+    assert.match(icon[1], /\bclass="ico"/, `the ${screen} icon is not an .ico, so nothing sizes it`)
+    assert.match(icon[1], /\baria-hidden="true"/, `the ${screen} icon would be announced as an unlabelled picture before its name`)
+    assert.match(icon[2], /<(path|circle|rect|polyline|line)\b/, `the ${screen} icon draws nothing`)
+    assert.ok(!/&#\d+;|class="glyph"/.test(inside), `the ${screen} tab still carries a font glyph`)
+    const words = inside.replace(/<svg[\s\S]*?<\/svg>/, '').replace(/<[^>]+>/g, '').trim()
+    assert.equal(words, TAB_LABEL[screen], `the ${screen} tab does not say its own name`)
+  }
+  // An svg with no size is drawn 300 by 150. Seven of those would be the whole nav.
+  const sized = exactRules('.ico').filter((rule) => !rule.inMedia).map(valuesIn)
+  assert.ok(sized.some((rule) => rule.width && rule.height),
+    'nothing gives .ico a width and a height, so every icon renders at the browser default 300x150')
+})
+
+test('the tabs count what the payload holds, and a zero is left blank rather than printed', () => {
+  const full = render({
+    ...base,
+    agents: [agent({ slug: 'research' }), agent({ slug: 'email' }), agent({ slug: 'sales' })],
+    workflows: [workflow(), workflow({ slug: 'second', name: 'Second' })],
+    skills: [{ slug: 'draft-replies', path: '.claude/skills/draft-replies/SKILL.md', description: 'Drafts replies.', usedBy: [], stalled: [], stalledOwners: [] }],
+    memory: { files: ['a', 'b', 'c', 'd'].map((name) => ({ path: `shared/${name}.md`, size: 10 })), indexes: [], truncated: false },
+    connections: [connection()],
+    runtimes: [runtime(), runtime({ name: 'Other box' })]
+  })
+  // Connections counts both halves of its screen: the tools in the register and the machines.
+  const expected = { today: '', ledger: '', team: '3', workflows: '2', skills: '1', memory: '4', connections: '3' }
+  for (const [screen, count] of Object.entries(expected)) {
+    assert.equal(String(full.get(`count-${screen}`).textContent), count, `the ${screen} tab counts the wrong thing`)
+  }
+  // A "0" beside every tab on a new repo reads as seven things broken. Nothing is the honest count.
+  const empty = render(base)
+  for (const screen of SCREENS) {
+    assert.equal(String(empty.get(`count-${screen}`).textContent), '', `the ${screen} tab printed a count for an empty repo`)
+  }
+})
+
+test('the sidebar says whose board it is, with initials, and says nothing when the name is unknown', () => {
+  const named = render({ ...base, owner: { name: 'Nuno Tavares' } })
+  assert.equal(named.get('profile').hidden, false, 'a known owner is not shown')
+  assert.equal(named.get('profile-name').textContent, 'Nuno Tavares')
+  assert.equal(named.get('profile-initials').textContent, 'NT', 'the initials are not first and last name')
+  assert.equal(render({ ...base, owner: { name: 'Jordan' } }).get('profile-initials').textContent, 'J')
+
+  // No name in about-me: no placeholder person, no "?" in a circle.
+  for (const owner of [null, undefined]) {
+    const nodes = render({ ...base, owner })
+    assert.equal(nodes.get('profile').hidden, true, `with owner ${owner} the profile is still on show`)
+    assert.equal(String(nodes.get('profile-name').textContent), '', 'an unknown owner was given a name')
+  }
+
+  // The name is the owner's own text from their repo.
+  const hostile = '<img src=x onerror=alert(1)>'
+  const nodes = render({ ...base, owner: { name: hostile } })
+  assert.equal(nodes.get('profile-name').textContent, hostile, 'the name was altered rather than shown as text')
+  for (const [id, node] of nodes) {
+    assert.ok(!String(node.innerHTML).includes('<img src=x'), `the owner name landed in #${id} as markup`)
+  }
+})
+
+test('the sidebar picture says what is running and what is next, from the board', () => {
+  const now = new Date().toISOString()
+  const run = (name) => ({ name, agent: 'research', started_at: now, session_url: null })
+  const next = [{ slug: 'morning-intel', name: 'Morning Intel', owner: 'research', when: new Date(Date.now() + 3 * 3600_000 + 60_000).toISOString() }]
+
+  const busy = render({ ...base, board: boardWith({ running: [run('a'), run('b')], upNext: next }) }).get('side-art-caption').innerHTML
+  assert.match(busy, /2 jobs running/)
+  assert.match(busy, /Morning Intel/, 'the next job is not named')
+  assert.match(busy, /in 3 hr/, 'the next job has no time')
+
+  assert.match(render({ ...base, board: boardWith({ running: [run('a')] }) }).get('side-art-caption').innerHTML, /1 job running/)
+
+  // An idle board says so, and names no next job it does not have.
+  const idle = render(base).get('side-art-caption').innerHTML
+  assert.match(idle, /Nothing running/)
+  assert.ok(!/Next/.test(idle), 'an empty board was given a next job')
+
+  const hostile = render({ ...base, board: boardWith({ upNext: [{ ...next[0], name: '<img src=x onerror=1>' }] }) }).get('side-art-caption').innerHTML
+  assert.ok(!hostile.includes('<img src=x'), 'a job name from the repo was drawn as markup')
+})
+
+test('Run a job is offered only when a job can be run, and lands on the buttons without running anything', async () => {
+  const none = render({ ...base, workflows: [workflow({ fire: false })] })
+  assert.equal(none.get('jump-run').hidden, true, 'Run a job is offered with no job that has a run button')
+
+  const pushed = []
+  const requests = []
+  const payload = { ...base, workflows: [workflow({ fire: true })] }
+  const nodes = render(payload, {
+    hash: '#team',
+    history: { pushState: (state, title, url) => pushed.push(url) },
+    fetch: async (url, init = {}) => {
+      requests.push(`${init.method ?? 'GET'} ${url}`)
+      return { ok: true, status: 200, json: async () => payload }
+    }
+  })
+  assert.equal(nodes.get('jump-run').hidden, false, 'a runnable job is not offered from the top bar')
+  assert.match(nodes.get('today').innerHTML, /id="run-jobs"/, 'the run buttons have nothing to land on')
+  assert.equal(nodes.get('screen-title').textContent, 'Team')
+
+  const handlers = nodes.get('jump-run').listeners.click ?? []
+  assert.equal(handlers.length, 1, 'nothing listens for a press on Run a job')
+  let cancelled = false
+  handlers.forEach((handler) => handler({ preventDefault() { cancelled = true } }))
+  assert.ok(cancelled, 'the link is followed as well, so the router redraws over the scroll')
+  assert.deepEqual(pushed, ['#today'], 'Back does not return to the screen the jump started from')
+  assert.equal(nodes.get('screen-title').textContent, 'Today', 'the jump did not change screen')
+  assert.ok(nodes.get('run-jobs').scrolledIntoView, 'the jump did not scroll to the run buttons')
+
+  // It takes you to the buttons. Pressing one is still yours to do.
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.deepEqual(requests.filter((request) => !request.startsWith('GET ')), [], 'Run a job sent a request that is not a read')
+
+  // The fixed tab rows on a phone and the sticky bar on a laptop both sit over the top of the
+  // page, so the landing spot has to leave room for them or it lands under them.
+  assert.ok(exactRules('#run-jobs').filter((rule) => !rule.inMedia).some((rule) => valuesIn(rule)['scroll-margin-top']),
+    'the run buttons land underneath the nav')
+})
+
+test('the hidden attribute hides, whatever display a rule gives the element', () => {
+  // The profile, Run a job and the freshness dot are all laid out as flex and hidden with the
+  // attribute. A class rule that sets display beats the browser's own [hidden] rule, so without
+  // this the profile of nobody and a Run a job that leads nowhere would both be drawn.
+  const rules = exactRules('[hidden]').filter((rule) => !rule.inMedia)
+  assert.ok(rules.some((rule) => /^none\s*!important$/.test(valuesIn(rule).display ?? '')),
+    'nothing makes [hidden] win over a class rule that sets display')
+})
+
+test('the brand, the picture and the profile are for a wide screen - a phone never draws them', () => {
+  for (const selector of ['.brand', '.side-art', '.profile', '.nav-caption']) {
+    const hide = exactRules(selector).filter((rule) => !rule.inMedia && valuesIn(rule).display === 'none')
+    assert.ok(hide.length, `${selector} is not hidden unconditionally, so it lands in the phone's tab rows`)
+    const show = exactRules(selector).filter((rule) => rule.inMedia && WIDE.test(rule.condition) &&
+      valuesIn(rule).display && valuesIn(rule).display !== 'none')
+    assert.ok(show.length, `${selector} never appears on a wide screen either`)
+    assert.ok(show.every((rule) => rule.at > hide.at(-1).at),
+      `${selector} is shown above the rule that hides it - a media query adds no specificity, so the hide wins everywhere`)
+  }
+  // The picture is the one thing in the sidebar that can be spared. On a 1366x640 laptop there is
+  // not room for it and the profile both, and a sidebar that scrolls is a sidebar that hides a tab.
+  const art = exactRules('.side-art').filter((rule) => rule.inMedia && valuesIn(rule).display && valuesIn(rule).display !== 'none')
+  assert.ok(art.every((rule) => /min-height:\s*46rem/.test(rule.condition)),
+    'the picture shows on a short laptop too, and pushes the profile off the bottom of the sidebar')
+})
+
+test('the sidebar picture only drifts for someone who has not asked for less motion', () => {
+  const moving = cssRules().filter((rule) => /\.side-art\b/.test(rule.selector) &&
+    Object.keys(valuesIn(rule)).some((name) => name === 'animation' || name.startsWith('animation-')))
+  assert.ok(moving.length, 'nothing animates the picture any more - if the drift was dropped on purpose, drop this test with it')
+  for (const rule of moving) {
+    assert.match(rule.condition, /prefers-reduced-motion:\s*no-preference/,
+      `${rule.selector} animates for someone whose phone asks for reduced motion`)
+  }
+})
+
+test('the top bar holds the title, the way out and the switch, and is sticky on a wide screen only', () => {
+  const bar = /<header class="topbar"[^>]*>([\s\S]*?)<\/header>/.exec(html)?.[1]
+  assert.ok(bar, 'there is no top bar')
+  for (const id of ['screen-title', 'repo-link', 'fresh', 'jump-run', 'theme-switch']) {
+    assert.match(bar, new RegExp(`id="${id}"`), `#${id} is not in the top bar`)
+  }
+  assert.match(bar, /href="https:\/\/claude\.ai\/code"[^>]*>[\s\S]*?Talk to your team/, 'Talk to your team is not in the top bar')
+  assert.equal((html.match(/Talk to your team</g) ?? []).length, 1, 'Talk to your team is drawn more than once')
+
+  // On a phone the tab rows are already fixed to the top; a sticky bar under them would hold a
+  // third of a small screen on every scroll.
+  const sticky = (rule) => valuesIn(rule).position === 'sticky'
+  assert.deepEqual(exactRules('.topbar').filter((rule) => !rule.inMedia && sticky(rule)).map((rule) => rule.selector), [],
+    'the top bar is sticky on a phone too')
+  const wide = exactRules('.topbar').filter((rule) => rule.inMedia && WIDE.test(rule.condition) && sticky(rule))
+  assert.ok(wide.length, 'the top bar does not stay in reach on a wide screen')
+  assert.equal(valuesIn(wide.at(-1)).top, '0')
+})
+
+const THUMB = ['button.fire', '.small-fire', '.theme-switch', '.topbar-btn', 'a.watch', 'a.title[data-open]', '.why > summary', '.finished-tasks > summary']
+
+test('every control a thumb presses is at least 44px tall on a phone', () => {
+  // 2.75rem is 44px, the smallest target a thumb hits without aiming. Unconditional rules only: a
+  // size set inside the desktop query does not exist on the device this is about.
+  const short = []
+  for (const selector of THUMB) {
+    const declared = exactRules(selector).filter((rule) => !rule.inMedia).map(valuesIn)
+    const last = (name) => declared.map((rule) => rule[name]).filter(Boolean).at(-1)
+    const rem = (value) => Number(/^([\d.]+)rem$/.exec(value ?? '')?.[1] ?? 0)
+    const tallest = Math.max(rem(last('min-height')), rem(last('height')))
+    if (tallest < 2.75) short.push(`${selector} is ${tallest ? `${tallest}rem` : 'given no height'}`)
+  }
+  assert.deepEqual(short, [], `controls a thumb has to aim for:\n${short.join('\n')}`)
 })

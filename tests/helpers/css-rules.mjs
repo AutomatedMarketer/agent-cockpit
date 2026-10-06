@@ -40,11 +40,16 @@ export const cssRules = () => {
      the point of attacking the instrument rather than the stylesheet.
 
      So: a stack, and every conditional at-rule on it. `@layer` is deliberately not one - its
-     contents do apply. */
+     contents do apply.
+
+     `condition` is the text of every gate a rule sits behind, outermost first, joined with " && ".
+     Knowing a rule is gated is not always enough: the sidebar's picture has to wait for a tall
+     enough window as well as a wide one, and only the query's own words can say which. */
   const CONDITIONAL_AT_RULE = /^@(media|supports|container)\b/
 
   const rules = []
   const conditions = []
+  const heads = []
   let depth = 0
   let index = 0
   let selectorStart = 0
@@ -55,6 +60,7 @@ export const cssRules = () => {
       depth += 1
       if (CONDITIONAL_AT_RULE.test(head)) {
         conditions.push(depth)
+        heads.push(head.replace(/\s+/g, ' '))
       } else if (head && !head.startsWith('@')) {
         const bodyEnd = sheet.indexOf('}', index)
         rules.push({
@@ -62,12 +68,16 @@ export const cssRules = () => {
           body: sheet.slice(index + 1, bodyEnd),
           at: index,
           // "Behind a condition of some kind", not "the last @media is still open".
-          inMedia: conditions.length > 0
+          inMedia: conditions.length > 0,
+          condition: heads.join(' && ')
         })
       }
       selectorStart = index + 1
     } else if (char === '}') {
-      if (conditions.at(-1) === depth) conditions.pop()
+      if (conditions.at(-1) === depth) {
+        conditions.pop()
+        heads.pop()
+      }
       depth -= 1
       selectorStart = index + 1
     }
