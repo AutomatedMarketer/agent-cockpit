@@ -457,6 +457,11 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk, { pause =
     for (let tries = 1; tries <= SAVE_TRIES; tries += 1) {
       if (tries > 1) await pause(RETRY_PAUSE_MS.least + random() * (RETRY_PAUSE_MS.most - RETRY_PAUSE_MS.least))
       const { settings, etag } = await readSettings({ fresh: true })
+      // The freshest copy there is, so it replaces what this instance shows - also when the save
+      // is then refused. Otherwise a copy with room in it, kept while another instance spent the
+      // day, sends every change here past the cached check to a fresh read that changes nothing:
+      // one billed read per refusal instead of one per SHOWN_MS.
+      shown.set(loadSdk, { at: Date.now(), settings: structuredClone(settings) })
       const draft = structuredClone(settings)
       const next = normaliseSettings((await mutate(draft)) ?? draft)
       const text = JSON.stringify(next)

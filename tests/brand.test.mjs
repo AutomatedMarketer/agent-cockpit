@@ -375,6 +375,24 @@ test('a thousand changes refused at the cap cost no read that skips the cache', 
   assert.equal(fake.calls.put.length, puts)
 })
 
+test('when another instance used up the day, this one pays for at most one read that skips the cache', async () => {
+  // From the third review (attack4, part E): instance A remembered a copy with room in it, so
+  // every change sent to A passed the cached check, reached the save, read the file fresh, found
+  // the day spent and was refused - and that fresh read never replaced A's copy, so the next one
+  // did it all again: 1,000 refusals, 1,000 billed reads. Every fresh read now replaces the copy.
+  const fake = fakeBlob({ cdn: true })
+  const instanceA = makeHandler({ store: pictureStore(STORE_ENV, async () => fake.sdk), env: STORE_ENV, now: NOON })
+  const instanceB = makeHandler({ store: pictureStore(STORE_ENV, async () => fake.sdk), env: STORE_ENV, now: NOON })
+  const post = (handler, body) => call(handler, { method: 'POST', headers: asTheBoard(JSON_TYPE), body })
+  await post(instanceB, { change: 'assistant', value: 'Donna' })
+  await call(instanceA, { method: 'GET', headers: asTheBoard() }) // A now remembers 1 of 20 used
+  for (let i = 0; i < 19; i += 1) assert.equal((await post(instanceB, { change: 'name', slug: 'content', value: `n${i}` })).statusCode, 200)
+  const uncached = () => fake.calls.get.filter((read) => read.options.useCache === false).length
+  const before = uncached()
+  for (let i = 0; i < 1000; i += 1) assert.equal((await post(instanceA, { change: 'name', slug: 'sales', value: 'x' })).statusCode, 429)
+  assert.ok(uncached() - before <= 1, `${uncached() - before} reads skipped the cache for 1000 refusals on one instance`)
+})
+
 test('the day the cap counts is the UTC day: it starts again at midnight UTC', async () => {
   let clock = new Date('2026-10-06T23:59:00Z')
   const { post } = board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: '1' }, now: () => clock })
