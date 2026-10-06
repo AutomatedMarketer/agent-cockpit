@@ -1,0 +1,138 @@
+// /api/upload?slot=<slot>: one picture into the board's own picture store (spec 5c).
+//
+// The browser has already cropped and shrunk the picture (canvas -> webp, JPEG where webp cannot
+// be made) and sends the raw bytes as application/octet-stream. Nothing here trusts that: the
+// order of checks below is the contract, and each one refuses before anything is written.
+//
+//   write gate -> a store is connected -> the slot -> real picture bytes -> under the size
+//   budget -> allowance left today -> store the picture -> point settings.json at it -> remove
+//   the picture it replaced (best effort)
+//
+// What the picture IS comes from its bytes. The path's extension, the stored content type and
+// the pointer are all taken from sniffImage, never from a header or a query the sender typed.
+// Each picture gets a new version made here, so it is written once, never overwritten, and a
+// cached copy of it can never be the wrong picture.
+
+import { randomBytes } from 'node:crypto'
+import { writeGate, parseSlot, slotKind, PICTURE_BUDGET, sniffImage } from './lib.js'
+import {
+  pictureStore,
+  NOT_CONNECTED,
+  failureAnswer,
+  dailyCaps,
+  usageDay,
+  allowanceLeft,
+  spendAllowance
+} from './_picture-store.js'
+
+// 16 lowercase hex characters: inside the store's ^[a-z0-9]{8,32}$, and 64 random bits, so two
+// uploads never meet on one path.
+export const newVersion = () => randomBytes(8).toString('hex')
+
+const NOT_A_PICTURE = 'That is not a picture this board accepts: send a webp, JPEG or PNG.'
+
+// The body as bytes, read no further than one byte past the limit - enough to know it is too
+// big, without holding all of something that is. Vercel hands an octet-stream body over as a
+// Buffer; a plain request stream is read here instead. Anything else (a string, nothing at all)
+// is no bytes, which sniffImage then refuses.
+async function readBytes(request, limit) {
+  const body = request?.body
+  if (body instanceof Uint8Array) return Buffer.from(body.buffer, body.byteOffset, body.byteLength)
+  if (body === undefined && typeof request?.[Symbol.asyncIterator] === 'function') {
+    const chunks = []
+    let size = 0
+    for await (const chunk of request) {
+      const part = Buffer.from(chunk)
+      chunks.push(part)
+      size += part.length
+      if (size > limit) break // leaving the loop stops the stream
+    }
+    return Buffer.concat(chunks)
+  }
+  return Buffer.alloc(0)
+}
+
+// `store` is injected by the tests; left undefined, it is built from the environment on each
+// request (null when no store is connected).
+export function makeHandler({ store, env, now = () => new Date(), loadSdk, version = newVersion } = {}) {
+  return async function handler(request, response) {
+    const environment = env ?? process.env
+    if (String(request?.method ?? 'GET').toUpperCase() !== 'POST') {
+      response.setHeader('Allow', 'POST')
+      response.status(405).json({ error: 'POST the picture\'s bytes to /api/upload?slot=<slot>.' })
+      return
+    }
+    response.setHeader('Cache-Control', 'no-store')
+
+    const denied = writeGate(request, environment, 'application/octet-stream')
+    if (denied) {
+      const { status, ...answer } = denied
+      response.status(status).json(answer)
+      return
+    }
+
+    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
+    if (!pictures) {
+      response.status(503).json({ error: NOT_CONNECTED })
+      return
+    }
+
+    const slot = parseSlot(request.query?.slot)
+    if (!slot) {
+      response.status(400).json({ error: 'slot must be "today", "team" or "agent-<slug>".' })
+      return
+    }
+
+    const kind = slotKind(slot)
+    const budget = PICTURE_BUDGET[kind]
+    const bytes = await readBytes(request, budget)
+    const type = sniffImage(bytes)
+    if (!type) {
+      response.status(415).json({ error: NOT_A_PICTURE })
+      return
+    }
+    if (bytes.length > budget) {
+      response.status(413).json({
+        error: `That picture is over the ${budget / 1024} KB limit for ${kind === 'portrait' ? 'a portrait' : 'a banner'}, so shrink it and try again.`
+      })
+      return
+    }
+
+    const caps = dailyCaps(environment)
+    const moment = now()
+    const day = usageDay(moment)
+    try {
+      // A dry run of today's allowance before the picture is stored: storing it is the costly
+      // half of an upload, so a board at its cap must not spend it only to be refused after.
+      const { settings: current } = await pictures.readSettings()
+      spendAllowance(structuredClone(current), 'writes', caps, day)
+
+      const v = version()
+      await pictures.putPicture(slot, v, bytes, type)
+
+      let replaced = null
+      let saved
+      try {
+        saved = await pictures.saveSettings((draft) => {
+          spendAllowance(draft, 'writes', caps, day)
+          replaced = draft.pictures[slot] ?? null
+          draft.pictures[slot] = { v, type, bytes: bytes.length, at: moment.toISOString() }
+        })
+      } catch (error) {
+        // Nothing points at the new picture, so it would only take up room. The old one is
+        // still the one in use, untouched.
+        await pictures.dropPicture(slot, v, type).catch(() => {})
+        throw error
+      }
+      // Only now that nothing points at it. A failed delete leaves a file nobody points at.
+      if (replaced) await pictures.dropPicture(slot, replaced.v, replaced.type).catch(() => {})
+
+      response.status(200).json({ slot, picture: { v, type }, left: allowanceLeft(saved, caps, day) })
+    } catch (error) {
+      const { status, error: sentence } = failureAnswer(error)
+      response.status(status).json({ error: sentence })
+    }
+  }
+}
+
+export default makeHandler()

@@ -1,0 +1,242 @@
+// /api/upload: one picture, already cropped and shrunk by the browser, into the picture store.
+//
+// The order is the contract: the write gate, then is there a store, then which slot, then are
+// these really picture bytes, then are they small enough, then is there allowance left today -
+// and only then a write. Each refusal below is checked to have happened before anything was
+// written, because "refused, but stored first" is the bug these tests exist to catch.
+
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { makeHandler } from '../api/upload.js'
+import { NOT_CONNECTED, SETTINGS_PATH } from '../api/_picture-store.js'
+import { PICTURE_BUDGET } from '../api/lib.js'
+import { BlobServiceNotAvailable } from './helpers/fake-blob.mjs'
+import {
+  STORE_ENV,
+  NOON,
+  webp,
+  png,
+  jpeg,
+  connectedStore,
+  storeCalls,
+  asTheBoard,
+  call
+} from './helpers/personalise-harness.mjs'
+
+const BYTES = { 'content-type': 'application/octet-stream' }
+const VERSION = /^[a-z0-9]{8,32}$/
+
+function board({ env = STORE_ENV, now = NOON } = {}) {
+  const connected = connectedStore(env)
+  const handler = makeHandler({ store: connected.store, env, now })
+  const upload = (slot, body, extra = {}) =>
+    call(handler, { method: 'POST', headers: asTheBoard(BYTES), query: { slot }, body, ...extra })
+  return { ...connected, handler, upload }
+}
+
+const picturePuts = (fake) => fake.calls.put.filter((put) => put.pathname !== SETTINGS_PATH)
+const settingsOf = (fake) => JSON.parse(fake.files.get(SETTINGS_PATH).bytes.toString('utf8'))
+
+/* ---------- the happy path ---------- */
+
+test('a portrait is stored under a version the server made, and settings.json points at it', async () => {
+  const { upload, fake } = board()
+  const bytes = webp(2048)
+  const response = await upload('agent-content', bytes)
+  assert.equal(response.statusCode, 200)
+  const { v, type } = response.body.picture
+  assert.match(v, VERSION)
+  assert.equal(type, 'image/webp')
+  assert.equal(response.body.slot, 'agent-content')
+  assert.deepEqual(response.body.left, { writes: 24, generated: 10 })
+
+  const path = `agent-cockpit/art/agent-content/${v}.webp`
+  assert.deepEqual(fake.files.get(path).bytes, bytes, 'the bytes stored are the bytes sent')
+  assert.equal(fake.files.get(path).access, 'private')
+  assert.deepEqual(settingsOf(fake).pictures['agent-content'], {
+    v,
+    type: 'image/webp',
+    bytes: 2048,
+    at: '2026-10-06T12:00:00.000Z'
+  })
+})
+
+test('a new picture gets a new path, never overwriting, and the old one is removed after', async () => {
+  const { upload, fake } = board()
+  const first = (await upload('team', jpeg(4096))).body.picture
+  const second = (await upload('team', jpeg(4096))).body.picture
+  assert.notEqual(first.v, second.v, 'a version is never reused, so a cached copy is never wrong')
+  assert.ok(picturePuts(fake).every((put) => put.options.allowOverwrite === false))
+  assert.equal(fake.files.has(`agent-cockpit/art/team/${first.v}.jpeg`), false, 'the replaced picture was left behind')
+  assert.equal(fake.files.has(`agent-cockpit/art/team/${second.v}.jpeg`), true)
+  assert.equal(settingsOf(fake).pictures.team.v, second.v)
+})
+
+test('if the old picture cannot be deleted, the upload still succeeds', async () => {
+  const { upload, fake } = board()
+  await upload('today', webp())
+  fake.failNext.del = new BlobServiceNotAvailable()
+  const response = await upload('today', webp())
+  assert.equal(response.statusCode, 200, 'a leftover file nobody points at is untidy, not a failed upload')
+})
+
+/* ---------- refusals, each before anything is written ---------- */
+
+test('a hostile slot is refused before the store is touched', async () => {
+  for (const slot of ['agent-../x', '../settings', 'agent-', 'team.webp', 'today/x', '%2e%2e', 'Team', undefined, ['team']]) {
+    const { upload, fake } = board()
+    const response = await upload(slot, webp())
+    assert.equal(response.statusCode, 400, `${JSON.stringify(slot)} was not refused`)
+    assert.equal(storeCalls(fake), 0, `${JSON.stringify(slot)} reached the store`)
+  }
+})
+
+test('bytes that are not a webp, JPEG or PNG are refused, whatever they claim to be', async () => {
+  const notPictures = {
+    gif: Buffer.from('GIF89a\x01\x00\x01\x00', 'latin1'),
+    svg: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>'),
+    html: Buffer.from('<!doctype html><script>alert(1)</script>'),
+    wave: Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVEfmt '), Buffer.alloc(16)]),
+    empty: Buffer.alloc(0)
+  }
+  for (const [name, bytes] of Object.entries(notPictures)) {
+    const { upload, fake } = board()
+    const response = await upload('agent-content', bytes)
+    assert.equal(response.statusCode, 415, `${name} was not refused`)
+    assert.match(response.body.error, /webp, JPEG or PNG/)
+    assert.equal(picturePuts(fake).length, 0, `${name} was stored`)
+  }
+})
+
+test('a portrait may be exactly 45 KB, and not one byte more', async () => {
+  const atLimit = await board().upload('agent-content', webp(PICTURE_BUDGET.portrait))
+  assert.equal(atLimit.statusCode, 200)
+
+  const { upload, fake } = board()
+  const over = await upload('agent-content', webp(PICTURE_BUDGET.portrait + 1))
+  assert.equal(over.statusCode, 413)
+  assert.match(over.body.error, /45 KB/)
+  assert.equal(picturePuts(fake).length, 0)
+})
+
+test('a banner may be exactly 100 KB, and not one byte more', async () => {
+  assert.equal((await board().upload('today', webp(PICTURE_BUDGET.banner))).statusCode, 200)
+  const over = await board().upload('team', webp(PICTURE_BUDGET.banner + 1))
+  assert.equal(over.statusCode, 413)
+  assert.match(over.body.error, /100 KB/)
+})
+
+test('with no store connected, an upload is refused with the sentence that says how to connect one', async () => {
+  const handler = makeHandler({ store: null, env: { VIEW_KEY: STORE_ENV.VIEW_KEY }, now: NOON })
+  const response = await call(handler, { method: 'POST', headers: asTheBoard(BYTES), query: { slot: 'team' }, body: webp() })
+  assert.equal(response.statusCode, 503)
+  assert.equal(response.body.error, NOT_CONNECTED)
+})
+
+test('the stored type comes from the bytes, never from what the request says it is', async () => {
+  // A PNG sent with every hint saying webp. The path, the stored content type and the pointer
+  // must all say PNG: /api/art will re-check the bytes, but nothing should disagree with them.
+  const { upload, fake } = board()
+  const response = await upload('agent-content', png(1024), {
+    query: { slot: 'agent-content', type: 'image/webp', t: 'webp' },
+    headers: asTheBoard({ ...BYTES, 'x-picture-type': 'image/webp' })
+  })
+  assert.equal(response.statusCode, 200)
+  const { v, type } = response.body.picture
+  assert.equal(type, 'image/png')
+  const [put] = picturePuts(fake)
+  assert.equal(put.pathname, `agent-cockpit/art/agent-content/${v}.png`)
+  assert.equal(put.options.contentType, 'image/png')
+  assert.equal(settingsOf(fake).pictures['agent-content'].type, 'image/png')
+})
+
+test('at the daily cap an upload is refused before the picture is stored', async () => {
+  const { upload, fake } = board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: '1' } })
+  assert.equal((await upload('team', webp())).statusCode, 200)
+  const refused = await upload('today', webp())
+  assert.equal(refused.statusCode, 429)
+  assert.match(refused.body.error, /WRITE_DAILY_CAP/)
+  assert.equal(picturePuts(fake).length, 1, 'a refused upload still spent an advanced operation on the picture')
+  assert.equal(settingsOf(fake).pictures.today, undefined)
+})
+
+test('if settings.json cannot be saved, the new picture is removed and the old one stays in use', async () => {
+  const { upload, fake } = board()
+  const old = (await upload('team', webp())).body.picture
+  const realPut = fake.sdk.put
+  fake.sdk.put = async (pathname, ...rest) => {
+    if (pathname === SETTINGS_PATH) throw new BlobServiceNotAvailable()
+    return realPut(pathname, ...rest)
+  }
+  const response = await upload('team', webp())
+  assert.equal(response.statusCode, 503)
+  assert.match(response.body.error, /not answering/)
+  const kept = [...fake.files.keys()].filter((path) => path.startsWith('agent-cockpit/art/team/'))
+  assert.deepEqual(kept, [`agent-cockpit/art/team/${old.v}.webp`], 'a picture nothing points at was left, or the old one was lost')
+  assert.equal(settingsOf(fake).pictures.team.v, old.v)
+})
+
+/* ---------- the body, however it arrives ---------- */
+
+function streamOf(bytes, chunkSize = 1000) {
+  let pulled = 0
+  const request = {
+    method: 'POST',
+    headers: asTheBoard(BYTES),
+    query: { slot: 'agent-content' },
+    pulled: () => pulled,
+    async *[Symbol.asyncIterator]() {
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        pulled += 1
+        yield bytes.subarray(offset, offset + chunkSize)
+      }
+    }
+  }
+  return request
+}
+
+test('a body that arrives as a stream is read', async () => {
+  const { handler, fake } = board()
+  const bytes = webp(5000)
+  const response = await call(handler, streamOf(bytes))
+  assert.equal(response.statusCode, 200)
+  const [put] = picturePuts(fake)
+  assert.deepEqual(fake.files.get(put.pathname).bytes, bytes)
+})
+
+test('a stream that runs past the size limit is refused without being read to the end', async () => {
+  const { handler, fake } = board()
+  const request = streamOf(webp(1024 * 1024))
+  const response = await call(handler, request)
+  assert.equal(response.statusCode, 413)
+  assert.ok(request.pulled() < 100, `read ${request.pulled()} chunks of a 1 MB body to refuse it at 45 KB`)
+  assert.equal(picturePuts(fake).length, 0)
+})
+
+test('no body at all is refused as not a picture', async () => {
+  const { upload } = board()
+  assert.equal((await upload('team', undefined)).statusCode, 415)
+  assert.equal((await upload('team', 'RIFF....WEBPVP8 ')).statusCode, 415, 'a string is not bytes')
+})
+
+/* ---------- the rest of the contract ---------- */
+
+test('only POST is answered', async () => {
+  const { handler } = board()
+  const response = await call(handler, { method: 'GET', headers: asTheBoard(), query: { slot: 'team' } })
+  assert.equal(response.statusCode, 405)
+  assert.equal(response.headers.Allow, 'POST')
+})
+
+test('an upload goes through the write gate: a JSON body type is refused before the store', async () => {
+  const { handler, fake } = board()
+  const response = await call(handler, {
+    method: 'POST',
+    headers: asTheBoard({ 'content-type': 'application/json' }),
+    query: { slot: 'team' },
+    body: webp()
+  })
+  assert.equal(response.statusCode, 415)
+  assert.match(response.body.error, /application\/octet-stream/)
+  assert.equal(storeCalls(fake), 0)
+})
