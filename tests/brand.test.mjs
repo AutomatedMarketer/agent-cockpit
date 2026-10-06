@@ -265,6 +265,52 @@ test('if the picture cannot be deleted after the pointer is gone, the reset stil
   assert.deepEqual(response.body.pictures, {})
 })
 
+test('renaming day after day can never grow settings.json past what it can hold, and the owner\'s names survive', async () => {
+  // From the security review (overflow.mjs): long slugs and long emoji names, within the daily
+  // cap, over a fortnight - until settings.json passed 64 KB, read back as the defaults, and the
+  // next change wiped the assistant's name and every name with it.
+  const { fake, store } = connectedStore()
+  let day = 0
+  const now = () => new Date(Date.UTC(2026, 9, 6 + day, 12))
+  const handler = makeHandler({ store, env: STORE_ENV, now })
+  const post = (body) => call(handler, { method: 'POST', headers: asTheBoard(JSON_TYPE), body })
+  await post({ change: 'assistant', value: 'Donna' })
+  await post({ change: 'name', slug: 'content', value: 'Penny' })
+  let refused = null
+  for (let i = 0; i < 400 && !refused; i += 1) {
+    const slug = `${'x'.repeat(96)}${String(i).padStart(4, '0')}`
+    const answer = await post({ change: 'name', slug, value: '\u{1F600}'.repeat(20) })
+    if (answer.statusCode === 429) {
+      day += 1
+      i -= 1
+    } else if (answer.statusCode !== 200) refused = answer
+  }
+  assert.ok(refused, 'four hundred names were all accepted')
+  assert.equal(refused.statusCode, 413)
+  assert.match(refused.body.error, /64 agents/)
+  assert.ok(fake.files.get(SETTINGS_PATH).bytes.length <= 64 * 1024, 'settings.json grew past what it can read back')
+  const shown = (await call(handler, { method: 'GET', headers: asTheBoard() })).body
+  assert.equal(shown.enabled, true)
+  assert.equal(shown.assistantName, 'Donna', 'the assistant\'s name was lost')
+  assert.equal(shown.names.content, 'Penny', 'the owner\'s names were lost')
+  assert.equal((await post({ change: 'name', slug: 'content', value: 'Pen' })).statusCode, 200, 'renaming an agent already named was refused')
+})
+
+test('a damaged settings file turns personalising off with a sentence saying what to do, and is left alone', async () => {
+  const { get, post, fake } = board()
+  await fake.sdk.put(SETTINGS_PATH, '{ "names": { "content": "Pen', { access: 'private', allowOverwrite: false })
+  const before = fake.files.get(SETTINGS_PATH).bytes
+  const shown = await get()
+  assert.equal(shown.statusCode, 200)
+  assert.equal(shown.body.enabled, false)
+  assert.equal(shown.body.fault, true, 'the page cannot tell a broken store from one never connected')
+  assert.match(shown.body.why, /settings/)
+  assert.match(shown.body.why, /delete/)
+  const change = await post({ change: 'assistant', value: 'Donna' })
+  assert.equal(change.statusCode, 502)
+  assert.deepEqual(fake.files.get(SETTINGS_PATH).bytes, before, 'a change wrote the defaults over the file')
+})
+
 /* ---------- the daily cap ---------- */
 
 test('changes stop at the daily cap with a sentence, and nothing is written past it', async () => {

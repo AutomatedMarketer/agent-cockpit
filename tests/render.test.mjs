@@ -4355,6 +4355,31 @@ test('with personalising off, Make it yours opens straight under the banner to t
   assert.equal(button.attributes['aria-expanded'], 'false')
 })
 
+test('with a store that is connected but broken, Make it yours shows the server\'s sentence, not how to switch it on', async () => {
+  // Switching it on is not the fix for a damaged settings file or a public store, and saying so
+  // would send the owner round in circles. The server says which it is; the page shows that.
+  const said = 'The board\'s settings file in the picture store is damaged, so delete it <b>now</b>.'
+  const placed = []
+  const banner = { insertAdjacentHTML: (where, markup) => { placed.push(markup) } }
+  for (const [answer, expected] of [
+    [{ enabled: false, fault: true, why: said }, 'The board&#39;s settings file in the picture store is damaged, so delete it &lt;b&gt;now&lt;/b&gt;.'],
+    [{ enabled: false, why: said }, 'Private Blob store']
+  ]) {
+    placed.length = 0
+    const browser = writingBrowser({ brand: answer })
+    const nodes = render(pinnedPayload, {
+      fetch: browser.fetch, storage: keyStorage(VIEW_ONLY),
+      find: (id, selector) => (id !== 'team' ? undefined : selector === '.team-banner' ? banner : undefined),
+      expose: ['toggleBrandPanel']
+    })
+    await flush()
+    nodes.exposed.toggleBrandPanel({ setAttribute() {} })
+    assert.equal(placed.length, 1)
+    assert.ok(placed[0].includes(expected), `the panel says: ${placed[0]}`)
+    assert.ok(!/<(form|input|button|textarea)\b/.test(placed[0]), 'the panel offers controls that cannot work')
+  }
+})
+
 test('with personalising on, nothing drawn above the first agent card names an agent or says "content"', () => {
   // The older Team tests find a card by the first place its slug appears, and the template has an
   // agent called content. Everything personalising draws above the cards - the banner's buttons, its

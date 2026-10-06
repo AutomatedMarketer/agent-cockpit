@@ -30,10 +30,31 @@ const VERSION_SHAPE = /^[a-z0-9]{8,32}$/
 const TYPE_EXTENSION = { 'image/webp': 'webp', 'image/jpeg': 'jpeg', 'image/png': 'png' }
 
 const SETTINGS_MAX_BYTES = 64 * 1024
+// How many agents the board keeps a name and a portrait for. A bound on entries rather than a
+// check against the team: refusing a name for an agent that is not in the team would mean
+// reading the team repo on every rename, so renaming would fail whenever GitHub does - and a
+// name for an agent since removed is harmless. At their longest (100-character slugs, 40-unit
+// names that JSON writes as escapes), 64 names and 66 pictures are still under half of
+// SETTINGS_MAX_BYTES, so the file can never outgrow what a read takes in.
+const MAX_NAMED_AGENTS = 64
+const MAX_PICTURES = MAX_NAMED_AGENTS + 2 // and the Today and Team banners
 // A banner's budget is 100 KB; a little headroom, and nothing like room for something else.
 const PICTURE_MAX_BYTES = 110 * 1024
 const SAVE_TRIES = 3
 const YEAR_SECONDS = 365 * 24 * 60 * 60
+
+// A settings file the board cannot read is never read as the defaults: the next save would then
+// write the defaults over it, and every name, the style and every picture pointer would be gone.
+const SETTINGS_DAMAGED =
+  'The board\'s settings file in the picture store is damaged or too big, so nothing was changed: to ' +
+  'start again from the defaults, delete agent-cockpit/settings.json in the store (Vercel, Storage).'
+const TOO_MANY_NAMES =
+  `This board keeps names for up to ${MAX_NAMED_AGENTS} agents, so clear a name you no longer use, then try again.`
+const TOO_MANY_PICTURES =
+  `This board keeps pictures for up to ${MAX_NAMED_AGENTS} agents and the two banners, so put one ` +
+  'you no longer use back to its default, then try again.'
+const TOO_BIG =
+  'That change would make the board\'s settings too big to save, so shorten the art style or clear some names, then try again.'
 
 export const NOT_CONNECTED =
   'No picture store is connected: in Vercel, create a Private Blob store for this project, then redeploy.'
@@ -319,15 +340,27 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
     if (!found || found.statusCode !== 200 || !found.stream) return { settings: emptySettings(), etag: null }
     const etag = found.blob?.etag || null
     const text = await readCapped(found.stream, SETTINGS_MAX_BYTES)
-    // A damaged or oversized file reads as the defaults, but keeps its etag: the next save then
-    // replaces it with ifMatch instead of failing to create a file that is already there.
     let parsed = null
     try {
       parsed = text ? JSON.parse(text.toString('utf8')) : null
     } catch {
       parsed = null
     }
+    // Too big, not JSON, or JSON the board never writes: an error, so no save is built on it.
+    // (Entries inside a good file that the board could not have written are still dropped one by
+    // one, by normaliseSettings.)
+    if (!plainObject(parsed)) throw new PictureStoreError(502, SETTINGS_DAMAGED)
     return { settings: normaliseSettings(parsed), etag }
+  }
+
+  // What is about to be saved, held to what the board can read back. A count is only refused
+  // when it grows, so a file that is somehow over one can still be cleared down.
+  function refuseIfTooBig(next, current, text) {
+    const grew = (key, limit) => Object.keys(next[key]).length > limit &&
+      Object.keys(next[key]).length > Object.keys(current[key]).length
+    if (grew('names', MAX_NAMED_AGENTS)) throw new PictureStoreError(413, TOO_MANY_NAMES)
+    if (grew('pictures', MAX_PICTURES)) throw new PictureStoreError(413, TOO_MANY_PICTURES)
+    if (Buffer.byteLength(text, 'utf8') > SETTINGS_MAX_BYTES) throw new PictureStoreError(413, TOO_BIG)
   }
 
   // `mutate` gets a copy of the current settings and returns the new ones (or changes the copy
@@ -342,12 +375,14 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
       const { settings, etag } = await readSettings({ fresh: true })
       const draft = structuredClone(settings)
       const next = normaliseSettings((await mutate(draft)) ?? draft)
+      const text = JSON.stringify(next)
+      refuseIfTooBig(next, settings, text)
       // First save creates the file and must not replace one that appeared meanwhile; every save
       // after that replaces it only if it is still the version this one read.
       const guard = etag ? { allowOverwrite: true, ifMatch: etag } : { allowOverwrite: false }
       const blob = await sdk()
       try {
-        await blob.put(SETTINGS_PATH, JSON.stringify(next), {
+        await blob.put(SETTINGS_PATH, text, {
           access: 'private',
           contentType: 'application/json',
           addRandomSuffix: false,

@@ -3342,6 +3342,7 @@ const isArtPicture = (picture) => Boolean(picture) && typeof picture.v === 'stri
 const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
 let brand = null
+let brandFault = ''
 // slot -> { v, url } once a picture is in hand, or { v, failed: true } once fetching it failed.
 // A slot the brand lists with no entry here, or an entry for another version, is on its way.
 const artUrls = new Map()
@@ -3388,6 +3389,9 @@ function holdArt(slot, entry) {
 // go of here; the new version is fetched when its screen asks.
 function useBrand(answer) {
   brand = parseBrand(answer)
+  // Off because the store is connected but failing - a damaged settings file, a public store - the
+  // server's sentence is the one to show: "connect a store" would send the owner round in circles.
+  brandFault = !brand && isRecord(answer) && answer.fault === true && typeof answer.why === 'string' ? answer.why : ''
   for (const [slot, held] of artUrls) {
     if (storePicture(slot)?.v !== held.v) holdArt(slot, null)
   }
@@ -3753,7 +3757,7 @@ function personaliseHtml(agent) {
 // art style every picture made from words follows. It is drawn above every card, so nothing in it
 // may name an agent.
 function brandPanelHtml() {
-  if (!brand) return `<div class="panel brand-panel" id="brand-panel"><p class="small">${SWITCH_ON}</p></div>`
+  if (!brand) return `<div class="panel brand-panel" id="brand-panel"><p class="small">${brandFault ? escapeHtml(brandFault) : SWITCH_ON}</p></div>`
   return `<div class="panel brand-panel" id="brand-panel">
     <p class="eyebrow">Make it yours</p>
     <p class="small muted">Rename an agent or change its picture from its own card below. Each banner has a Personalise button for its picture.</p>

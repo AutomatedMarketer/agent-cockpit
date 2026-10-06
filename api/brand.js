@@ -63,8 +63,10 @@ function brandView(settings, { env, caps, day }) {
 }
 
 // Personalising off, with the reason. Same shape as on, so the page has one thing to read.
-function offView(why, context) {
-  return { ...brandView(emptySettings(), context), enabled: false, canGenerate: false, why }
+// `fault` marks a store that is connected but failing (a damaged settings file, a public store):
+// the page shows that sentence, because "connect a store" would not be the fix.
+function offView(why, context, fault = false) {
+  return { ...brandView(emptySettings(), context), enabled: false, canGenerate: false, why, ...(fault ? { fault: true } : {}) }
 }
 
 // A value that is missing, null or only spaces means "back to the default", returned as ''.
@@ -156,7 +158,7 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
       } catch (error) {
         // A store that will not answer turns personalising off with its reason - the board's
         // built-in pictures and slugs still show, which is what "off" looks like.
-        response.status(200).json(offView(failureAnswer(error).error, context))
+        response.status(200).json(offView(failureAnswer(error).error, context, true))
       }
       return
     }

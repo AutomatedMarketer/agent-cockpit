@@ -208,17 +208,66 @@ test('a refusal thrown by the change itself is passed through untouched, and not
   assert.equal(fake.calls.put.length, 0)
 })
 
-test('a damaged settings file reads as the defaults, and the next save repairs it', async () => {
+test('a settings file that is damaged or too big is an error, never the defaults, and no save replaces it', async () => {
+  // From the security review: a file over 64 KB used to read as the defaults, and the next save
+  // then wrote those defaults over it - every name, the style and every picture pointer, gone
+  // without a word. Now it is a sentence that says what is wrong and what to do, and the file is
+  // left exactly as it is for the owner to deal with.
+  const damaged = ['{ not json', 'null', '[]', '"a string"', JSON.stringify({ ...emptySettings(), artStyle: 'x'.repeat(64 * 1024) })]
+  for (const text of damaged) {
+    const { fake, store } = connected()
+    await fake.sdk.put(SETTINGS_PATH, text, { access: 'private', allowOverwrite: false })
+    const before = fake.files.get(SETTINGS_PATH).bytes
+    const puts = fake.calls.put.length
+    const label = text.slice(0, 20)
+    await assert.rejects(store.readSettings(), (error) => {
+      assert.equal(error.status, 502, label)
+      assert.match(error.message, /settings/, label)
+      assert.match(error.message, /delete/, `${label}: the sentence does not say what to do`)
+      return true
+    })
+    await assert.rejects(store.saveSettings((draft) => { draft.names.content = 'Penny' }), /settings/)
+    assert.equal(fake.calls.put.length, puts, `${label}: a save wrote over the file`)
+    assert.deepEqual(fake.files.get(SETTINGS_PATH).bytes, before, `${label}: the file changed`)
+  }
+})
+
+test('a save that would make settings.json too big to read back is refused, and nothing is written', async () => {
   const { fake, store } = connected()
-  await fake.sdk.put(SETTINGS_PATH, '{ not json', { access: 'private', allowOverwrite: false })
-  const { settings, etag } = await store.readSettings()
-  assert.deepEqual(settings, emptySettings())
-  assert.ok(etag, 'the etag is kept, so the repair is a conditional overwrite rather than a failed create')
-  await store.saveSettings((draft) => {
-    draft.names.content = 'Penny'
-    return draft
+  await store.saveSettings((draft) => { draft.names.content = 'Penny' })
+  const puts = fake.calls.put.length
+  await assert.rejects(store.saveSettings((draft) => { draft.artStyle = 'x'.repeat(70 * 1024) }), (error) => {
+    assert.equal(error.status, 413)
+    assert.match(error.message, /too big/)
+    return true
   })
+  assert.equal(fake.calls.put.length, puts)
   assert.equal((await store.readSettings()).settings.names.content, 'Penny')
+})
+
+test('the board keeps names for up to 64 agents, and pictures for those and the two banners', async () => {
+  // A cap on entries, not a lookup of the team: a name can only be refused for an agent that is
+  // not there by reading the team repo on every rename, which would make renaming fail whenever
+  // GitHub does. 64 names and 66 pictures, at their longest, are still under half of 64 KB.
+  const { fake, store } = connected()
+  const slug = (i) => `${'a'.repeat(96)}${String(i).padStart(4, '0')}`
+  await store.saveSettings((draft) => {
+    for (let i = 0; i < 64; i += 1) draft.names[slug(i)] = '\u{1F600}'.repeat(20)
+    for (let i = 0; i < 64; i += 1) draft.pictures[`agent-${slug(i)}`] = { v: 'abcdefgh1234', type: 'image/jpeg', bytes: 99999, at: '2026-10-06T12:00:00.000Z' }
+    draft.pictures.today = { v: 'abcdefgh1234', type: 'image/webp', bytes: 1, at: '' }
+    draft.pictures.team = { v: 'abcdefgh1234', type: 'image/webp', bytes: 1, at: '' }
+  })
+  assert.ok(fake.files.get(SETTINGS_PATH).bytes.length < 32 * 1024, 'the most the board keeps does not fit comfortably')
+  await assert.rejects(store.saveSettings((draft) => { draft.names.another = 'One more' }), (error) => {
+    assert.equal(error.status, 413)
+    assert.match(error.message, /64/)
+    return true
+  })
+  await assert.rejects(store.saveSettings((draft) => { draft.pictures['agent-another'] = { v: 'abcdefgh1234', type: 'image/webp', bytes: 1, at: '' } }), /64/)
+  // Renaming an agent that already has a name, and clearing one, are never refused.
+  await store.saveSettings((draft) => { draft.names[slug(0)] = 'Penny' })
+  await store.saveSettings((draft) => { delete draft.names[slug(1)] })
+  assert.equal(Object.keys((await store.readSettings()).settings.names).length, 63)
 })
 
 test('settings entries that could not have been written by the board are dropped on read', async () => {
