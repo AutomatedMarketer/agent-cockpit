@@ -199,15 +199,9 @@ test('if the picture cannot be stored, the slot points at the old picture again,
   assert.equal(settings.usage.writes, 2, 'the failed attempt was not counted')
 })
 
-test('two hundred uploads at once store no more pictures than the day allows', async () => {
-  // From the security review: the allowance used to be checked on a copy, then the picture
-  // stored, then the change counted - so uploads arriving together all passed the check and
-  // all stored a picture (200 pictures against a cap of 25). Each picture is an advanced
-  // operation, 2,000 a month on Hobby, and going over locks the store for 30 days.
-  //
-  // Four stores over one fake, as four function instances over one Blob store would be, each
-  // call held up a little at random so the requests interleave the way real ones do.
-  const fake = fakeBlob()
+// The fake's SDK with every call held up a little at random, so requests made together
+// interleave the way real ones do.
+function jittery(fake) {
   const sdk = { ...fake.sdk }
   for (const method of ['get', 'put', 'del']) {
     sdk[method] = async (...args) => {
@@ -215,6 +209,18 @@ test('two hundred uploads at once store no more pictures than the day allows', a
       return fake.sdk[method](...args)
     }
   }
+  return sdk
+}
+
+test('two hundred uploads at once store no more pictures than the day allows', async () => {
+  // From the security review: the allowance used to be checked on a copy, then the picture
+  // stored, then the change counted - so uploads arriving together all passed the check and
+  // all stored a picture (200 pictures against a cap of 25). Each picture is an advanced
+  // operation, 2,000 a month on Hobby, and going over locks the store for 30 days.
+  //
+  // Four stores over one fake, as four function instances over one Blob store would be.
+  const fake = fakeBlob()
+  const sdk = jittery(fake)
   const env = { ...STORE_ENV, WRITE_DAILY_CAP: '25' }
   const handlers = Array.from({ length: 4 }, () => makeHandler({ store: pictureStore(env, async () => sdk), env, now: NOON }))
   const N = 200
@@ -230,6 +236,21 @@ test('two hundred uploads at once store no more pictures than the day allows', a
   // Each request may try its settings write three times when it collides; never more, and no
   // picture on top of that unless it was counted.
   assert.ok(fake.calls.put.length <= 3 * N + 25, `${fake.calls.put.length} writes for ${N} uploads`)
+})
+
+test('a burst of uploads to one instance spends no writes on settings saves that collide', async () => {
+  // Every put is an advanced operation, the failed ifMatch ones included. Saves made at the same
+  // moment by one function instance take turns, so two hundred uploads there cost the 25 counted
+  // changes and their 25 pictures - not three colliding settings writes each (the review measured
+  // 593 of them for one burst before the turns).
+  const fake = fakeBlob()
+  const env = { ...STORE_ENV, WRITE_DAILY_CAP: '25' }
+  const handler = makeHandler({ store: pictureStore(env, async () => jittery(fake)), env, now: NOON })
+  const results = await Promise.all(Array.from({ length: 200 }, () =>
+    call(handler, { method: 'POST', headers: asTheBoard(BYTES), query: { slot: 'today' }, body: webp(2000) })))
+  assert.equal(results.filter((result) => result.statusCode === 200).length, 25)
+  assert.ok(results.every((result) => [200, 429].includes(result.statusCode)), 'an upload failed some other way')
+  assert.equal(fake.calls.put.length, 50, 'writes were spent on saves that collided')
 })
 
 /* ---------- the body, however it arrives ---------- */

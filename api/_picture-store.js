@@ -231,6 +231,26 @@ export function spendAllowance(settings, kind, caps, day) {
 
 const loadRealSdk = () => import('@vercel/blob')
 
+// Saves made at the same moment by one function instance take turns. Each try of a save is a
+// put, and every put is an advanced operation - the ones ifMatch refuses included - so saves
+// that collide spend the month's 2,000 on nothing: one burst of 200 uploads cost 593 settings
+// writes before this. In turn, each save reads the file the one before it wrote and never
+// collides. Saves from other instances still can, and ifMatch keeps both changes safe there.
+//
+// A store call can hang for minutes, so a save waits for the one before it for TURN_WAIT_MS at
+// most and then goes ahead anyway. Turns are kept per SDK loader: in production that is
+// loadRealSdk, one per instance; each test store passes its own, and so is its own instance.
+const TURN_WAIT_MS = 10_000
+const turns = new WeakMap()
+
+function takeTurn(key, work) {
+  const before = turns.get(key) ?? Promise.resolve()
+  const mine = before.then(() => work())
+  const giveUp = () => new Promise((resolve) => setTimeout(resolve, TURN_WAIT_MS).unref?.())
+  turns.set(key, before.then(() => Promise.race([mine.then(() => {}, () => {}), giveUp()])))
+  return mine
+}
+
 // Returns null when no store is connected - callers answer with NOT_CONNECTED. `loadSdk` is
 // injectable so the tests hand in an in-memory fake; in production it is the lazy import above.
 export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
@@ -281,8 +301,11 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
   // `mutate` gets a copy of the current settings and returns the new ones (or changes the copy
   // in place). It is run again on every retry against the latest file, so a change made by
   // someone else in between is built on, never thrown away. Anything `mutate` throws - a daily
-  // cap, a refusal - passes straight through and nothing is written.
-  async function saveSettings(mutate) {
+  // cap, a refusal - passes straight through and nothing is written. A save waits its turn behind
+  // any other this instance is making (takeTurn, above), so `mutate` must not save itself.
+  const saveSettings = (mutate) => takeTurn(loadSdk, () => saveNow(mutate))
+
+  async function saveNow(mutate) {
     for (let tries = 1; tries <= SAVE_TRIES; tries += 1) {
       const { settings, etag } = await readSettings({ fresh: true })
       const draft = structuredClone(settings)

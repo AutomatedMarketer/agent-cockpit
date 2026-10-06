@@ -27,7 +27,10 @@ function connected() {
     loads += 1
     return fake.sdk
   })
-  return { fake, store, loads: () => loads }
+  // The same Blob store as seen from another function instance: its saves do not wait for this
+  // one's, so it is how a test makes "someone else saved at the same moment".
+  const elsewhere = pictureStore(STORE, async () => fake.sdk)
+  return { fake, store, elsewhere, loads: () => loads }
 }
 
 /* ---------- connected or not ---------- */
@@ -106,13 +109,13 @@ test('a saved change is there on the next read', async () => {
 test('two changes saved at the same moment both survive', async () => {
   // A reads, then - before A writes - B reads, changes and writes. A's write must not land on
   // top of B's: it is refused by ifMatch, A re-reads, and A's change is applied to B's result.
-  const { fake, store } = connected()
+  const { fake, store, elsewhere } = connected()
   await store.saveSettings((settings) => settings) // the file exists, so both writers hit ifMatch
   let interrupted = false
   await store.saveSettings(async (settings) => {
     if (!interrupted) {
       interrupted = true
-      await store.saveSettings((other) => {
+      await elsewhere.saveSettings((other) => {
         other.names.sales = 'Sam'
         return other
       })
@@ -128,12 +131,12 @@ test('two changes saved at the same moment both survive', async () => {
 test('two first-ever saves at the same moment both survive', async () => {
   // Nothing in the store yet. The first save creates the file with allowOverwrite: false, so a
   // second creator racing it is refused rather than replacing it - and then retries as an update.
-  const { store } = connected()
+  const { store, elsewhere } = connected()
   let interrupted = false
   await store.saveSettings(async (settings) => {
     if (!interrupted) {
       interrupted = true
-      await store.saveSettings((other) => {
+      await elsewhere.saveSettings((other) => {
         other.artStyle = 'Watercolour animals.'
         return other
       })
@@ -147,14 +150,14 @@ test('two first-ever saves at the same moment both survive', async () => {
 })
 
 test('a save that keeps colliding gives up after three tries, with a sentence', async () => {
-  const { fake, store } = connected()
+  const { fake, store, elsewhere } = connected()
   await store.saveSettings((settings) => settings)
   const before = fake.calls.put.length
   let counter = 0
   await assert.rejects(
     store.saveSettings(async (settings) => {
       counter += 1
-      await store.saveSettings((other) => {
+      await elsewhere.saveSettings((other) => {
         other.names[`agent${counter}`] = 'Other'
         return other
       })
@@ -169,6 +172,29 @@ test('a save that keeps colliding gives up after three tries, with a sentence', 
   )
   const mine = fake.calls.put.slice(before).filter((call, index) => index % 2 === 1)
   assert.equal(mine.length, 3, 'exactly three attempts of its own, not one more')
+})
+
+test('saves take turns, but one that hangs holds the others up for ten seconds at most', async (t) => {
+  // Saves made together by one function instance wait for each other, so they never spend an
+  // advanced operation colliding. A store call can hang for minutes, so the wait is bounded: after
+  // ten seconds the next save goes ahead anyway (and ifMatch still keeps both changes safe).
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const fake = fakeBlob()
+  let hang = true
+  const sdk = { ...fake.sdk, put: (...args) => (hang ? new Promise(() => {}) : fake.sdk.put(...args)) }
+  const store = pictureStore(STORE, async () => sdk)
+  store.saveSettings((draft) => { draft.names.content = 'Stuck' })
+  for (let i = 0; i < 20; i += 1) await Promise.resolve()
+  hang = false
+  let second = false
+  const done = store.saveSettings((draft) => { draft.names.sales = 'Sam' }).then(() => { second = true })
+  for (let i = 0; i < 20; i += 1) await Promise.resolve()
+  assert.equal(second, false, 'a save did not wait its turn')
+  t.mock.timers.tick(10_000)
+  for (let i = 0; i < 20 && !second; i += 1) await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(second, true, 'a save that hung held the next one up for good')
+  await done
+  assert.equal(fake.files.has(SETTINGS_PATH), true)
 })
 
 test('a refusal thrown by the change itself is passed through untouched, and nothing is written', async () => {
