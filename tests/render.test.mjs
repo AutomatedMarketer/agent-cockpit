@@ -33,7 +33,9 @@ function render(payload, options = {}) {
         attributes: {},
         setAttribute(name, value) { this.attributes[name] = String(value) },
         removeAttribute(name) { delete this.attributes[name] },
-        querySelectorAll: () => [],
+        // `options.select(id, selector)` hands back stand-in elements for one query, so a test can
+        // reach a handler the page binds to elements it finds inside a screen. Unanswered, nothing.
+        querySelectorAll: (selector) => options.select?.(id, selector) ?? [],
         querySelector: () => null,
         listeners: {},
         addEventListener(type, handler) { (this.listeners[type] ??= []).push(handler) },
@@ -633,6 +635,31 @@ test('a row in the list is wired to scroll, not to navigate by hash', () => {
   assert.match(wiring.slice(0, 400), /scrollIntoView/, 'the row click no longer scrolls to the card')
 })
 
+test('a row in the list glides to its card only for someone who has not asked for less motion', () => {
+  // A smooth scroll is a movement across the whole screen, and it ignored the phone's own setting:
+  // every other movement on the board stops under reduced motion and this one did not.
+  const payload = {
+    ...base,
+    routines: { ...base.routines, usable: true, stale: false, known: true, count: 1, takenAt: new Date().toISOString() },
+    workflows: [workflow({ slug: 'morning-intel', name: 'Morning Intel', schedule: 'daily 06:30', arm: 'armed', armed: true })]
+  }
+  const tap = (media) => {
+    const row = { dataset: { job: 'morning-intel' }, listeners: {}, addEventListener(type, handler) { (this.listeners[type] ??= []).push(handler) } }
+    const nodes = render(payload, { hash: '#workflows', media, select: (id, selector) => (id === 'workflows' && selector === '[data-job]' ? [row] : []) })
+    const handlers = row.listeners.click ?? []
+    assert.ok(handlers.length, 'nothing listens for a tap on the row')
+    let cancelled = false
+    handlers.at(-1)({ preventDefault() { cancelled = true } })
+    assert.ok(cancelled, 'the tap followed the href, and the router sends an unknown hash to Today')
+    const how = nodes.get('job-morning-intel').scrolledIntoView
+    assert.ok(how, 'the tap did not scroll to the card')
+    return how
+  }
+  assert.equal(tap({}).behavior, 'smooth', 'the glide is gone for everyone, not only for those who asked')
+  assert.notEqual(tap({ '(prefers-reduced-motion: reduce)': true }).behavior, 'smooth',
+    'the jump glides across the screen for someone whose phone asks for less motion')
+})
+
 test('jobs that do not ring are counted rather than silently dropped', () => {
   const drawn = render({ ...base, workflows: [workflow({ arm: 'declared', armed: true })] }).get('workflows').innerHTML
   assert.match(drawn, /nothing fires them|Nothing that rings is scheduled/)
@@ -963,6 +990,67 @@ test('an agent that has never run says so instead of inviting a tap into nothing
   assert.ok(!neverRunCard.includes('chev'), 'an agent with no runs still invited a tap')
   assert.match(nodes, /1 run logged/, 'a single run was described as "1 runs"')
   assert.ok(!/1 runs logged/.test(nodes))
+})
+
+/* The count on a card and the list inside it came from two different places. The count is every
+   run log the agent has; the list was filtered out of the feed, and the feed is only the newest
+   fifty runs across the whole team. So an agent whose work was all older than the busiest agent's
+   last fifty said "8 runs logged - tap to read them" and opened to "No runs logged yet." Reproduced
+   by review with fifty newer runs from one agent and eight older ones for another. The card now
+   reads its own newest few, sent with the agent, and says when that is not all of them. */
+
+const runOf = (agent, hoursAgo, summary) => ({
+  run_id: `${agent}-${hoursAgo}`, agent, status: 'ok', summary,
+  started_at: new Date(Date.now() - hoursAgo * 3600_000).toISOString()
+})
+// One agent's card, from its opening tag to the next one, and the drawer inside it.
+const cardFor = (drawn, slug) => drawn.split('<details class="agent-card').find((card) => card.includes(`class="title">${slug}<`)) ?? ''
+const drawerOf = (card) => card.split('<div class="agent-runs">')[1] ?? ''
+
+test('an agent whose runs are older than the feed\'s fifty opens to its own runs, and says it is the newest few', () => {
+  const busy = Array.from({ length: 50 }, (unused, index) => runOf('email', index + 1, `Swept the inbox, pass ${index}.`))
+  const own = Array.from({ length: 8 }, (unused, index) => runOf('research', 100 + index, `Looked it up, pass ${index}.`))
+  const drawn = render({
+    ...base,
+    runs: busy,
+    totalRuns: 58,
+    agents: [
+      { slug: 'email', description: 'd', model: 'sonnet', lastRun: busy[0].started_at, lastStatus: 'ok', runsThisWeek: 50, totalRuns: 50, state: 'working', recentRuns: busy.slice(0, 5) },
+      { slug: 'research', description: 'd', model: 'sonnet', lastRun: own[0].started_at, lastStatus: 'ok', runsThisWeek: 8, totalRuns: 8, state: 'working', recentRuns: own.slice(0, 5) }
+    ]
+  }).get('team').innerHTML
+
+  const card = cardFor(drawn, 'research')
+  assert.match(card, /8 runs logged/, 'the card no longer says how many runs it has')
+  const drawer = drawerOf(card)
+  assert.ok(!drawer.includes('No runs logged yet'), 'the card counted eight runs and opened to none')
+  for (const run of own.slice(0, 5)) assert.ok(drawer.includes(run.summary), `the card is missing its own run "${run.summary}"`)
+  assert.ok(!drawer.includes('Swept the inbox'), 'another agent\'s run was drawn on this card')
+  assert.match(drawer, /newest 5 of 8/, 'the card shows five of eight runs and does not say the rest exist')
+})
+
+test('a card that holds every run of its agent does not claim there are more', () => {
+  const own = [runOf('research', 1, 'One.'), runOf('research', 2, 'Two.'), runOf('research', 3, 'Three.')]
+  const drawer = drawerOf(cardFor(render({
+    ...base,
+    runs: own,
+    agents: [{ slug: 'research', description: 'd', model: 'sonnet', lastRun: own[0].started_at, lastStatus: 'ok', runsThisWeek: 3, totalRuns: 3, state: 'working', recentRuns: own }]
+  }).get('team').innerHTML, 'research'))
+  assert.ok(['One.', 'Two.', 'Three.'].every((summary) => drawer.includes(summary)))
+  assert.ok(!/newest/.test(drawer), 'all three runs are shown and the card still said they were only the newest')
+})
+
+test('a card sent a count but no runs says so, rather than that nothing was ever logged', () => {
+  // What a page gets from a server that predates recentRuns - a cached reading during a deploy -
+  // with the reviewer's own numbers: fifty newer runs for one agent, eight older for another.
+  const busy = Array.from({ length: 50 }, (unused, index) => runOf('email', index + 1, `Swept the inbox, pass ${index}.`))
+  const drawer = drawerOf(cardFor(render({
+    ...base,
+    runs: busy,
+    agents: [{ slug: 'research', description: 'd', model: 'sonnet', lastRun: null, lastStatus: 'ok', runsThisWeek: 0, totalRuns: 8, state: 'working' }]
+  }).get('team').innerHTML, 'research'))
+  assert.ok(!drawer.includes('No runs logged yet'), 'eight runs were counted on the card and denied inside it')
+  assert.match(drawer, /8 runs are logged/, 'the drawer does not say the runs exist')
 })
 
 /* The Workflows screen ran to nearly four thousand pixels on a phone, and most of it was the same
@@ -1340,6 +1428,48 @@ test('a long folder name breaks inside its chip rather than taking the page side
       'reaches the whole document - a 69-character name measured 490px against a 390px viewport')
   assert.match(rule, /white-space:\s*normal/,
     'the base .chip rule sets nowrap, so overflow-wrap alone cannot break anything')
+})
+
+/* The same bug on the Skills screen, found by review in a browser: "Plugin · context7@claude-plugins-
+   official" is one 322px chip that cannot break, so at 320 wide the page scrolled sideways (355
+   against 305). Asked of the cascade rather than of the text: which value each property ENDS UP
+   with on an element carrying exactly the classes the page gave that chip, on a phone. */
+
+// Unconditional rules only, selectors made of nothing but classes the element has; the more classes
+// a selector names the stronger it is, and between equals the later one wins.
+const effectiveForClasses = (classes) => {
+  const won = {}
+  for (const rule of cssRules().filter((candidate) => !candidate.inMedia)) {
+    for (const selector of rule.selector.split(',').map((one) => one.trim())) {
+      if (!/^(\.[\w-]+)+$/.test(selector)) continue
+      const names = selector.slice(1).split('.')
+      if (!names.every((name) => classes.includes(name))) continue
+      for (const [property, value] of Object.entries(valuesIn(rule))) {
+        const held = won[property]
+        if (!held || names.length > held.weight || (names.length === held.weight && rule.at > held.at)) {
+          won[property] = { value, weight: names.length, at: rule.at }
+        }
+      }
+    }
+  }
+  return Object.fromEntries(Object.entries(won).map(([property, { value }]) => [property, value]))
+}
+
+test('a long plugin name breaks inside its chip rather than taking the phone sideways', () => {
+  const plugin = 'context7@claude-plugins-official'
+  const drawn = render({
+    ...base,
+    stack: [{ name: 'context7', source: 'plugin', plugin, skill: null, present: null, gives: 'Docs.', why: 'Real docs.', verify: null }]
+  }).get('skills').innerHTML
+  const chip = new RegExp(`<span class="([^"]*)">Plugin · ${plugin}</span>`).exec(drawn)
+  assert.ok(chip, 'the plugin chip is not drawn')
+
+  // A short chip keeps its look: one line, never broken mid-word.
+  assert.equal(effectiveForClasses(['chip'])['white-space'], 'nowrap', 'every chip now wraps, not only the long ones')
+  const drawnAs = effectiveForClasses(chip[1].split(/\s+/))
+  assert.equal(drawnAs['white-space'], 'normal', 'the plugin chip is held to one line, so a long name runs off the phone')
+  assert.equal(drawnAs['overflow-wrap'], 'anywhere', 'a name with no spaces in it has nowhere to break')
+  assert.equal(drawnAs['max-width'], '100%', 'nothing stops the chip being wider than the card it sits in')
 })
 
 /* This one is NOT evidence for the CSS fix above - it passes with or without it, because chip
@@ -2814,6 +2944,82 @@ test('the sidebar picture only drifts for someone who has not asked for less mot
   for (const rule of moving) {
     assert.match(rule.condition, /prefers-reduced-motion:\s*no-preference/,
       `${rule.selector} animates for someone whose phone asks for reduced motion`)
+  }
+})
+
+/* The phone's tab rows, pinned as numbers. Review changed each of these in a copy of the page - 24px
+   tabs, seven to a row, labels at 6px, the bar moved to the bottom - and the whole suite stayed
+   green, because nothing here had ever asked what size a tab IS. These read what a phone gets:
+   unconditional rules, the last one that says, with var() looked up in the unconditional :root. */
+
+const remOf = (value) => Number(/^(\d*\.?\d+)rem$/.exec(value ?? '')?.[1] ?? NaN)
+const phoneRuleSaying = (selectors, property) => cssRules().filter((rule) => !rule.inMedia &&
+  rule.selector.split(',').map((one) => one.trim()).some((one) => selectors.includes(one)) &&
+  valuesIn(rule)[property] !== undefined)
+const phoneValue = (selectors, property) => {
+  const last = phoneRuleSaying(selectors, property).at(-1)
+  return last ? valuesIn(last)[property] : undefined
+}
+const phoneToken = (name) => phoneValue([':root'], name)
+const withTokens = (value) => value?.replace(/var\((--[\w-]+)\)/g, (whole, name) => phoneToken(name) ?? whole)
+const PHONE_TAB = ['nav a', 'nav .tabs > a']
+
+test('a phone tab is as tall as a thumb needs', () => {
+  const height = withTokens(phoneValue(PHONE_TAB, 'height'))
+  assert.ok(remOf(height) >= 2.75, `a phone tab is ${height} tall - a thumb needs 2.75rem, 44px`)
+})
+
+test('a phone fits four tabs to a row, and the space kept for the nav is as tall as the rows that makes', () => {
+  const basis = phoneValue(['nav .tabs > a'], 'flex-basis') ?? phoneValue(['nav .tabs > a'], 'flex')
+  const share = Number(/(\d*\.?\d+)%/.exec(basis ?? '')?.[1])
+  assert.equal(share, 25, `a phone tab takes "${basis}" of its row, not a quarter`)
+  // Seven screens at four a row is two rows, and the page's top padding is built from --nav-h. If the
+  // two disagree, a strip of every screen sits under the tabs - the bug this nav was rebuilt for.
+  const rows = Math.ceil(tabsMarkup().match(/data-screen="/g).length / Math.floor(100 / share))
+  assert.equal(phoneToken('--nav-h').replace(/\s+/g, ' '), `calc(var(--nav-row) * ${rows})`,
+    `the tabs take ${rows} rows and the space kept for them says otherwise`)
+})
+
+test('a phone tab\'s name is no smaller than the smallest words on the board', () => {
+  const sizes = phoneRuleSaying(PHONE_TAB, 'font-size').map((rule) => valuesIn(rule)['font-size'])
+  assert.ok(sizes.length, 'nothing sets the size of a tab\'s name')
+  for (const size of sizes) assert.ok(remOf(size) >= 0.6875, `a tab's name is ${size} - smaller than .6875rem, 11px, cannot be read`)
+})
+
+test('on a phone the tabs are pinned to the top, where the screens come first', () => {
+  const nav = Object.assign({}, ...exactRules('nav').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.equal(nav.position, 'fixed', 'the phone tabs scroll away with the page')
+  assert.equal(nav.top, '0', 'the phone tabs are not held at the top of the screen')
+  assert.equal(nav.bottom, undefined, 'the phone tabs are pinned to the bottom as well as, or instead of, the top')
+})
+
+/* Every movement in the sheet, not only the sidebar's drift. A transition is fine for most people
+   and a real problem for some - a phone set to reduce motion is the owner asking. So each one must
+   either be written to run only when nothing was asked (no-preference), or be switched off by a
+   reduce rule for the very same selector that comes after it - a media query adds no specificity,
+   so a reduce rule above the transition loses. Checked selector by selector, because a reduce block
+   that exists but names a different element switches off nothing. */
+test('nothing in the sheet moves for someone whose phone asks for less motion', () => {
+  const REDUCE = /prefers-reduced-motion:\s*reduce/
+  const familyOf = (property) => /^(transition|animation)(-|$)/.exec(property)?.[1]
+  const rules = cssRules()
+  const moving = rules.filter((rule) => !REDUCE.test(rule.condition) &&
+    Object.entries(valuesIn(rule)).some(([property, value]) => familyOf(property) && !/^none\b/.test(value)))
+  assert.ok(moving.length >= 4, `only ${moving.length} moving rules found - the sweep has stopped seeing the sheet`)
+
+  for (const rule of moving) {
+    if (/prefers-reduced-motion:\s*no-preference/.test(rule.condition)) continue
+    const families = new Set(Object.keys(valuesIn(rule)).map(familyOf).filter(Boolean))
+    for (const selector of rule.selector.split(',').map((one) => one.trim())) {
+      for (const family of families) {
+        const stilled = rules.some((reduce) => REDUCE.test(reduce.condition) && reduce.at > rule.at &&
+          reduce.selector.split(',').map((one) => one.trim()).includes(selector) &&
+          /^none\b/.test(valuesIn(reduce)[family] ?? '') &&
+          // A reduce rule that also waits for a wide screen leaves the phone moving.
+          reduce.condition.split(/\s*&&\s*/).every((head) => REDUCE.test(head) ? /^@media \(prefers-reduced-motion: reduce\)$/.test(head) : rule.condition.includes(head)))
+        assert.ok(stilled, `${selector} keeps its ${family} for someone whose phone asks for less motion`)
+      }
+    }
   }
 })
 

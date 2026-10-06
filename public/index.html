@@ -205,6 +205,12 @@
     color: color-mix(in srgb, var(--agent), var(--ink) var(--agent-ink));
     border: 1px solid color-mix(in srgb, var(--agent), var(--ink) var(--agent-ink));
   }
+  /* A chip holding a name read from the repo, which has no length limit. "Plugin ·
+     context7@claude-plugins-official" is 322px with no space to break at, so at 320 wide the Skills
+     screen scrolled sideways. This one may wrap, and break inside a word when it has to; a short
+     chip keeps the base rule's single line. `anywhere` rather than `break-word`, because the text
+     inside an inline-flex chip is a flex item of its own and only `anywhere` lets it shrink. */
+  .chip.wraps { white-space: normal; overflow-wrap: anywhere; max-width: 100%; }
   .dot { width: .55rem; height: .55rem; border-radius: 50%; display: inline-block; flex: none; background: var(--muted); }
   .working .dot, .live .dot { background: var(--ok); }
   .quiet .dot, .attention .dot, .silent .dot { background: var(--warn); }
@@ -1997,13 +2003,27 @@ function renderTeam() {
     return
   }
   const cards = data.agents.map((agent) => {
-    const mine = data.runs.filter((run) => run.agent === agent.slug).slice(0, 5)
+    // The agent's OWN newest runs, sent with it. Filtering the feed is what made a card count eight
+    // runs and open to "No runs logged yet": the feed is the newest fifty across the whole team, so
+    // a quiet agent's work fell out of it while its count did not. The feed stays only as a fallback
+    // for a reading from a server that does not send them yet - a cached one during a deploy.
+    const mine = (agent.recentRuns ?? data.runs.filter((run) => run.agent === agent.slug)).slice(0, 5)
     const runRows = mine.map((run) =>
       `<div class="run"><div class="row between">
         <span class="small">${escapeHtml(run.summary ?? '')}</span>
         <span class="small muted">${escapeHtml(ago(run.started_at))}${run.session_url ? ` &middot; <a class="watch" href="${escapeHtml(run.session_url)}" rel="noreferrer noopener">watch</a>` : ''}</span>
       </div></div>`
     ).join('')
+    // The drawer never contradicts the count on the card above it. Fewer rows than runs says so; no
+    // rows at all for an agent with runs says the page was not sent them, never that none exist.
+    const total = agent.totalRuns ?? mine.length
+    const runsNote = !mine.length
+      ? total
+        ? `<div class="empty">${total} run${total === 1 ? ' is' : 's are'} logged, but this page was sent none of them. Reload to fetch them.</div>`
+        : '<div class="empty">No runs logged yet.</div>'
+      : mine.length < total
+      ? `<div class="run small muted">The newest ${mine.length} of ${total}. The rest are files in runs/ in your repo.</div>`
+      : ''
     // The portrait and the words are both inside the summary, so a tap anywhere on the card opens it.
     return `<details class="agent-card agent-accent ${agent.state}"${accentStyle(agent.slug)}>
       <summary>
@@ -2052,7 +2072,7 @@ function renderTeam() {
         }</span>
         </div>
       </summary>
-      <div class="agent-runs">${runRows || '<div class="empty">No runs logged yet.</div>'}</div>
+      <div class="agent-runs">${runRows}${runsNote}</div>
     </details>`
   }).join('')
   // The add form is the last tile of the grid, as in the mock-up: an agent that is not here yet.
@@ -2538,12 +2558,15 @@ function renderWorkflows() {
 
   // A row in the seven-day list scrolls to that job's card. preventDefault is the whole point:
   // this screen routes on the hash, and an unrecognised one sends the reader to Today, so the
-  // browser must not be allowed to follow the href.
+  // browser must not be allowed to follow the href. The glide is a movement across the whole
+  // screen, so a phone set to reduce motion jumps instead - asked at the tap, so a setting changed
+  // since the page loaded is the one that counts.
   el('workflows').querySelectorAll('[data-job]').forEach((row) =>
     row.addEventListener('click', (event) => {
       event.preventDefault()
       const card = document.getElementById(`job-${row.dataset.job}`)
-      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      const still = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+      if (card) card.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' })
     }))
 }
 
@@ -3120,7 +3143,7 @@ function renderSkills() {
   const stackCards = stack.map((entry) => {
     const presence = entry.source === 'repo'
       ? (entry.present ? '<span class="chip ok">Ships in this repo</span>' : '<span class="chip warn">Listed but missing from the repo</span>')
-      : `<span class="chip">Plugin · ${escapeHtml(entry.plugin ?? '')}</span>`
+      : `<span class="chip wraps">Plugin · ${escapeHtml(entry.plugin ?? '')}</span>`
     return `
     <div class="agent">
       <div class="row between">

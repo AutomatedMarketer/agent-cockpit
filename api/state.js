@@ -42,6 +42,11 @@ const KNOWLEDGE_FILES = {
   'customer-service': 'agents/customer-service/knowledge/faq.md'
 }
 const MAX_RUNS_RETURNED = 50
+// Each agent's own newest runs, sent with the agent. The Team card counted its runs from the whole
+// list and drew them from the feed above, which is the newest fifty across EVERY agent - so an
+// agent whose work was older than the busiest one's last fifty said "8 runs logged" and opened to
+// "No runs logged yet". Five is what the card has room for.
+const AGENT_RECENT_RUNS = 5
 const MAX_MEMORY_FILES = 2000
 
 function config() {
@@ -1141,6 +1146,7 @@ export default async function handler(request, response) {
         lastStatus: mine[0]?.status ?? null,
         runsThisWeek: mine.filter((run) => (daysSince(run.started_at, now) ?? 99) <= 7).length,
         totalRuns: mine.length,
+        recentRuns: mine.slice(0, AGENT_RECENT_RUNS),
         state: stateFor(mine, now, notInUse(knowledgeFor[slug])),
         // The owner's own sentence for why this one is switched off, so the card can say it. Null
         // for every agent that is not switched off - which is six of the eight, and both of the

@@ -924,3 +924,32 @@ test("activity is in the payload and is not cut at the feed's fifty", async () =
   assert.deepEqual(body.activity.runs[0], { started_at: recent, agent: 'research' })
   assert.ok(!body.activity.runs.some((entry) => entry.started_at === older))
 })
+
+test("each agent carries its own newest runs, even when the feed's fifty are all somebody else's", async () => {
+  // The Team card counted an agent's runs from the whole list and drew them from the capped feed,
+  // so an agent whose work was older than the busiest agent's last fifty counted eight and showed
+  // none. Fifty email runs inside the last hour push both fixture research runs out of the feed.
+  const busy = Array.from({ length: 50 }, (_, index) => `runs/2026-10/busy-${String(index).padStart(2, '0')}.json`)
+  const quiet = Array.from({ length: 7 }, (_, index) => `runs/2026-09/quiet-${index}.json`)
+  const { body } = await run({}, {
+    extraTree: [...busy, ...quiet].map((path) => ({ type: 'blob', path })),
+    overrideFiles: Object.fromEntries([
+      ...busy.map((path, index) => [path, JSON.stringify({ agent: 'email', started_at: isoAgo((index + 1) * 60_000), status: 'ok' })]),
+      ...quiet.map((path, index) => [path, JSON.stringify({ run_id: `quiet-${index}`, agent: 'research', started_at: isoAgo((index + 2) * 86400_000), status: 'ok' })])
+    ])
+  })
+  assert.ok(!body.runs.some((entry) => entry.agent === 'research'), 'the setup did not push research out of the feed')
+
+  const research = body.agents.find((agent) => agent.slug === 'research')
+  assert.equal(research.totalRuns, 9)
+  assert.equal(research.recentRuns.length, 5, 'an agent carries its newest five, not all of them')
+  assert.ok(research.recentRuns.every((entry) => entry.agent === 'research'), 'another agent\'s run was handed to this one')
+  // Newest first and the same shape as the feed, so the card draws them with the code it already has.
+  assert.equal(research.recentRuns[0].run_id, '2026-08-07T0700Z-research')
+  assert.equal(research.recentRuns[0].session_url, 'https://claude.ai/code/session_new')
+  assert.deepEqual(research.recentRuns.slice(1).map((entry) => entry.run_id), ['quiet-0', 'quiet-1', 'quiet-2', 'quiet-3'])
+
+  const email = body.agents.find((agent) => agent.slug === 'email')
+  assert.equal(email.recentRuns.length, 5)
+  assert.deepEqual(email.recentRuns, body.runs.slice(0, 5), 'the busiest agent\'s newest five differ from the feed\'s')
+})
