@@ -3187,3 +3187,111 @@ test('the cards are one column on a phone and a grid on a laptop, and opening on
   // A grid row stretches to its tallest item, so an opened card would pull every card beside it long.
   assert.equal(declared['align-items'], 'start', 'opening one card stretches the cards beside it')
 })
+
+/* ---------- The look, carried to every screen, and "Why?" -----------------------------------------
+   v2 moves some explanations behind a "Why?" the reader opens, so an empty screen leads with what
+   it is and what to do, and keeps the reasoning one tap away. That is only safe for reasoning. A
+   sentence about money being spent, or about something being switched on, is the warning itself,
+   and a warning behind a tap is a warning most people never read. */
+
+const WHY_BLOCK = /<details class="why">[\s\S]*?<\/details>/g
+const whyBlocks = (markup) => markup.match(WHY_BLOCK) ?? []
+// What a reader sees without opening anything: the markup with every Why? taken out, collapsed to
+// single spaces because these sentences wrap in the source.
+const outsideWhy = (markup) => markup.replace(WHY_BLOCK, ' ').replace(/\s+/g, ' ')
+const collapsed = (markup) => markup.replace(/\s+/g, ' ')
+// The reasoning is plain text, so inside a Why? it is escaped the way whyHtml escapes it.
+const escapedText = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+test('a Why? is a real disclosure that prints its text as text', () => {
+  const { whyHtml } = render(base, { expose: ['whyHtml'] }).exposed
+  const drawn = whyHtml('Because <b>this</b> & "that" <img src=x onerror=alert(1)>')
+  assert.match(drawn, /^<details class="why"><summary>Why\?<\/summary>/, 'it is not a details element with a Why? summary')
+  assert.match(drawn, /<\/details>$/)
+  assert.ok(drawn.includes('Because &lt;b&gt;this&lt;/b&gt; &amp; &quot;that&quot; &lt;img'), 'the text was not escaped')
+  assert.ok(!/<b>|<img/.test(drawn), 'text handed to Why? reached the page as markup')
+  assert.equal(whyBlocks(drawn).length, 1)
+})
+
+test('a Why? never hides a sentence about spending or switching something on', () => {
+  const screens = {
+    today: render({ ...base, workflows: [workflow({ fire: true, arm: 'armed', armed: true })] }).get('today').innerHTML,
+    ledger: render({
+      ...base,
+      ledger: { ownerType: 'business', hourlyValue: 150, hoursPerWeek: 3, costPerWeek: 450, unpriced: false, unreadable: 0, complete: true, tasks: [] },
+      proposals: { proposals: [{ task: 'A', item: 'agent:x', why: 'because', words: 'w', number: '3 hours a week' }], gaps: [] }
+    }).get('ledger').innerHTML,
+    workflows: render({
+      ...base,
+      workflows: [workflow({ slug: 'rogue', arm: 'unapproved' }), workflow({ slug: 'wish', name: 'Wish', arm: 'declared', armed: true })]
+    }).get('workflows').innerHTML,
+    team: render(base).get('team').innerHTML,
+    skills: render(base).get('skills').innerHTML
+  }
+  const MUST_STAY_IN_VIEW = {
+    today: ['spends one run'],
+    ledger: ['Nothing is switched on and nothing is spent', 'arming is a separate step you take on purpose'],
+    workflows: ['spending runs nobody approved', 'is a wish until you arm it', 'asks for your run cap first',
+      'starts spending runs', 'never arms anything silently'],
+    team: ['Nothing is switched on'],
+    skills: ['Nothing is switched on']
+  }
+  // Taking out nothing proves nothing: these fixtures have to draw Why? disclosures to take out.
+  const all = Object.values(screens).join('')
+  assert.ok(whyBlocks(all).length >= 4, `only ${whyBlocks(all).length} Why? disclosures drawn, so this checks almost nothing`)
+  for (const [screen, sentences] of Object.entries(MUST_STAY_IN_VIEW)) {
+    for (const sentence of sentences) {
+      assert.ok(collapsed(screens[screen]).includes(sentence), `${screen} no longer says "${sentence}" at all`)
+      assert.ok(outsideWhy(screens[screen]).includes(sentence),
+        `${screen} hides "${sentence}" behind a Why?, where most people never read it`)
+    }
+  }
+})
+
+test('each place that has a Why? keeps its headline and next step in view, and the reasoning behind it', () => {
+  const stale = { ...base.routines, takenAt: new Date(Date.now() - 30 * 86400_000).toISOString(), usable: true, stale: true, why: 'the snapshot was taken 4 weeks ago', count: 1 }
+  const matchedNever = { ownerType: 'business', hourlyValue: 150, hoursPerWeek: 3, costPerWeek: 450, unpriced: false, unreadable: 0, complete: true, tasks: [] }
+  const places = [
+    ['Today, nothing can go quiet', render(base).get('today').innerHTML,
+      ['Nothing can go quiet yet', 'No job on this team is armed'], 'not the same as everything running'],
+    ['Today, no snapshot', render(base).get('today').innerHTML,
+      ['Which of these actually ring is unknown', 'Run <code>/routines</code> in your team repo'], 'exactly what this screen is here to check'],
+    ['Workflows, no snapshot', render({ ...base, workflows: [workflow()] }).get('workflows').innerHTML,
+      ['Which of these actually ring is unknown', 'Run <code>/routines</code> in your team repo'], 'exactly what this screen is here to check'],
+    ['Today, an old snapshot', render({ ...base, routines: stale }).get('today').innerHTML,
+      ['last checked', 'Run <code>/routines</code> again before'], 'the snapshot was taken 4 weeks ago'],
+    ['Team, no agents', render(base).get('team').innerHTML,
+      ['You have no agents yet', 'Run <code>/onboard</code>'], '.claude/agents/'],
+    ['Ledger, never matched', render({ ...base, ledger: matchedNever }).get('ledger').innerHTML,
+      ['No gaps list yet', 'Run <code>/match</code>'], 'Never having asked what your team cannot do'],
+    ['Skills, none yet', render(base).get('skills').innerHTML,
+      ['No skills yet', 'ask your team for one in plain words'], 'the single tasks your jobs are built from'],
+    ['Connections, no machines', render({ ...base, connections: [connection()], runtimes: [] }).get('connections').innerHTML,
+      ['No machines listed, which is normal', 'Nothing here makes a job run', 'Access</b> step on Today'], 'shortcut list']
+  ]
+  for (const [place, drawn, inView, reasoning] of places) {
+    assert.ok(collapsed(whyBlocks(drawn).join(' ')).includes(escapedText(reasoning)), `${place}: the reasoning is not behind a Why?`)
+    for (const words of inView) {
+      assert.ok(outsideWhy(drawn).includes(words), `${place}: "${words}" went behind the Why? with the reasoning`)
+    }
+  }
+})
+
+test('Add task and New workflow sit in one row that wraps, with no margin left over to indent the second', () => {
+  // The second button carried `margin-left` from `.fire + .fire`, written when the two always fitted
+  // side by side. In a board column they do not, so New workflow wrapped onto its own line and kept
+  // the margin there, a step in from the button above it.
+  const drawn = render(base).get('today').innerHTML
+  assert.match(drawn,
+    /<div class="add-open">\s*<button class="fire" type="button" id="task-open">[^<]*<\/button>\s*<button class="fire" type="button" id="wf-open">[^<]*<\/button>\s*<\/div>/,
+    'the two buttons are not alone together in a row of their own')
+  const row = Object.assign({}, ...exactRules('.add-open').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.equal(row.display, 'flex', 'the row is not a flex row on a phone')
+  assert.equal(row['flex-wrap'], 'wrap', 'the row does not wrap, so a narrow column pushes the second button past its edge')
+  assert.ok(row.gap, 'nothing spaces the buttons, so the spacing would come back as a margin')
+  const strays = cssRules()
+    .filter((rule) => /\.fire\s*\+\s*\.fire|#task-open|#wf-open|\.add-open\s*[>\s]/.test(rule.selector))
+    .filter((rule) => Object.keys(valuesIn(rule)).some((name) => name.startsWith('margin')))
+    .map((rule) => `${rule.selector} { ${rule.body.trim()} }`)
+  assert.deepEqual(strays, [], `a margin still lands on a button in the row:\n${strays.join('\n')}`)
+})

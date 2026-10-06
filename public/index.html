@@ -125,8 +125,11 @@
     font-display: swap;
   }
 
+  /* --radius is a panel's corner; --radius-sm is everything that sits on one - buttons, inset cards,
+     fields - so a card inside a panel never has the same curve as the panel around it. */
   :root {
-    --radius: 12px;
+    --radius: 16px;
+    --radius-sm: 11px;
     --nav-row: 3.2rem;
     --nav-h: calc(var(--nav-row) * 2); /* the phone nav is two rows; see nav .tabs */
     --sidenav-w: 15rem;
@@ -153,23 +156,47 @@
      168px columns. */
   .wrap { max-width: 44rem; margin: 0 auto; padding: 1rem 1rem 0; }
   h1 { font-size: 1.25rem; margin: 0; letter-spacing: -.01em; }
-  h2 { font-size: .8rem; margin: 1.4rem 0 .5rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+  /* A section heading is the mock-up's: a 21px heading with a small capital line over it, the pair
+     wrapped in .section-head. It used to be small grey capitals on their own, which on a screen of
+     panels read as a label for the panel rather than as the start of a part of the page. */
+  h2 { font-size: 1.3125rem; margin: 2rem 0 .8rem; letter-spacing: -.03em; line-height: 1.2; color: var(--ink); font-weight: 600; }
+  .section-head { margin: 2.1rem 0 .85rem; }
+  .section-head > h2 { margin: .2rem 0 0; }
+  .eyebrow {
+    margin: 0; font-size: .625rem; font-weight: 600; letter-spacing: .2em; text-transform: uppercase;
+    color: var(--muted);
+  }
   a { color: var(--link); text-decoration: none; }
   a:hover { text-decoration: underline; }
   .sub { color: var(--muted); font-size: .8125rem; margin: 0 0 .75rem; }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
-  .card { padding: .8rem .9rem; }
-  .stack > .panel { margin-bottom: .6rem; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+  /* Words written straight into a panel, with no row of their own around them, used to touch its
+     left border - the Usage line and the count of jobs nothing fires both did. */
+  .panel > p { margin: 0; padding: .85rem 1.05rem; }
+  .panel > p + p { padding-top: 0; }
+  .card { padding: 1rem 1.1rem; }
+  .card > p { padding: 0; }
+  .card > p + p, .panel.empty > p { margin-top: .5rem; }
+  .panel.empty > p { padding: 0; }
+  .stack > .panel { margin-bottom: .75rem; }
+  /* Two panels one after the other at the top level of a screen - the Ledger's number over "No
+     ledger yet", the snapshot over an empty Workflows - sat edge to edge and read as one card. */
+  .screen > .panel + .panel, .screen > .kpis + .panel { margin-top: .75rem; }
   .row { display: flex; flex-wrap: wrap; gap: .35rem .5rem; align-items: center; }
   .between { justify-content: space-between; }
+  /* The mock-up's chip: a hairline round a word in small capitals. The fill stays, because every
+     text colour is measured against --chip in tests/theme.test.mjs; a coloured chip tints its own
+     outline toward its colour, so a warning reads as one from across the screen. */
   .chip {
-    font-size: .6875rem; letter-spacing: .04em; text-transform: uppercase;
-    background: var(--chip); border-radius: 999px; padding: .18rem .55rem; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: .3rem;
+    font-size: .6875rem; letter-spacing: .07em; text-transform: uppercase; line-height: 1.45;
+    background: var(--chip); border: 1px solid var(--line); border-radius: 999px; padding: .1rem .55rem; white-space: nowrap;
     color: var(--muted);
   }
   .chip.on { color: var(--ink); }
-  .chip.ok { color: var(--ok); }
-  .chip.warn { color: var(--warn); }
+  .chip.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+  .chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+  .chip.bad { border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
   /* Whose job this is, in that agent's own hue - handed in as --agent by ownerChipHtml. It used to
      arrive as a finished colour in a style attribute, which a light theme could not touch: amber on
      a near-white chip. The palette stays as it is (every team's colours hang off it), and the theme
@@ -229,7 +256,7 @@
   /* Setup ladder */
   /* auto-fit, never a fixed count: this was repeat(5, 1fr) while the course taught six
      stages, so Improvement had nowhere to render. Same bug as seven nav tabs in six columns. */
-  .ladder { display: grid; grid-template-columns: repeat(auto-fit, minmax(5.25rem, 1fr)); gap: .35rem .5rem; padding: .7rem .8rem .8rem; }
+  .ladder { display: grid; grid-template-columns: repeat(auto-fit, minmax(5.25rem, 1fr)); gap: .45rem .6rem; padding: 1rem 1.1rem 1.05rem; }
   .rung { text-align: center; font-size: .6875rem; color: var(--muted); }
   .rung .bar { height: .3rem; border-radius: 999px; background: var(--chip); margin-bottom: .35rem; }
   .rung.pass .bar { background: var(--ok); }
@@ -237,15 +264,27 @@
 
   /* Fire buttons */
   .fires { display: flex; flex-wrap: wrap; gap: .5rem; }
+  /* Every button on the board is the mock-up's job button: a rounded tile on the panel colour with a
+     hairline, the accent arriving only on hover. It was a filled block in --panel-2 with a panel's
+     radius, so a row of them read as a row of small cards. */
   button.fire {
     font: inherit; font-size: .875rem; font-weight: 600;
-    color: var(--ink); background: var(--panel-2); border: 1px solid var(--line);
-    border-radius: var(--radius); padding: .7rem 1rem; min-height: 2.9rem;
+    color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius-sm); padding: .6rem 1rem; min-height: 2.9rem;
     display: inline-flex; align-items: center; gap: .5rem;
   }
   button.fire[disabled] { opacity: .55; }
   button.fire:not([disabled]) { cursor: pointer; }
-  button.fire:not([disabled]):hover { border-color: var(--accent); }
+  button.fire:not([disabled]):hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+  button.fire:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  /* A run button: the job's name after a small play mark in the accent. The mark is drawn, because
+     the character for it is one a phone may turn into an emoji. */
+  button.job { font-weight: 500; padding: .5rem 1rem .5rem .55rem; gap: .6rem; }
+  .play {
+    display: grid; place-items: center; flex: none; width: 1.5rem; height: 1.5rem; border-radius: 50%;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .play svg { width: .6rem; height: .6rem; fill: currentColor; margin-left: .08rem; }
   .soon { font-size: .625rem; letter-spacing: .05em; text-transform: uppercase; color: var(--warn); border: 1px solid var(--warn); border-radius: 999px; padding: .05rem .4rem; }
   .fire-note { font-size: .8125rem; }
   .fire-note.ok { color: var(--ok); }
@@ -253,20 +292,33 @@
 
   /* Unlock — the whole page when the view key is missing or wrong. Phone-first: one
      field, one thumb-sized button, nothing else to read. */
-  .unlock { max-width: 22rem; margin: 18vh auto; padding: 0 1.2rem; text-align: left; }
-  .unlock h1 { font-size: 1.4rem; margin: 0 0 .4rem; }
+  /* A panel of its own, in the same family as every card behind it. The page it replaces kept its
+     room for the nav - the top padding on a phone, the sidebar's width on a laptop - so the card sat
+     low on one and off to the right on the other; with the nav gone, so is the room. */
+  body:has(> .unlock) { padding: 1rem; }
+  .unlock {
+    max-width: 24rem; margin: 18vh auto; padding: 1.5rem 1.4rem 1.2rem; text-align: left;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+  }
+  .unlock h1 { font-size: 1.6rem; letter-spacing: -.03em; margin: .3rem 0 .4rem; }
   .unlock p { color: var(--muted); font-size: .875rem; }
+  .unlock .eyebrow { margin: 0; }
   #unlock-form { display: flex; gap: .5rem; margin: 1rem 0 .8rem; }
   #unlock-key {
-    flex: 1; min-width: 0; font: inherit; font-size: 1rem; color: var(--ink);
-    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
-    padding: .6rem .7rem;
+    flex: 1; min-width: 0; min-height: 2.9rem; font: inherit; font-size: 1rem; color: var(--ink);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: .6rem .75rem;
   }
+  #unlock-key:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
 
   /* Add-task — an inline form at the top of the To do column. Phone-first: full-width
      fields, one thumb-sized submit button, no dialog. */
-  .add-task { padding: .6rem .9rem .7rem; border-bottom: 1px solid var(--line); }
-  .add-task .fire + .fire { margin-left: .4rem; }
+  .add-task { padding: .85rem .95rem; border-bottom: 1px solid var(--line); }
+  /* Add task and New workflow, side by side when the column has room and one under the other when
+     it does not. The gap spaces them both ways. It was a margin on the second button, which stayed
+     on it after it wrapped and left it a step in from the first. */
+  .add-open { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .add-open > .fire { flex: 1 1 auto; justify-content: center; }
   /* One class for every inline form on the board, rather than a block of rules per form id.
      There were two near-identical id blocks here - #task-form and #wf-form - and when Add skill
      and Add agent arrived they matched neither: the textarea rendered as a bare browser default
@@ -281,8 +333,8 @@
   .fire-form label { font-size: .75rem; font-weight: 600; color: var(--muted); }
   .fire-form textarea, .fire-form select {
     width: 100%; font: inherit; font-size: .875rem; color: var(--ink);
-    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
-    padding: .55rem .65rem;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: .6rem .7rem;
   }
   .fire-form textarea { resize: vertical; min-height: 4.4rem; }
   .fire-form .row { flex-wrap: nowrap; }
@@ -293,7 +345,7 @@
      carries no margin, so the next panel starts flush against it and the two read as one fused
      card. Both are only visible on the two new screens, which is why they are fixed here and not
      on .panel or .add-task, where they would change Today. */
-  .add-panel { margin-bottom: .6rem; }
+  .add-panel { margin-bottom: .75rem; }
   .add-panel .add-task { border-bottom: 0; }
 
   /* Week calendar - the Schedule strip with dates and outcomes. A pill is done when a run
@@ -308,12 +360,22 @@
 
   /* Board — four columns stack on a phone (one-handed rule), pair up on medium screens,
      and sit side by side only when there is genuinely room for four. */
-  .board { display: grid; grid-template-columns: 1fr; gap: .6rem; }
+  /* Each column is a panel and each card an inset tile inside it, as in the mock-up. They were rows
+     ruled off by hairlines, which made a column one long list rather than a stack of things. The
+     card's left edge is wider so the owner's colour, handed in by accentStyle, still reads. */
+  .board { display: grid; grid-template-columns: 1fr; gap: .75rem; }
   @media (min-width: 48rem) { .board { grid-template-columns: repeat(2, 1fr); align-items: start; } }
   @media (min-width: 64rem) { .board { grid-template-columns: repeat(4, 1fr); } }
-  .board .col-title { display: flex; justify-content: space-between; align-items: baseline; padding: .55rem .9rem; border-bottom: 1px solid var(--line); font-size: .6875rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
-  .board .kcard { padding: .6rem .9rem; border-bottom: 1px solid var(--line); font-size: .875rem; }
-  .board .kcard:last-child { border-bottom: 0; }
+  .col { padding: .9rem; }
+  .board .col-title { display: flex; justify-content: space-between; align-items: baseline; padding: 0 .1rem .7rem; font-size: .625rem; text-transform: uppercase; letter-spacing: .18em; color: var(--muted); font-weight: 600; }
+  .board .kcard {
+    padding: .7rem .8rem; font-size: .8125rem;
+    background: var(--panel-2); border: 1px solid var(--line); border-left-width: 3px; border-radius: var(--radius-sm);
+  }
+  .board .kcard + .kcard, .board .add-task + .kcard { margin-top: .5rem; }
+  .col > .add-task { padding: 0 0 .8rem; margin-bottom: .8rem; }
+  /* An empty column is a dashed tile where the cards would be, rather than loose words. */
+  .col > .empty { padding: .75rem .8rem; border: 1px dashed var(--line); border-radius: var(--radius-sm); font-size: .8125rem; }
   .board .kcard .summary { margin: .15rem 0 0; font-size: .8125rem; color: var(--muted); }
   /* Start / Done on a task card, and what the card says while the change is in flight. */
   .board .kcard .row.between + .row.between { margin-top: .4rem; }
@@ -326,16 +388,16 @@
   /* Dimmed, not moved: the card is still whatever the repo says until the commit lands. */
   .board .kcard.pending { opacity: .6; }
   .board .kcard.done-task .summary { font-style: italic; }
-  .finished-tasks { border-top: 1px solid var(--line); }
-  .finished-tasks > summary { padding: .6rem .9rem; min-height: 2.75rem; cursor: pointer; color: var(--muted); }
-  .finished-tasks[open] > summary { border-bottom: 1px solid var(--line); }
+  .finished-tasks { margin-top: .6rem; border-top: 1px solid var(--line); }
+  .finished-tasks > summary { padding: .7rem .1rem .5rem; min-height: 2.75rem; cursor: pointer; color: var(--muted); }
+  .finished-tasks[open] > summary { margin-bottom: .35rem; }
   .st { font-weight: 700; }
   .st-ok { color: var(--ok); }
   .st-partial, .st-blocked { color: var(--warn); }
   .st-failed { color: var(--bad); }
 
   /* Run list */
-  .run { padding: .7rem .9rem; border-bottom: 1px solid var(--line); }
+  .run { padding: .8rem 1.05rem; border-bottom: 1px solid var(--line); }
   .run:last-child { border-bottom: 0; }
   .run .summary { margin: .2rem 0 0; font-size: .875rem; color: var(--muted); }
 
@@ -351,11 +413,11 @@
      tall. Anything on this page that is meant to be tapped gets the thumb target. */
   a.title[data-open] { display: inline-flex; align-items: center; min-height: 2.75rem; }
 
-  h3.group { margin: 1.1rem 0 .1rem; font-size: .95rem; }
+  h3.group { margin: 1.5rem 0 .15rem; font-size: 1rem; letter-spacing: -.01em; }
   .group-note { margin: 0 0 .45rem; }
 
   /* A row in a list of skills. The Team screen used this too until its agents became cards. */
-  .agent { padding: .85rem .9rem; border-bottom: 1px solid var(--line); }
+  .agent { padding: .95rem 1.05rem; border-bottom: 1px solid var(--line); }
   .agent:last-child { border-bottom: 0; }
 
   /* Team: one card per agent, the portrait on top and its state on a pill over the picture.
@@ -367,7 +429,7 @@
     align-items: start; margin-top: .9rem;
   }
   .agent-card {
-    overflow: hidden; border-radius: 16px; border: 1px solid var(--line);
+    overflow: hidden; border-radius: var(--radius); border: 1px solid var(--line);
     background: var(--panel); box-shadow: var(--shadow);
   }
   .agent-card > summary { display: block; list-style: none; cursor: pointer; }
@@ -401,7 +463,7 @@
   .agent-card[open] .chev { transform: rotate(90deg); }
   .agent-runs { border-top: 1px solid var(--line); }
   /* The last tile of the grid, dashed like the mock-up's: an agent that is not here yet. */
-  .team-grid > .add-panel { margin-bottom: 0; border-style: dashed; background: transparent; }
+  .team-grid > .add-panel { margin-bottom: 0; border-style: dashed; background: transparent; box-shadow: none; }
   .team-grid > .add-panel #agent-open {
     width: 100%; min-height: 5.5rem; justify-content: center;
     background: transparent; border-color: transparent; color: var(--muted);
@@ -412,8 +474,10 @@
   /* Memory */
   input[type=search] {
     width: 100%; font: inherit; color: var(--ink); background: var(--panel);
-    border: 1px solid var(--line); border-radius: var(--radius); padding: .65rem .8rem;
+    border: 1px solid var(--line); border-radius: var(--radius-sm); padding: .65rem .9rem; min-height: 2.9rem;
+    box-shadow: var(--shadow);
   }
+  input[type=search]:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
   /* Wraps rather than scrolling sideways. At 390px this row is 804px of chips in 358px, so SEVEN
      of the twelve filters sat off-screen - including `shared`, which holds the business brain and
      18 of this repo's 59 pages. Worse than the step chain on the Workflows screen, which at least
@@ -428,29 +492,52 @@
      Measured: a 69-character folder name took the document to 490px against a 390px viewport.
      This is the same safeguard the step chain on the Workflows screen already uses, which is the
      precedent the wrap fix cites - it was cited without being copied. */
-  .filters .chip { cursor: pointer; border: 1px solid transparent; white-space: normal; overflow-wrap: anywhere; }
+  /* A filter is a button a thumb presses, so it gets the same 44px as every other one on the board;
+     the chip it is drawn as was 22px tall. */
+  .filters .chip { cursor: pointer; white-space: normal; overflow-wrap: anywhere; min-height: 2.75rem; padding: .3rem .95rem; }
   .filters .chip.on { border-color: var(--accent); color: var(--accent); }
   details.folder { border-bottom: 1px solid var(--line); }
   details.folder:last-child { border-bottom: 0; }
-  details.folder > summary { padding: .65rem .9rem; cursor: pointer; font-weight: 600; font-size: .9rem; list-style: none; display: flex; justify-content: space-between; gap: .5rem; }
+  details.folder > summary { padding: .5rem 1.05rem; min-height: 2.75rem; cursor: pointer; font-weight: 600; font-size: .9rem; list-style: none; display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
   details.folder > summary::-webkit-details-marker { display: none; }
-  .file { display: flex; justify-content: space-between; gap: .5rem; padding: .5rem .9rem .5rem 1.5rem; font-size: .875rem; border-top: 1px solid var(--line); cursor: pointer; }
+  .file { display: flex; justify-content: space-between; align-items: center; gap: .5rem; min-height: 2.75rem; padding: .45rem 1.05rem .45rem 1.6rem; font-size: .875rem; border-top: 1px solid var(--line); cursor: pointer; }
+  .file:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
   .file:hover { background: var(--panel-2); }
   .file .idx { color: var(--accent); font-size: .6875rem; }
 
   /* Viewer overlay */
   #viewer { position: fixed; inset: 0; background: var(--bg); z-index: 20; display: none; flex-direction: column; }
   #viewer.open { display: flex; }
-  #viewer .bar { display: flex; align-items: center; gap: .75rem; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
-  #viewer .bar .path { font-size: .8125rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-  #viewer pre { flex: 1; overflow: auto; margin: 0; padding: 1rem; font-size: .8125rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
-  #viewer button { font: inherit; color: var(--ink); background: var(--chip); border: 0; border-radius: 8px; padding: .4rem .8rem; }
+  /* The file viewer takes the top bar's look: the same blurred strip, and Back and GitHub drawn as the
+     bar's own 44px buttons. Back was a 33px grey lozenge and GitHub a line of small text, the two
+     things anybody does here. The file keeps a reading measure on a wide screen: the side padding
+     grows instead of the box shrinking, so the whole window still scrolls it. */
+  #viewer .bar {
+    display: flex; align-items: center; gap: .6rem; padding: .55rem 1rem;
+    padding-top: calc(.55rem + env(safe-area-inset-top, 0px));
+    border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 88%, transparent);
+  }
+  #viewer .bar .path { font-size: .8125rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  #viewer pre {
+    flex: 1; overflow: auto; margin: 0; padding: 1.1rem max(1rem, calc((100% - 52rem) / 2)) 2rem;
+    font-size: .8125rem; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-word; color: var(--ink);
+  }
+  #viewer button, #viewer .bar a {
+    display: inline-flex; align-items: center; justify-content: center; flex: none;
+    min-height: 2.75rem; padding: 0 .9rem; border-radius: 10px;
+    font: inherit; font-size: .8125rem; font-weight: 600; color: var(--ink);
+    background: var(--panel); border: 1px solid var(--line); cursor: pointer;
+  }
+  #viewer .bar a { color: var(--link); }
+  #viewer button:hover, #viewer .bar a:hover { text-decoration: none; border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+  #viewer button:focus-visible, #viewer .bar a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 
   /* Connections */
-  .conn { padding: .85rem .9rem; border-bottom: 1px solid var(--line); }
+  .conn { padding: .95rem 1.05rem; border-bottom: 1px solid var(--line); }
   .conn:last-child { border-bottom: 0; }
 
-  .gap { padding: .7rem .9rem; border-bottom: 1px solid var(--line); font-size: .875rem; }
+  .gap { padding: .8rem 1.05rem; border-bottom: 1px solid var(--line); font-size: .875rem; }
   .gap:last-child { border-bottom: 0; }
   .error { border-color: var(--bad); padding: 1rem 1.1rem; }
   .error h3 { margin-top: 0; color: var(--bad); }
@@ -552,12 +639,31 @@
     position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
   }
   /* Where Run a job lands. On a phone the two rows of tabs are fixed over the top of the page, and
-     a heading scrolled to the very top sits underneath them. */
-  #run-jobs { scroll-margin-top: calc(var(--nav-h) + env(safe-area-inset-top, 0px) + 1rem); }
+     a heading scrolled to the very top sits underneath them. The extra 1.4rem is the small line
+     over the heading, which would otherwise be the part left under the tabs. */
+  #run-jobs { scroll-margin-top: calc(var(--nav-h) + env(safe-area-inset-top, 0px) + 2.4rem); }
 
-  /* "Why?" disclosures arrive with the restyle that adds them; the size is fixed here so the
-     thumb-target test holds them from the first one written. */
-  .why > summary { min-height: 2.75rem; cursor: pointer; }
+  /* "Why?" - a link-coloured word with a small chevron that turns when it opens, and the reasoning
+     under it in the muted colour. The summary is the full 44px a thumb needs; the negative bottom
+     margin gives back the empty half of that height so a closed one does not pad the panel out. */
+  details.why { margin: .1rem 0 -.6rem; font-size: .8125rem; }
+  .why > summary {
+    display: inline-flex; align-items: center; gap: .4rem; min-height: 2.75rem; cursor: pointer;
+    list-style: none; color: var(--link); font-weight: 600;
+  }
+  .why > summary::-webkit-details-marker { display: none; }
+  .why > summary::after {
+    content: ""; width: .38rem; height: .38rem; margin-top: -.15rem;
+    border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg); transition: transform .15s ease;
+  }
+  details.why[open] > summary::after { transform: rotate(225deg); margin-top: .2rem; }
+  .why > summary:hover { text-decoration: underline; }
+  .why > summary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; border-radius: 4px; }
+  details.why > p { margin: -.3rem 0 .9rem; max-width: 62ch; color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) {
+    .why > summary::after, .agent-card .chev { transition: none; }
+  }
 
   /* Light or dark. A real button with role="switch", so a screen reader says "Light theme, on" and
      a keyboard can reach it. The button is the full 2.75rem a thumb needs; the track and knob are
@@ -676,7 +782,8 @@
      left border / swatch / chip tint; health (working/quiet/attention) stays on the status
      dot and state label. The two never share an element. */
   .agent-accent { border-left: 3px solid transparent; }
-  .swatch { width: .6rem; height: .6rem; border-radius: 3px; display: inline-block; flex: none; }
+  /* A dot, like the mock-up's legend: the same shape as the state dots, in the agent's own colour. */
+  .swatch { width: .5rem; height: .5rem; border-radius: 50%; display: inline-block; flex: none; }
 
   /* Schedule strip — 7-day week, horizontal scroll on a phone inside its own container */
   .schedule-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -685,15 +792,15 @@
   .week .day:first-child { border-left: 0; }
   .week .day .dayname { font-size: .6875rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin-bottom: .3rem; }
   .pill {
-    display: block; font-size: .6875rem; line-height: 1.3; border-radius: 6px;
+    display: block; font-size: .6875rem; line-height: 1.3; border-radius: 8px;
     padding: .25rem .4rem; margin: 0 0 .3rem; background: var(--panel-2);
     border: 1px solid var(--line); border-left-width: 3px;
   }
   .pill .t { color: var(--muted); white-space: nowrap; }
-  .sched-foot { border-top: 1px solid var(--line); padding: .5rem .9rem; font-size: .8125rem; }
+  .sched-foot { border-top: 1px solid var(--line); padding: .6rem 1.05rem; font-size: .8125rem; }
   .sched-foot .pill { display: inline-block; margin: .15rem .35rem .15rem 0; }
   /* Next 7 days — a list, so it reads top to bottom on a phone with no sideways scroll at all */
-  .days7 .d7-day { border-top: 1px solid var(--line); padding: .5rem .9rem .6rem; }
+  .days7 .d7-day { border-top: 1px solid var(--line); padding: .65rem 1.05rem .7rem; }
   .days7 .d7-day:first-child { border-top: 0; }
   .days7 .d7-day.today { background: var(--panel-2); }
 
@@ -726,7 +833,7 @@
   .d7-date { font-size: .6875rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin-bottom: .35rem; }
   .d7-row {
     display: flex; gap: .55rem; align-items: baseline; text-decoration: none; color: inherit;
-    padding: .3rem .45rem; margin: 0 0 .25rem; border-radius: 6px;
+    padding: .35rem .5rem; margin: 0 0 .3rem; border-radius: 8px;
     background: var(--panel-2); border: 1px solid var(--line); border-left-width: 3px;
   }
   .days7 .d7-day.today .d7-row { background: var(--panel); }
@@ -734,7 +841,7 @@
   .d7-row .d7-what { display: flex; flex-wrap: wrap; gap: .3rem .45rem; align-items: baseline; }
   .d7-row .d7-why { flex-basis: 100%; }
   .d7-none { padding: .1rem .45rem; }
-  .d7-silent { border-top: 1px solid var(--line); padding: .6rem .9rem .7rem; }
+  .d7-silent { border-top: 1px solid var(--line); padding: .75rem 1.05rem .8rem; }
   .d7-silent h3 { font-size: .8125rem; margin: 0 0 .2rem; }
   .d7-silent .d7-row { opacity: .75; }
   .d7-silent .d7-row .d7-t { min-width: 7.5rem; }
@@ -743,9 +850,8 @@
      after clicking, not assumed from the markup - the scroll reported "top: 0" and looked right
      in every number until the screenshot showed the wrong half of the card. */
   .card[id^="job-"] { scroll-margin-top: 7rem; }
-  .legend { display: flex; flex-wrap: wrap; gap: .35rem .9rem; padding: .55rem .9rem; border-top: 1px solid var(--line); font-size: .75rem; color: var(--muted); align-items: center; }
-  .legend span { display: inline-flex; align-items: center; gap: .35rem; }
-  .hero { text-align: center; padding: 1.6rem 1rem; }
+  .legend { display: flex; flex-wrap: wrap; gap: .35rem 1rem; padding: .65rem 1.05rem; border-top: 1px solid var(--line); font-size: .75rem; color: var(--muted); align-items: center; }
+  .legend span { display: inline-flex; align-items: center; gap: .4rem; }
   .hero-value { font-size: clamp(2.6rem, 9vw, 4.2rem); font-weight: 700; line-height: 1.05; }
   .hero-unit { font-size: 1rem; opacity: .85; margin-top: .2rem; }
 
@@ -764,12 +870,9 @@
     width: 100%; padding: 1.1rem; color: var(--on-art);
   }
   .banner-words { flex: 1 1 18rem; min-width: 0; }
-  .eyebrow {
-    margin: 0; font-size: .625rem; font-weight: 600; letter-spacing: .2em; text-transform: uppercase;
-    color: color-mix(in srgb, var(--on-art) 78%, transparent);
-  }
+  .banner .eyebrow { color: color-mix(in srgb, var(--on-art) 78%, transparent); }
   /* An h2 for the outline, so a screen reader can jump to it - drawn as the biggest words on the
-     board rather than as the small capitals every other h2 here is. */
+     board, over the picture, rather than as a section heading. */
   .banner .greeting, .banner .headline {
     margin: .35rem 0 0; font-size: clamp(1.6rem, 5.2vw, 2.6rem); font-weight: 600; line-height: 1.08;
     letter-spacing: -.04em; text-transform: none; color: var(--on-art);
@@ -834,6 +937,17 @@
   .spark-line { fill: none; stroke: currentColor; stroke-width: 2.2; vector-effect: non-scaling-stroke; }
   /* The wash under the line is filled from its own gradient, which fades the same colour out. */
   .spark-fill { stroke: none; }
+  /* The owner's number on the Ledger is the same card as on Today, on its own. Capped, because one
+     card stretched across a laptop is a band of colour with a number lost at its left end. */
+  .kpis-one { max-width: 26rem; }
+
+  /* Ledger: the week's hours as the first thing on the panel, at a size between a line of text and
+     a number card. The approve block is the decision under a proposal, ruled off from the three
+     citations above it. */
+  .week-line { font-size: .9375rem; }
+  .week-line > b:first-child { font-size: 1.6rem; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+  .approve { margin-top: .75rem; padding-top: .75rem; border-top: 1px solid var(--line); }
+  .approve .fire-note { margin-left: .5rem; }
 
   /* The number fades from the ink into the card's colour, where the browser can paint text with a
      background; anywhere it cannot, the plain ink above stands. */
@@ -1017,6 +1131,19 @@ const escapeHtml = (value) =>
   String(value ?? '').replace(/[&<>"']/g, (character) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
 
+/* "Why?" - the reasoning behind an empty state, one tap away, so the screen leads with what it is
+   and what to do. Plain text only, escaped here, because some of what lands in one is a reason the
+   server read out of the repo. Reasoning only: a sentence about something being spent or switched
+   on is the warning itself, and it stays in view (tests/render.test.mjs holds that line). */
+const whyHtml = (text) =>
+  `<details class="why"><summary>Why?</summary><p>${escapeHtml(text)}</p></details>`
+
+// A section's heading with a small line over it, the mock-up's pattern. The heading is handed in
+// whole because several are found by their exact opening tag, `<h2>Board` and `<h2 id="run-jobs">`
+// among them, and an attribute added here would lose them.
+const sectionHead = (eyebrow, heading) =>
+  `<div class="section-head"><p class="eyebrow">${escapeHtml(eyebrow)}</p>${heading}</div>`
+
 /* ---------- Agent identity colors + schedule expansion ----------
    KEEP IN SYNC: AGENT_PALETTE, agentColorIndex, and scheduleWeekView are mirrored verbatim
    as exports in api/lib.js, where the test suite exercises them (this page has no module
@@ -1133,8 +1260,13 @@ function ladderHtml(setup) {
   const rungs = setup.map((rung) =>
     `<div class="rung ${rung.pass ? 'pass' : ''}" title="${escapeHtml(rung.detail)}"><div class="bar"></div>${escapeHtml(rung.label)}</div>`
   ).join('')
-  return `<h2>Setup &middot; ${passed} of ${setup.length} rungs</h2><div class="panel"><div class="ladder">${rungs}</div></div>`
+  return sectionHead('Getting set up', `<h2>Setup &middot; ${passed} of ${setup.length} rungs</h2>`) +
+    `<div class="panel"><div class="ladder">${rungs}</div></div>`
 }
+
+// The play mark on a run button, drawn rather than typed: &#9654; is one of the characters a phone
+// may swap for an emoji, and then every run button carries a different-looking picture.
+const PLAY = '<span class="play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5l11 6.5-11 6.5z"/></svg></span>'
 
 function fireButtonsHtml(workflows) {
   const firing = workflows.filter((workflow) => workflow.fire)
@@ -1143,11 +1275,10 @@ function fireButtonsHtml(workflows) {
   // in this page's source — the endpoint asks for it (401) and the prompt keeps it in
   // sessionStorage for this tab only. See fireWorkflow() below.
   const buttons = firing.map((workflow) =>
-    `<button class="fire" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="run">
-       &#9654; ${escapeHtml(workflow.name)}</button>`
+    `<button class="fire job" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="run">${PLAY}${escapeHtml(workflow.name)}</button>`
   ).join('')
   // id="run-jobs" is where the top bar's Run a job lands, from any screen.
-  return `<h2 id="run-jobs">Run a job</h2><div class="fires">${buttons}</div>
+  return sectionHead('One tap', '<h2 id="run-jobs">Run a job</h2>') + `<div class="fires">${buttons}</div>
     <p class="small muted">Starts that job now rather than waiting for its schedule. It spends one run
     from your Claude account and leaves its work in your repo as a draft &mdash; nothing is sent
     anywhere and nothing is deleted.</p>`
@@ -1164,7 +1295,7 @@ function boardColumnHtml(title, cards, emptyText, extra = '', footer = '') {
   const rows = cards.length
     ? cards.join('')
     : `<div class="empty">${escapeHtml(emptyText)}</div>`
-  return `<div class="panel">
+  return `<div class="panel col">
     <div class="col-title"><span>${escapeHtml(title)}</span><span>${cards.length}</span></div>
     ${extra}${rows}${footer}</div>`
 }
@@ -1197,9 +1328,13 @@ function addTaskHtml() {
   const options = (data.agents ?? []).map((agent) =>
     `<option value="${escapeHtml(agent.slug)}">${escapeHtml(agent.slug)}</option>`
   ).join('')
+  // The two buttons share a row of their own, spaced by its gap. A margin on the second one left it
+  // a step in from the first whenever a narrow column wrapped it onto a line of its own.
   return `<div class="add-task">
-    <button class="fire" type="button" id="task-open">+ Add task</button>
-    <button class="fire" type="button" id="wf-open">+ New workflow</button>
+    <div class="add-open">
+      <button class="fire" type="button" id="task-open">+ Add task</button>
+      <button class="fire" type="button" id="wf-open">+ New workflow</button>
+    </div>
     <form id="task-form" class="fire-form" hidden>
       <label for="task-text">What do you want done?</label>
       <textarea id="task-text" rows="3" maxlength="2200"
@@ -1463,7 +1598,9 @@ function heroValueHtml(hero) {
 function heroHtml(hero) {
   if (!hero) return ''
   if (!hero.defined) return `<div class="panel empty">${heroMissingHtml(hero)}</div>`
-  return `<div class="panel hero">${heroValueHtml(hero)}</div>`
+  // The same card as the third number on Today, so the owner's number looks like one thing
+  // wherever it is shown. It never gets a line under it, here or there.
+  return `<div class="kpis kpis-one">${kpiCardHtml('ledger', 'Your number', heroValueHtml(hero))}</div>`
 }
 
 /* ---------- Today: the banner and the three numbers ----------
@@ -1673,7 +1810,7 @@ function renderLedger() {
   // light week, which is most first weeks - read "1 hours a week" as the headline of this screen.
   const roundedHours = Math.round(ledger.hoursPerWeek * 10) / 10
   const weekHtml = hoursKnown
-    ? `<div class="panel"><div class="gap"><b>${roundedHours}</b> hour${roundedHours === 1 ? '' : 's'} a week &middot; ${money}</div>
+    ? `<div class="panel card"><p class="week-line"><b>${roundedHours}</b> hour${roundedHours === 1 ? '' : 's'} a week &middot; ${money}</p>
        ${unreadableNote}
        <p class="small muted">Your numbers, from <code>ledger.yml</code>. Disagree with any of it and the
        answer is to change that file - nothing here is a recommendation.</p></div>`
@@ -1705,26 +1842,25 @@ function renderLedger() {
   /* Every proposal shows all three citations, because the whole point is that it can be checked
      without trusting anybody - their words, their number, and a thing that already exists. */
   const proposalHtml = proposals && proposals.proposals.length
-    ? proposals.proposals.map((row) =>
-        `<div class="panel"><div class="row between"><b>${escapeHtml(row.task)}</b>
+    ? '<div class="stack">' + proposals.proposals.map((row) =>
+        `<div class="panel card"><div class="row between"><b>${escapeHtml(row.task)}</b>
             <span class="chip">${escapeHtml(row.item)}</span></div>
           <div class="small">you said: &ldquo;${escapeHtml(row.words)}&rdquo;</div>
           <div class="small">that is: ${escapeHtml(row.number)}</div>
           ${row.why ? `<div class="small muted">why this one: ${escapeHtml(row.why)}</div>` : ''}
-          <div class="gap"><button class="fire" type="button" data-approve="${escapeHtml(row.task)}">Approve</button>
+          <div class="approve"><button class="fire" type="button" data-approve="${escapeHtml(row.task)}">Approve</button>
             <span class="fire-note"></span>
             <div class="small muted">Records your decision in <code>proposals.yml</code>.
             Nothing is switched on and nothing is spent &mdash; arming is a separate step you take on
             purpose.</div></div></div>`
-      ).join('')
+      ).join('') + '</div>'
     : '<div class="panel empty">No proposals yet. Run <code>/match</code> after your ledger is checked.</div>'
 
   /* The gaps are half the answer and the more useful half - they are the specification for what
      gets built next. Shown at the same weight as the proposals, never tucked away. */
   const gapHtml = !proposals
     ? `<div class="panel empty"><b>No gaps list yet.</b> <span class="small">Run <code>/match</code>
-       in your team repo. Never having asked what your team cannot do is not the same as your team
-       being able to do everything, so nothing is claimed here either way.</span></div>`
+       in your team repo.</span>${whyHtml('Never having asked what your team cannot do is not the same as your team being able to do everything, so nothing is claimed here either way.')}</div>`
     : proposals.gaps.length
       ? `<div class="panel">${proposals.gaps.map((gap) =>
           `<div class="gap"><b>${escapeHtml(gap.task)}</b><div class="small muted">${escapeHtml(gap.question)}</div></div>`
@@ -1734,10 +1870,10 @@ function renderLedger() {
 
   el('ledger').innerHTML =
     heroHtml(data.hero) +
-    `<h2>Your week</h2>` + weekHtml +
-    `<h2>What eats it</h2>` + tasksHtml +
-    `<h2>Proposed</h2>` + proposalHtml +
-    `<h2>Nothing on the team does these yet</h2>` + gapHtml
+    sectionHead('From your ledger', '<h2>Your week</h2>') + weekHtml +
+    sectionHead('Repeating work', '<h2>What eats it</h2>') + tasksHtml +
+    sectionHead('From /match', '<h2>Proposed</h2>') + proposalHtml +
+    sectionHead('Gaps', '<h2>Nothing on the team does these yet</h2>') + gapHtml
 }
 
 function renderToday() {
@@ -1763,9 +1899,9 @@ function renderToday() {
     : ringing
       ? `<div class="panel empty">Nothing has gone quiet. All ${ringing} armed job${ringing === 1 ? '' : 's'}
          ran when ${ringing === 1 ? 'it was' : 'they were'} last due.</div>`
+      // "No job is armed" stays in view: it is the fact, and the Why? only explains what it means.
       : `<div class="panel empty"><b>Nothing can go quiet yet.</b> <span class="small">No job on this
-         team is armed, so there is nothing scheduled to miss. That is not the same as everything
-         running.</span></div>`
+         team is armed.</span>${whyHtml('With nothing armed there is nothing scheduled to miss. That is not the same as everything running.')}</div>`
 
   // The snapshot banner belongs here too. Today is the first screen anybody opens, and it was the
   // one place a month-old snapshot was presented with no age at all.
@@ -1775,13 +1911,13 @@ function renderToday() {
     snapshotBannerHtml(data.routines) +
     ladderHtml(data.setup) +
     fireButtonsHtml(data.workflows) +
-    `<h2>Board</h2>` + boardHtml(board) +
-    `<h2>Due next</h2>` + dueHtml +
-    `<h2>Gone quiet</h2>` + quietHtml +
+    sectionHead('What everyone is on', '<h2>Board</h2>') + boardHtml(board) +
+    sectionHead('Next 24 hours', '<h2>Due next</h2>') + dueHtml +
+    sectionHead('Worth a look', '<h2>Gone quiet</h2>') + quietHtml +
     // The week, last: what is scheduled, what already ran, what was due and did not.
-    scheduleStripHtml(data.workflows, { dates: true, runs: data.runs, heading: 'This week', routines: data.routines }) +
+    scheduleStripHtml(data.workflows, { dates: true, runs: data.runs, heading: 'This week', eyebrow: 'Schedule', routines: data.routines }) +
     // Spec B.2: remaining routine runs are linked, never scraped — there is no API for them.
-    `<h2>Usage</h2><div class="panel"><p class="small">Remaining routine runs live on your
+    sectionHead('Your Claude account', '<h2>Usage</h2>') + `<div class="panel"><p class="small">Remaining routine runs live on your
       <a href="https://claude.ai/settings/usage" rel="noreferrer noopener">claude.ai usage page</a> —
       the dashboard links there rather than guessing.</p></div>`
 }
@@ -1856,8 +1992,7 @@ function renderTeam() {
     // coordinator who does not price work, choose what to bid, or spend anything. It is the empty
     // state, so it is the FIRST sentence a brand-new student reads on this screen.
     el('team').innerHTML = `${createFormHtml('agent')}<div class="panel empty"><b>You have no agents yet.</b>
-      <span class="small">Run <code>/onboard</code> in your team repo. It asks about your work
-      and writes the first agents into <code>.claude/agents/</code>, and they appear here.</span></div>`
+      <span class="small">Run <code>/onboard</code> in your team repo.</span>${whyHtml('It asks about your work and writes the first agents into .claude/agents/, and they appear here.')}</div>`
     bindCreateForm('agent', el('team'))
     return
   }
@@ -2024,7 +2159,8 @@ function scheduleStripHtml(workflows, options = {}) {
     : ''
   if (!scheduled.length) {
     return silentNote
-      ? `<h2>${escapeHtml(options.heading ?? 'Schedule')}</h2><div class="panel empty">Nothing that rings is scheduled. ${silentNote}</div>`
+      ? sectionHead(options.eyebrow ?? 'Schedule', `<h2>${escapeHtml(options.heading ?? 'Schedule')}</h2>`) +
+        `<div class="panel empty">Nothing that rings is scheduled. ${silentNote}</div>`
       : ''
   }
   const { dates = false, runs = [], heading = 'Schedule' } = options
@@ -2092,7 +2228,7 @@ function scheduleStripHtml(workflows, options = {}) {
   // prints before the schedule chip precisely so the chip is never left standing on its own. A
   // week grid is that same chip at the size of a whole panel, and a caveat read after four columns
   // of a calendar that looks complete has already lost.
-  return `<h2>${escapeHtml(heading)}</h2><div class="panel">
+  return sectionHead(options.eyebrow ?? 'Schedule', `<h2>${escapeHtml(heading)}</h2>`) + `<div class="panel">
     ${silentNote}
     <div class="schedule-scroll"><div class="week">${columns}</div></div>
     ${footnotes.length ? `<div class="sched-foot">${footnotes.join(' ')}</div>` : ''}
@@ -2188,7 +2324,7 @@ function nextSevenDaysHtml(workflows, options = {}) {
 
   if (!scheduled.length) {
     // Seven days of "Nothing scheduled" is a worse answer than one sentence saying so.
-    return `<h2>${escapeHtml(heading)}</h2><div class="panel">
+    return sectionHead('Coming up', `<h2>${escapeHtml(heading)}</h2>`) + `<div class="panel">
       <div class="empty">Nothing that rings is scheduled.</div>
       ${silentHtml}
     </div>`
@@ -2225,7 +2361,7 @@ function nextSevenDaysHtml(workflows, options = {}) {
     </div>`
   }).join('')
 
-  return `<h2>${escapeHtml(heading)}</h2><div class="panel">
+  return sectionHead('Coming up', `<h2>${escapeHtml(heading)}</h2>`) + `<div class="panel">
     <div class="days7">${days}</div>
     ${silentHtml}
   </div>`
@@ -2264,16 +2400,17 @@ function snapshotBannerHtml(routines) {
   if (!routines.usable) {
     return `<div class="panel empty"><b>Which of these actually ring is unknown.</b>
       <span class="small">${escapeHtml(routines.why ?? '')} Run <code>/routines</code> in your team repo
-      to record what is really scheduled. Until then the states below come from your files alone,
-      and a file claiming a schedule is exactly what this screen is here to check.</span></div>`
+      to record what is really scheduled.</span>${whyHtml('Until then the states below come from your files alone, and a file claiming a schedule is exactly what this screen is here to check.')}</div>`
   }
   const when = stamp(routines.takenAt)
+  // The age is in the headline and what to do is beside it. The server's account of why that age is
+  // too old is the reasoning, so that is the part behind Why?.
   if (routines.stale) {
     return `<div class="panel empty"><b>These routines were last checked ${escapeHtml(when)}.</b>
-      <span class="small">${escapeHtml(routines.why ?? '')} Run <code>/routines</code> again before
-      trusting it.</span></div>`
+      <span class="small">Run <code>/routines</code> again before
+      trusting it.</span>${routines.why ? whyHtml(routines.why) : ''}</div>`
   }
-  return `<div class="panel"><span class="small muted">${routines.count} routine${routines.count === 1 ? '' : 's'}
+  return `<div class="panel card"><span class="small muted">${routines.count} routine${routines.count === 1 ? '' : 's'}
     on your account, recorded ${escapeHtml(when)}. This is a snapshot, not a live reading.</span></div>`
 }
 
@@ -2282,14 +2419,14 @@ function snapshotBannerHtml(routines) {
    job arrives twice and costs twice. */
 function routineProblemsHtml(routines) {
   if (!routines || !routines.problems || !routines.problems.length) return ''
-  return `<h2>Problems with your schedule</h2><div class="panel">${routines.problems.map((problem) =>
+  return sectionHead('Needs a look', '<h2>Problems with your schedule</h2>') + `<div class="panel">${routines.problems.map((problem) =>
     `<div class="gap small bad">${escapeHtml(problem)}</div>`
   ).join('')}</div>`
 }
 
 function orphanRoutinesHtml(routines) {
   if (!routines || !routines.orphans || !routines.orphans.length) return ''
-  return `<h2>Routines with no workflow file</h2><div class="panel">${routines.orphans.map((orphan) =>
+  return sectionHead('On your account', '<h2>Routines with no workflow file</h2>') + `<div class="panel">${routines.orphans.map((orphan) =>
     `<div class="gap"><b>${escapeHtml(orphan.name)}</b>
       <div class="small muted">Something was armed and then renamed or removed. Reported, not adopted —
       the dashboard will not attach it to a file it does not match.</div></div>`
@@ -2351,7 +2488,7 @@ function renderWorkflows() {
     // writes to the repo (spec B.2). Both need trigger.fire: true, because dispatch goes
     // through the workflow's registered trigger URL.
     const runButton = workflow.fire
-      ? `<button class="fire" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="run">&#9654; Run</button>`
+      ? `<button class="fire job" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="run">${PLAY}Run</button>`
       : ''
     const pauseButton = workflow.schedule
       ? (workflow.fire
@@ -2958,19 +3095,18 @@ function renderConnections() {
   // (grep: accessDetail, the rung's pass in the heuristic branch, its detail in both), and the
   // sentence now says exactly that and stops.
   el('connections').innerHTML = `
-    <h3 class="sub">Connections</h3>
+    ${sectionHead('What your team can reach', '<h2>Connections</h2>')}
     ${connectionRows
       ? `<div class="panel">${connectionRows}</div>`
       : `<div class="panel empty"><b>Nothing connected yet.</b>
          <span class="small">Run <code>/connect</code> in your team repo and it will wire one tool,
          prove it by reading your own data back to you, and register it here.</span></div>`}
-    <h3 class="sub">Runtimes</h3>
+    ${sectionHead('Machines', '<h2>Runtimes</h2>')}
     ${runtimeRows
       ? `<div class="panel">${runtimeRows}</div>`
       : `<div class="panel empty"><b>No machines listed, which is normal.</b>
-         <span class="small">This is a shortcut list &mdash; anything of yours with a web address you
-         want one tap away, like a home server. Nothing here makes a job run; the only other place it shows
-         up is the <b>Access</b> step on Today. Ask your team to add one when you have one.</span></div>`}`
+         <span class="small">Nothing here makes a job run; the only other place it shows up is the
+         <b>Access</b> step on Today. Ask your team to add one when you have one.</span>${whyHtml('This is a shortcut list — anything of yours with a web address you want one tap away, like a home server.')}</div>`}`
 }
 
 /* ---------- skills ---------- */
@@ -3063,9 +3199,9 @@ function renderSkills() {
     : ''
   el('skills').innerHTML = `
     ${createFormHtml('skill')}
-    <h2>Starter stack &middot; ${stack.length}</h2>
+    ${sectionHead('Every team starts with', `<h2>Starter stack &middot; ${stack.length}</h2>`)}
     ${stack.length ? `<div class="panel">${stackCards}</div>` : '<div class="panel empty">No <code>stack.yml</code> in this repo yet. Run <code>/install-stack</code> and it appears here.</div>'}
-    <h2>This team's skills &middot; ${skills.length}</h2>
+    ${sectionHead('In this repo', `<h2>This team's skills &middot; ${skills.length}</h2>`)}
     ${skills.length ? skillGroup(
         'Not a step in any job',
         'Some of these run themselves as part of other work; the rest only happen when you ask for them. Each one says which, in its own line below.',
@@ -3075,9 +3211,8 @@ function renderSkills() {
         'Whether that job actually runs is a separate question - the Workflows screen is the one that says which jobs ring.',
         onSchedule
       ) : `<div class="panel empty"><b>No skills yet.</b>
-      <span class="small">Skills are the single tasks your jobs are built from. Run <code>/onboard</code>
-      to get the starter set, or ask your team for one in plain words &mdash; you never write the file
-      yourself.</span></div>`}`
+      <span class="small">Run <code>/onboard</code> to get the starter set, or ask your team for one in
+      plain words &mdash; you never write the file yourself.</span>${whyHtml('Skills are the single tasks your jobs are built from.')}</div>`}`
   bindCreateForm('skill', el('skills'))
   el('skills').querySelectorAll('[data-open]').forEach((link) =>
     link.addEventListener('click', (event) => { event.preventDefault(); openFile(link.dataset.open) }))
@@ -3201,6 +3336,7 @@ function renderError(message) {
 
 function renderUnlock(message) {
   document.body.innerHTML = `<div class="unlock">
+    <p class="eyebrow">Agent OS</p>
     <h1>Locked</h1>
     <p>${escapeHtml(message)}</p>
     <form id="unlock-form">
