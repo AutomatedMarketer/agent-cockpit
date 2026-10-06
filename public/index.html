@@ -3424,6 +3424,126 @@ async function readBrand() {
   }
 }
 
+/* ---------- Personalise: a chosen picture, made small enough to send ----------
+   A phone photo is several megabytes; the store takes 45 KB for a portrait and 100 KB for a
+   banner. So the picture is cropped and shrunk here, on the device, before anything is sent: the
+   centre of it, at the size the board draws it, in the smallest file that still looks right. */
+
+// Mirrored word for word from api/lib.js, which refuses anything over these
+// (tests/render.test.mjs holds the two copies together).
+const PICTURE_BUDGET = { portrait: 45 * 1024, banner: 100 * 1024 }
+// The size each is drawn at - the robots are 480 square, the banners 1600 by 686 - and the
+// narrowest it may be made to fit the budget, below which it would look soft on a laptop.
+const PICTURE_SIZE = {
+  portrait: { width: 480, aspect: 1, floor: 320 },
+  banner: { width: 1600, aspect: 21 / 9, floor: 1200 }
+}
+const QUALITY_STEPS = [0.85, 0.75, 0.65, 0.55, 0.45, 0.35]
+const PICTURE_UNREADABLE = 'This picture could not be opened here. Save it as a JPEG or PNG and choose it again.'
+const PICTURE_UNWRITABLE = 'This browser could not make a small copy of the picture. Try it again in Chrome, Edge or Safari.'
+const pictureTooBig = (kind) =>
+  `This picture would not shrink under ${PICTURE_BUDGET[kind] / 1024} KB, even small and soft, so it was not sent. ` +
+  'Try a simpler picture, or crop it closer first.'
+
+// The largest piece of a width-by-height picture in the given shape, taken from its middle -
+// where the subject of a photo almost always is.
+function cropBox(width, height, aspect) {
+  if (width / height > aspect) {
+    const cropped = Math.round(height * aspect)
+    return { x: Math.floor((width - cropped) / 2), y: 0, width: cropped, height }
+  }
+  const cropped = Math.round(width / aspect)
+  return { x: 0, y: Math.floor((height - cropped) / 2), width, height: cropped }
+}
+
+// Each width to try: the full size, then 0.85 of it each time, ending exactly on the floor.
+function pictureWidths({ width, floor }) {
+  const widths = [width]
+  while (widths.at(-1) > floor) widths.push(Math.max(floor, Math.round(widths.at(-1) * 0.85)))
+  return widths
+}
+
+const canvasBlob = (canvas, type, quality) => new Promise((resolve) => canvas.toBlob(resolve, type, quality))
+
+// The smallest good-enough file of the picture `draw(width, height)` paints: every quality step at
+// full size, then the same at each smaller size, stopping at the first that fits the budget.
+async function encodeUnderCap(draw, kind) {
+  const size = PICTURE_SIZE[kind]
+  let type = 'image/webp'
+  for (const width of pictureWidths(size)) {
+    const canvas = draw(width, Math.round(width / size.aspect))
+    for (let step = 0; step < QUALITY_STEPS.length; step += 1) {
+      const blob = await canvasBlob(canvas, type, QUALITY_STEPS[step])
+      if (blob?.type !== type) {
+        // Safari before 17 cannot write webp, and does not say so: asked for one, it hands back a
+        // PNG. So what decides is the type that CAME BACK, never the one asked for - and the answer
+        // to a browser that will not write webp is a JPEG, which every browser writes.
+        if (type !== 'image/webp') throw new Error(PICTURE_UNWRITABLE)
+        type = 'image/jpeg'
+        step -= 1
+        continue
+      }
+      if (blob.size <= PICTURE_BUDGET[kind]) return blob
+    }
+  }
+  throw new Error(pictureTooBig(kind))
+}
+
+// The chosen file as something a canvas can draw. createImageBitmap is asked to turn a phone photo
+// the right way up, from the rotation the camera wrote into it. It is missing in older browsers and
+// refuses some files an image still opens, so an image is the second try - and browsers turn an
+// image the right way up by themselves. Neither opening it is usually an iPhone HEIC photo on a
+// browser that cannot read them.
+async function decodePicture(file) {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(file, { imageOrientation: 'from-image' })
+    } catch (error) { /* the second try, below */ }
+  }
+  if (typeof Image === 'function') {
+    const address = URL.createObjectURL(file)
+    try {
+      const image = new Image()
+      await new Promise((resolve, reject) => {
+        image.onload = resolve
+        image.onerror = reject
+        image.src = address
+      })
+      return image
+    } catch (error) {
+      /* the sentence, below */
+    } finally {
+      // Loaded, the image holds its own copy; the address is only how it got one.
+      URL.revokeObjectURL(address)
+    }
+  }
+  throw new Error(PICTURE_UNREADABLE)
+}
+
+// A chosen file, as the file to send for a portrait or a banner: opened, cut from its centre to
+// the right shape, and shrunk under the budget. Throws a sentence to show the person.
+async function shrinkPicture(file, kind) {
+  const source = await decodePicture(file)
+  try {
+    const width = source.naturalWidth || source.width
+    const height = source.naturalHeight || source.height
+    if (!width || !height) throw new Error(PICTURE_UNREADABLE)
+    const box = cropBox(width, height, PICTURE_SIZE[kind].aspect)
+    return await encodeUnderCap((targetWidth, targetHeight) => {
+      const canvas = document.createElement('canvas')
+      canvas.width = targetWidth
+      canvas.height = targetHeight
+      const context = canvas.getContext('2d')
+      context.imageSmoothingQuality = 'high'
+      context.drawImage(source, box.x, box.y, box.width, box.height, 0, 0, targetWidth, targetHeight)
+      return canvas
+    }, kind)
+  } finally {
+    // A decoded photo is its full size in memory - tens of megabytes for a phone's camera.
+    source.close?.()
+  }
+}
+
 /* ---------- shell ---------- */
 
 function showScreen(name) {

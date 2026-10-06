@@ -3964,3 +3964,179 @@ test('an answer from /api/brand is read only as far as it is shaped like one', (
   assert.deepEqual(Object.entries(parsed.names), [['research', 'Penny']])
   assert.deepEqual(parseBrand({ ...brandOn(), pictures: 'today' }).pictures, {}, 'a string of pictures was read letter by letter')
 })
+
+/* ---------- Personalise: a chosen picture, cropped and shrunk on the device ---------------------
+   Before anything is sent, the browser crops the picture from its centre - square for a portrait,
+   21:9 for a banner - and shrinks it under the server's budget. There is no canvas in node, so these
+   hand the page's own functions stand-in canvases and blobs and read what was asked of them. */
+
+const pipeline = (options = {}) => render(base, {
+  expose: ['PICTURE_BUDGET', 'PICTURE_SIZE', 'QUALITY_STEPS', 'cropBox', 'encodeUnderCap', 'decodePicture', 'shrinkPicture'],
+  ...options
+}).exposed
+
+// A canvas whose encoder answers with `produce(type, quality, width)` -> { type, size }, recording
+// every encode it was asked for.
+function encoder(produce) {
+  const asked = []
+  const draw = (width, height) => ({
+    width, height,
+    toBlob(done, type, quality) {
+      asked.push({ width, height, type, quality })
+      const made = produce(type, quality, width)
+      done(made ? { ...made } : null)
+    }
+  })
+  return { draw, asked }
+}
+
+test('the picture budgets in the page are the ones the server holds pictures to', () => {
+  const { PICTURE_BUDGET: inPage } = pipeline()
+  assert.deepEqual({ ...inPage }, { ...PICTURE_BUDGET }, 'the page shrinks to one size and the server refuses at another')
+  // And word for word, the way the other mirrored helpers are held to api/lib.js.
+  const lib = readFileSync(fileURLToPath(new URL('../api/lib.js', import.meta.url)), 'utf8')
+  const line = (source, start) => source.slice(source.indexOf(start), source.indexOf('\n', source.indexOf(start)))
+  assert.equal(line(html, 'const PICTURE_BUDGET'), line(lib, 'export const PICTURE_BUDGET').replace('export ', ''))
+})
+
+test('a picture is cropped from its centre, to a square or to the banner\'s 21:9', () => {
+  const { cropBox } = pipeline()
+  const plain = (box) => ({ ...box })
+  assert.deepEqual(plain(cropBox(1000, 2000, 1)), { x: 0, y: 500, width: 1000, height: 1000 }, 'a tall photo was not cut from its middle')
+  assert.deepEqual(plain(cropBox(4000, 1000, 1)), { x: 1500, y: 0, width: 1000, height: 1000 }, 'a wide photo was not cut from its middle')
+  assert.deepEqual(plain(cropBox(1000, 1000, 21 / 9)), { x: 0, y: 285, width: 1000, height: 429 }, 'a square photo was not cut to a banner strip across its middle')
+  assert.deepEqual(plain(cropBox(3000, 1000, 21 / 9)), { x: 333, y: 0, width: 2333, height: 1000 })
+  // A picture already the banner's shape - the two that ship are 1600 by 686 - loses nothing.
+  assert.deepEqual(plain(cropBox(1600, 686, 21 / 9)), { x: 0, y: 0, width: 1600, height: 686 })
+})
+
+test('when the browser hands back something other than the webp it asked for, the picture is made as a JPEG', async () => {
+  const { encodeUnderCap } = pipeline()
+  // Safari before 17 cannot write webp. Asked for one, it does not fail: it hands back a PNG - here a
+  // small one, under the budget, which a check on the type ASKED for would happily send.
+  const safari = encoder((type) => ({ type: type === 'image/webp' ? 'image/png' : type, size: 20_000 }))
+  const made = await encodeUnderCap(safari.draw, 'portrait')
+  assert.equal(made.type, 'image/jpeg', 'a PNG the browser made in place of a webp was sent as it was')
+  assert.deepEqual(safari.asked.map((call) => call.type), ['image/webp', 'image/jpeg'])
+  assert.equal(safari.asked[1].quality, safari.asked[0].quality, 'the JPEG did not start at the quality the webp was asked for')
+
+  // A browser that can write webp is never moved off it.
+  const chrome = encoder((type) => ({ type, size: 20_000 }))
+  assert.equal((await encodeUnderCap(chrome.draw, 'portrait')).type, 'image/webp')
+  assert.deepEqual(chrome.asked.map((call) => call.type), ['image/webp'])
+})
+
+test('the quality steps down until the picture fits, and stops there', async () => {
+  const { encodeUnderCap, QUALITY_STEPS } = pipeline()
+  assert.equal(QUALITY_STEPS[0], 0.85)
+  assert.equal(QUALITY_STEPS.at(-1), 0.35)
+  for (let index = 1; index < QUALITY_STEPS.length; index += 1) assert.ok(QUALITY_STEPS[index] < QUALITY_STEPS[index - 1], 'the quality does not step down')
+  // Size goes with quality; this one fits the portrait budget from 0.55 down.
+  const cap = PICTURE_BUDGET.portrait
+  const sized = encoder((type, quality) => ({ type, size: Math.round(cap * quality / 0.55) }))
+  const made = await encodeUnderCap(sized.draw, 'portrait')
+  assert.ok(made.size <= cap, `${made.size} bytes is over the ${cap}-byte budget`)
+  assert.deepEqual(sized.asked.map((call) => call.quality), QUALITY_STEPS.filter((quality) => quality >= 0.55),
+    'it did not walk down the steps and stop at the first that fits')
+  assert.ok(sized.asked.every((call) => call.width === 480 && call.height === 480), 'a portrait was not made 480 square')
+  // The banner is held to its own budget, which a portrait-sized one would have refused.
+  const banner = encoder((type) => ({ type, size: PICTURE_BUDGET.banner }))
+  assert.equal((await encodeUnderCap(banner.draw, 'banner')).size, PICTURE_BUDGET.banner)
+  assert.deepEqual(banner.asked.map((call) => [call.width, call.height]), [[1600, 686]])
+})
+
+test('a picture too big even at the lowest quality is made smaller, down to a floor and no smaller', async () => {
+  const { encodeUnderCap } = pipeline()
+  // Fits only once it is narrower than 350 pixels, at the lowest quality.
+  const portrait = encoder((type, quality, width) => ({ type, size: width < 350 && quality === 0.35 ? 1000 : PICTURE_BUDGET.portrait + 1 }))
+  await encodeUnderCap(portrait.draw, 'portrait')
+  const widths = [...new Set(portrait.asked.map((call) => call.width))]
+  assert.deepEqual(widths, [480, 408, 347], 'a portrait was not shrunk by steps of 0.85')
+  assert.ok(portrait.asked.every((call) => call.height === call.width), 'a smaller portrait stopped being square')
+  // Each size starts again from the top quality: a smaller picture can afford a better one.
+  assert.equal(portrait.asked.find((call) => call.width === 408).quality, 0.85)
+
+  const banner = encoder((type, quality, width) => ({ type, size: width === 1200 && quality === 0.35 ? 1000 : PICTURE_BUDGET.banner + 1 }))
+  await encodeUnderCap(banner.draw, 'banner')
+  assert.deepEqual([...new Set(banner.asked.map((call) => `${call.width}x${call.height}`))], ['1600x686', '1360x583', '1200x514'],
+    'a banner did not stop at 1200 wide, or lost its 21:9 on the way')
+})
+
+test('a picture that will not fit even small and soft is refused with a sentence that says what to do', async () => {
+  const { encodeUnderCap, QUALITY_STEPS } = pipeline()
+  const stubborn = encoder((type) => ({ type, size: PICTURE_BUDGET.portrait + 1 }))
+  await assert.rejects(encodeUnderCap(stubborn.draw, 'portrait'), (error) => {
+    assert.match(error.message, /45 KB/, 'the sentence does not say what it would not fit under')
+    assert.match(error.message, /\.$/, 'the refusal is not a sentence')
+    assert.match(error.message, /[Tt]ry /, 'the sentence does not say what to do instead')
+    return true
+  })
+  assert.equal(Math.min(...stubborn.asked.map((call) => call.width)), 320, 'it gave up before trying the smallest portrait, or went below it')
+  assert.equal(stubborn.asked.length, 4 * QUALITY_STEPS.length, 'it did not try every quality at every size before giving up')
+
+  const banner = encoder((type) => ({ type, size: PICTURE_BUDGET.banner + 1 }))
+  await assert.rejects(encodeUnderCap(banner.draw, 'banner'), /100 KB/)
+
+  // A browser that cannot write the picture at all is told so, rather than looping.
+  const broken = encoder(() => null)
+  await assert.rejects(encodeUnderCap(broken.draw, 'portrait'), (error) => /\.$/.test(error.message))
+  assert.equal(broken.asked.length, 2, 'a browser that wrote nothing was asked again and again')
+})
+
+test('a photo is opened the right way up, and one the quick way cannot open is tried as an image', async () => {
+  const file = { type: 'image/jpeg', size: 3_000_000 }
+  const calls = []
+  const bitmap = { width: 4032, height: 3024, close() {} }
+  const quick = pipeline({ createImageBitmap: async (...args) => { calls.push(args); return bitmap } })
+  assert.equal(await quick.decodePicture(file), bitmap)
+  assert.equal(calls[0][0], file)
+  assert.equal(calls[0][1]?.imageOrientation, 'from-image', 'a phone photo taken on its side would be drawn on its side')
+
+  // createImageBitmap refuses some files a plain image still opens, and is missing in older
+  // browsers. The image is pointed at a blob: address for the file, which is let go of after.
+  class OpensImage { set src(value) { this.loadedFrom = value; queueMicrotask(() => this.onload?.()) } }
+  for (const createImageBitmap of [async () => { throw new DOMException('The source image could not be decoded.') }, undefined]) {
+    const page = render(base, { createImageBitmap, Image: OpensImage, expose: ['decodePicture'] })
+    const opened = await page.exposed.decodePicture(file)
+    assert.ok(opened instanceof OpensImage, 'nothing fell back to an image')
+    assert.match(opened.loadedFrom, /^blob:/, 'the image was pointed at something other than the file in hand')
+    assert.equal(page.objectUrls.created[0].blob, file)
+    assert.deepEqual(page.objectUrls.revoked, [opened.loadedFrom], 'the address made to open the file was kept')
+  }
+
+  // Neither can open it - an iPhone HEIC on a browser that does not read them: a sentence.
+  class FailsImage { set src(value) { queueMicrotask(() => this.onerror?.(new Error('no'))) } }
+  const neither = render(base, { createImageBitmap: async () => { throw new Error('no') }, Image: FailsImage, expose: ['decodePicture'] })
+  await assert.rejects(neither.exposed.decodePicture(file), (error) => /JPEG/.test(error.message) && /\.$/.test(error.message))
+  assert.equal(neither.objectUrls.revoked.length, 1, 'a file that would not open kept its address')
+})
+
+test('a chosen picture is drawn from its centre crop at the size it is sent at, and what was opened is closed', async () => {
+  const drawn = []
+  const canvases = []
+  const canvas = () => {
+    const made = {
+      width: 0, height: 0,
+      getContext: () => ({ drawImage: (...args) => drawn.push(args) }),
+      toBlob(done, type) { done({ type, size: 9_000 }) }
+    }
+    canvases.push(made)
+    return made
+  }
+  let closed = 0
+  const bitmap = { width: 3000, height: 4000, close() { closed += 1 } }
+  const { shrinkPicture } = pipeline({
+    createImageBitmap: async () => bitmap,
+    create: (tag) => (tag === 'canvas' ? canvas() : undefined)
+  })
+  const made = await shrinkPicture({ type: 'image/jpeg' }, 'portrait')
+  assert.equal(made.type, 'image/webp')
+  assert.deepEqual(drawn[0], [bitmap, 0, 500, 3000, 3000, 0, 0, 480, 480], 'the picture was not drawn from its centre square into 480 by 480')
+  assert.deepEqual([canvases[0].width, canvases[0].height], [480, 480])
+  assert.equal(closed, 1, 'the decoded photo was kept in memory after use')
+
+  // A banner from the same photo: a 21:9 strip across its middle, drawn into 1600 by 686.
+  await shrinkPicture({ type: 'image/jpeg' }, 'banner')
+  assert.deepEqual(drawn[1], [bitmap, 0, 1357, 3000, 1286, 0, 0, 1600, 686])
+  assert.equal(closed, 2)
+})
