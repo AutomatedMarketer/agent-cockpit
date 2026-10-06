@@ -37,6 +37,162 @@ export function viewGate(request, env = process.env) {
   return null
 }
 
+// PUBLIC_FIRE promises "same-origin only", so enforce it: browsers stamp cross-site calls
+// with Sec-Fetch-Site and Origin, and we refuse anything that does not look like our own
+// page. Best-effort by nature (non-browser clients forge headers freely) — which is why the
+// README still says to keep PUBLIC_FIRE deployments behind Vercel's own access control.
+// Lives here rather than in fire.js because the picture-store writes run the same check;
+// fire.js re-exports it, so there is still exactly one answer to "is this our own page".
+export function isSameOriginRequest(headers = {}) {
+  const fetchSite = String(headers['sec-fetch-site'] ?? '').toLowerCase()
+  if (fetchSite) return fetchSite === 'same-origin'
+  const origin = headers.origin
+  const host = headers['x-forwarded-host'] ?? headers.host
+  if (typeof origin === 'string' && origin) {
+    // Origin with nothing to compare against fails closed, not open.
+    if (typeof host !== 'string' || !host) return false
+    try {
+      return new URL(origin).host === host
+    } catch {
+      return false
+    }
+  }
+  // No Sec-Fetch-Site and no Origin: not a cross-site browser call (browsers always send
+  // Origin on cross-origin POSTs). Curl-style clients land here — same as key mode allows.
+  return true
+}
+
+// --- the write gate ----------------------------------------------------------------
+// The board's only write power is over its own picture store (spec 5c): pictures, names, the
+// art style. Never the business repo - the GitHub token stays read-only. Even so, a write is
+// held to more than a read, in this order, and the order is part of the contract: a stranger
+// with no key learns only that a key is missing, never which later check they would also fail.
+//
+// 1. The view gate. Anyone who can read the board is, by default, trusted to dress it: they can
+//    already read the business repo, and the worst a write does is change pictures the owner sees.
+// 2. EDIT_KEY, when set, so an owner can share a read-only board. When the board is open to
+//    everyone (PUBLIC_DASHBOARD=true) there is no first key at all, so writes stay off until
+//    EDIT_KEY is set - otherwise anyone with the URL could spend the owner's OpenAI money.
+// 3. Same origin, so another site's page cannot ride a viewer's browser into a write.
+// 4. The exact body type the endpoint reads. text/plain, urlencoded and multipart are what a
+//    cross-site form can send without the browser asking us first; JSON and octet-stream make
+//    the browser ask (a CORS preflight), and this board never answers yes.
+//
+// Returns null when the write may go ahead, or {status, error, needs?} to send back. `needs`
+// is how the page knows to ask for the edit key - and the only time it should.
+export function writeGate(request, env = process.env, bodyType = 'application/json') {
+  const denied = viewGate(request, env)
+  if (denied) return denied
+  const headers = request?.headers ?? {}
+  if (env.EDIT_KEY) {
+    const provided = headers['x-edit-key']
+    if (!keysMatch(typeof provided === 'string' ? provided : '', env.EDIT_KEY)) {
+      return {
+        status: 401,
+        needs: 'edit-key',
+        error: 'Missing or wrong edit key. Send it in the x-edit-key header.'
+      }
+    }
+  } else if (env.PUBLIC_DASHBOARD === 'true') {
+    return {
+      status: 403,
+      error:
+        'This board is open to everyone, so changes are off. Set EDIT_KEY in your hosting ' +
+        'environment and redeploy to turn them on.'
+    }
+  }
+  if (!isSameOriginRequest(headers)) {
+    return { status: 403, error: 'Changes are only accepted from the board itself.' }
+  }
+  const essence = String(headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
+  if (essence !== bodyType) {
+    return { status: 415, error: `Send this as Content-Type: ${bodyType}.` }
+  }
+  return null
+}
+
+// --- personalise: what a write is allowed to say -----------------------------------
+// Every value below ends up in a store path, a stored file, or on the page. Each check refuses
+// rather than repairs: a repaired value is one the person did not send.
+
+// Kebab-case only, checked before the slug touches the trigger map, a GitHub URL or a store
+// path. Here rather than in fire.js so a picture slot and a fire target are judged by one rule;
+// fire.js re-exports it.
+const SLUG_SHAPE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const MAX_SLUG_LENGTH = 100
+
+export function isValidSlug(slug) {
+  return typeof slug === 'string' && slug.length <= MAX_SLUG_LENGTH && SLUG_SHAPE.test(slug)
+}
+
+// A slot is which picture: the two banners, or one agent's portrait. It becomes part of a store
+// path, so the only strings that pass are exactly our own names - no extension, no sub-path,
+// nothing percent-encoded. The slug inside `agent-` is the routing key, never the display name.
+export function parseSlot(value) {
+  if (typeof value !== 'string') return null
+  if (value === 'today' || value === 'team') return value
+  if (!value.startsWith('agent-')) return null
+  return isValidSlug(value.slice('agent-'.length)) ? value : null
+}
+
+export function slotKind(slot) {
+  const parsed = parseSlot(slot)
+  if (!parsed) return null
+  return parsed.startsWith('agent-') ? 'portrait' : 'banner'
+}
+
+// What the browser shrinks a picture to before sending it, and what the server holds it to.
+// The built-in robots are ~30 KB and the banners ~90 KB, so these leave headroom without letting
+// one picture cost what a page full of them should.
+export const PICTURE_BUDGET = { portrait: 45 * 1024, banner: 100 * 1024 }
+
+// What a picture IS comes from its bytes, never from the name or the header it arrived with -
+// both are whatever the sender typed. Three formats, each checked past the point where something
+// else could share its opening: a WAVE file starts "RIFF" like a webp, so the "WEBP" at byte 8
+// and the image chunk at 12 are read too; a PNG must have its header chunk, not just the
+// signature. Anything else - SVG, HTML, GIF - is refused, and SVG and HTML matter most: both can
+// carry script.
+const startsWith = (data, offset, expected) =>
+  data.length >= offset + expected.length && expected.every((byte, index) => data[offset + index] === byte)
+const ascii = (text) => [...text].map((character) => character.charCodeAt(0))
+
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+
+export function sniffImage(data) {
+  if (!(data instanceof Uint8Array)) return null
+  if (
+    startsWith(data, 0, ascii('RIFF')) &&
+    startsWith(data, 8, ascii('WEBP')) &&
+    startsWith(data, 12, ascii('VP8')) &&
+    [0x20, 0x4c, 0x58].includes(data[15]) // 'VP8 ', 'VP8L' or 'VP8X'
+  ) {
+    return 'image/webp'
+  }
+  if (startsWith(data, 0, [0xff, 0xd8, 0xff])) return 'image/jpeg'
+  if (startsWith(data, 0, PNG_SIGNATURE) && startsWith(data, 12, ascii('IHDR'))) return 'image/png'
+  return null
+}
+
+// C0 and C1 controls plus DEL, and the bidirectional overrides and isolates (U+202A-202E,
+// U+2066-2069). A name is printed next to other text; an override would keep reversing
+// whatever the page prints after it. Ordinary whitespace - tabs, newlines - is collapsed to a
+// single space first, because that is what a pasted name usually carries.
+const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/
+
+function cleanText(value, min, max) {
+  if (typeof value !== 'string') return null
+  const collapsed = value.replace(/\s+/g, ' ').trim()
+  if (UNPRINTABLE.test(collapsed)) return null
+  if (collapsed.length < min || collapsed.length > max) return null
+  return collapsed
+}
+
+// Markup is NOT refused: "<b>" is a name like any other, and the page always escapes a name.
+// Deciding what is safe HTML here would be a second defence that drifts from the real one.
+export const cleanName = (value) => cleanText(value, 1, 40)
+export const cleanStyle = (value) => cleanText(value, 1, 600)
+export const cleanDescription = (value) => cleanText(value, 3, 400)
+
 // Pure helpers, kept out of the handler so they can be tested without a network.
 
 // The three statuses a task card can be in — the contract in the template's tasks/README.md.

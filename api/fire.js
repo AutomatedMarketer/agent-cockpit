@@ -17,8 +17,6 @@ import { parseSimpleYaml } from './yaml-lite.js'
 
 const GITHUB = 'https://api.github.com'
 const ACTIONS = ['run', 'pause', 'task', 'arm', 'approve', 'move', 'skill', 'agent']
-const SLUG_SHAPE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-const MAX_SLUG_LENGTH = 100
 const TRIGGER_TIMEOUT_MS = 15_000
 
 // "task" dispatches through one dedicated routine, registered in FIRE_TRIGGERS under this
@@ -33,16 +31,13 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 
 // --- pure helpers, exported so the suite can hit them without a network ------------------
 
-// Kebab-case only, checked before the slug touches the trigger map or a GitHub URL.
-export function isValidSlug(slug) {
-  return typeof slug === 'string' && slug.length <= MAX_SLUG_LENGTH && SLUG_SHAPE.test(slug)
-}
-
 // Imported from lib.js so the fire key and the view key are compared by exactly one
 // implementation. Two copies of a constant-time compare is one copy too many.
-// Re-exported because this module's tests are the ones that cover it.
-import { keysMatch, TASK_STATUSES } from './lib.js'
-export { keysMatch, TASK_STATUSES }
+// Re-exported because this module's tests are the ones that cover it. The slug rule and the
+// same-origin check moved to lib.js for the same reason: the picture-store writes run them
+// too, and a second copy of either is a second place to get it wrong.
+import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest } from './lib.js'
+export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
 
 // FIRE_TRIGGERS must be a JSON object of slug → https URL. Anything else reads as
 // "not configured" — never as "open".
@@ -352,28 +347,9 @@ export function sessionUrlFrom(result) {
   return null
 }
 
-// PUBLIC_FIRE promises "same-origin only", so enforce it: browsers stamp cross-site calls
-// with Sec-Fetch-Site and Origin, and we refuse anything that does not look like our own
-// page. Best-effort by nature (non-browser clients forge headers freely) — which is why the
-// README still says to keep PUBLIC_FIRE deployments behind Vercel's own access control.
-export function isSameOriginRequest(headers = {}) {
-  const fetchSite = String(headers['sec-fetch-site'] ?? '').toLowerCase()
-  if (fetchSite) return fetchSite === 'same-origin'
-  const origin = headers.origin
-  const host = headers['x-forwarded-host'] ?? headers.host
-  if (typeof origin === 'string' && origin) {
-    // Origin with nothing to compare against fails closed, not open.
-    if (typeof host !== 'string' || !host) return false
-    try {
-      return new URL(origin).host === host
-    } catch {
-      return false
-    }
-  }
-  // No Sec-Fetch-Site and no Origin: not a cross-site browser call (browsers always send
-  // Origin on cross-origin POSTs). Curl-style clients land here — same as key mode allows.
-  return true
-}
+// The same-origin check PUBLIC_FIRE relies on lives in lib.js (imported above), with the note
+// on why it is best-effort - which is why the README says to keep PUBLIC_FIRE deployments
+// behind Vercel's own access control.
 
 // --- GitHub read (same shape as api/file.js — read-only, token stays server-side) --------
 
