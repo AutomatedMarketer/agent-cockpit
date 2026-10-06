@@ -121,6 +121,56 @@ test('state and file both refuse an unauthenticated caller', async () => {
   }
 })
 
+/* ---------- the four personalise endpoints, too ---------- */
+
+// Each is called the way the board's own page would, with everything but the view key right:
+// the body is the right type and shape. So the only thing that can refuse it is the gate - and
+// it must refuse FIRST. The environment has no store and no OpenAI key on purpose: a handler
+// that looks for either before the gate answers 503, not 401, and that order is what this test
+// pins. A stranger learns only that a key is missing.
+test('brand, upload, art and generate all refuse a caller with no view key, before anything else', async () => {
+  const previous = { ...process.env }
+  for (const name of ['PUBLIC_DASHBOARD', 'EDIT_KEY', 'BLOB_STORE_ID', 'BLOB_READ_WRITE_TOKEN', 'OPENAI_API_KEY']) {
+    delete process.env[name]
+  }
+  process.env.VIEW_KEY = KEY
+  const realFetch = globalThis.fetch
+  const fetched = []
+  globalThis.fetch = async (url) => {
+    fetched.push(String(url))
+    return new Response('{}', { status: 200 })
+  }
+  const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 '), Buffer.alloc(16)])
+  const json = { 'content-type': 'application/json' }
+  const calls = [
+    ['../api/brand.js', { method: 'GET', headers: {}, query: {} }],
+    ['../api/brand.js', { method: 'POST', headers: json, body: { change: 'name', slug: 'content', value: 'Penny' } }],
+    ['../api/upload.js', { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, query: { slot: 'team' }, body: webp }],
+    ['../api/art.js', { method: 'GET', headers: {}, query: { slot: 'team', v: 'abcdefgh1234', t: 'webp' } }],
+    ['../api/generate.js', { method: 'POST', headers: json, body: { slot: 'team', description: 'a lit workshop' } }]
+  ]
+  try {
+    for (const [module, request] of calls) {
+      const handler = (await import(module)).default
+      let status = 0
+      let body = null
+      const response = {
+        status(code) { status = code; return this },
+        json(payload) { body = payload; return this },
+        setHeader() { return this },
+        end() { return this }
+      }
+      await handler(request, response)
+      assert.equal(status, 401, `${module} ${request.method} answered ${status} to a caller with no view key`)
+      assert.match(body.error, /view key/i)
+    }
+    assert.deepEqual(fetched, [], 'a caller with no key made the board call out')
+  } finally {
+    globalThis.fetch = realFetch
+    process.env = previous
+  }
+})
+
 /* `api/fire.js` says, in a comment: "which is why the README still says to keep PUBLIC_FIRE
    deployments behind Vercel's own access control." The README said no such thing. PUBLIC_FIRE
    appeared once, in a table, marked Required: No, with no risk note at all — while the code
