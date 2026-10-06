@@ -1675,7 +1675,7 @@ function bannerHtml(now = new Date()) {
   const first = name.split(/\s+/)[0] ?? ''
   const greeting = `${greetingFor(now.getHours())}${first ? `, ${escapeHtml(first)}` : ''}.`
   const day = `${now.toLocaleDateString(undefined, { weekday: 'long' })} &middot; ${now.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}`
-  return pictureSwap(`<section class="banner">
+  return pictureSwap(`<section class="banner"${artMark('today')}>
     <img src="/art/today-harbour.webp" alt="" width="1600" height="686" fetchpriority="high" decoding="async" />
     <div class="banner-text">
       <div class="banner-words">
@@ -1957,7 +1957,7 @@ function portraitHtml(agent) {
   const picture = src
     ? `<img class="portrait-img" src="${escapeHtml(src)}" alt="" width="480" height="480" loading="lazy" decoding="async" />`
     : ''
-  return `<div class="portrait" style="--agent:${agentColor(agent.slug) ?? AGENT_PALETTE[0].hex}">
+  return `<div class="portrait"${artMark(`agent-${agent.slug}`)} style="--agent:${agentColor(agent.slug) ?? AGENT_PALETTE[0].hex}">
       <span class="portrait-tile" aria-hidden="true">${escapeHtml(initial.toUpperCase())}</span>${picture}
       <span class="status-pill"><span class="dot"></span><span class="state">${escapeHtml(STATE_LABEL[agent.state] ?? agent.state)}</span></span>
     </div>`
@@ -1991,7 +1991,7 @@ function teamBannerHtml(agents) {
     .map(([state, words]) => [agents.filter((agent) => agent.state === state).length, words])
     .filter(([number]) => number)
     .map(([number, words]) => `${number} ${words(number)}`)
-  return pictureSwap(`<section class="banner team-banner">
+  return pictureSwap(`<section class="banner team-banner"${artMark('team')}>
     <img src="/art/team-workshop.webp" alt="" width="1600" height="686" loading="lazy" decoding="async" />
     <div class="banner-text">
       <div class="banner-words">
@@ -3370,9 +3370,51 @@ async function fetchPicture(slot, wanted) {
   return blob && Object.hasOwn(ART_TYPES, blob.type) && blob.size > 0 ? blob : null
 }
 
-// Fetches the store pictures for these slots that are not already in hand. A version already held
-// is never fetched again. Says whether anything changed, so the caller redraws only then. Never
-// throws: a picture that cannot be had leaves the built-in one, and the board goes on.
+// With personalising on, each place a store picture can be drawn - a banner, a portrait - carries
+// its slot, so a picture that lands later can find its own place. Off, nothing is added: the board
+// stays the board it was.
+const artMark = (slot) => (brand && isArtSlot(slot) ? ` data-art="${slot}"` : '')
+
+// The picture that ships for a slot, or null for an agent the template has no robot for.
+const builtInArt = (slot) => (slot === 'today' ? '/art/today-harbour.webp'
+  : slot === 'team' ? '/art/team-workshop.webp'
+  : PORTRAITS.has(slot.slice('agent-'.length)) ? `/art/${slot}.webp` : null)
+
+// The tag a picture is put in its place with. Lazy like every picture but Today's first one - by
+// now it is an address in memory, so there is nothing to wait for anyway.
+const artImageHtml = (slot, src) => (slot.startsWith('agent-')
+  ? `<img class="portrait-img" src="${escapeHtml(src)}" alt="" width="480" height="480" loading="lazy" decoding="async" />`
+  : `<img src="${escapeHtml(src)}" alt="" width="1600" height="686" loading="lazy" decoding="async" />`)
+
+/* Puts one slot's picture right where it is drawn, and touches nothing else on the screen.
+
+   This used to be a redraw of the whole screen once its pictures had landed. On a slow connection
+   that is seconds after the screen first appears - time enough to open Add task, a card, or its
+   Personalise, and start typing - and a redraw puts the screen back as it was drawn: the half-typed
+   words gone, the open card shut. So now each picture changes its own img and nothing more: a new
+   address on the one already there, a new img where there was none (a portrait's goes after its
+   initial, so it is drawn over it; a banner's goes first, under its words), or the img taken away
+   while nothing is ready to go there. */
+function paintArt(slot) {
+  if (!brand || !isArtSlot(slot)) return
+  const src = pictureSrc(slot, builtInArt(slot))
+  for (const holder of el(slot.startsWith('agent-') ? 'team' : slot)?.querySelectorAll?.(`[data-art="${slot}"]`) ?? []) {
+    const image = holder.querySelector('img')
+    if (!src) {
+      image?.remove()
+    } else if (image) {
+      if (image.getAttribute('src') !== src) image.setAttribute('src', src)
+    } else {
+      const tile = holder.querySelector('.portrait-tile')
+      if (tile) tile.insertAdjacentHTML('afterend', artImageHtml(slot, src))
+      else holder.insertAdjacentHTML('afterbegin', artImageHtml(slot, src))
+    }
+  }
+}
+
+// Fetches the store pictures for these slots that are not already in hand, and puts each in its
+// place as it lands. A version already held is never fetched again. Says whether anything changed.
+// Never throws: a picture that cannot be had leaves the built-in one, and the board goes on.
 async function loadArt(slots) {
   const changed = await Promise.all(slots.map(async (slot) => {
     const wanted = storePicture(slot)
@@ -3384,22 +3426,21 @@ async function loadArt(slots) {
     // The brand moved on while this was out: a version nobody wants any more is not kept.
     if (storePicture(slot)?.v !== wanted.v) return false
     holdArt(slot, picture ? { v: wanted.v, url: URL.createObjectURL(picture) } : { v: wanted.v, failed: true })
+    paintArt(slot)
     return true
   }))
   return changed.includes(true)
 }
 
-// Which pictures each screen shows, and how it redraws. A redraw comes once per screen, after all
-// of its pictures have settled - straight after the screen is first drawn, before anyone has had
-// time to open a card or type in a form it would reset.
+// Which pictures each screen shows.
 const ART_SCREENS = {
-  today: { slots: () => ['today'], draw: () => renderToday() },
-  team: { slots: () => ['team', ...data.agents.map((agent) => `agent-${agent.slug}`)], draw: () => renderTeam() }
+  today: () => ['today'],
+  team: () => ['team', ...data.agents.map((agent) => `agent-${agent.slug}`)]
 }
 
 async function showArt(screen) {
   if (!brand) return
-  if (await loadArt(ART_SCREENS[screen].slots())) ART_SCREENS[screen].draw()
+  await loadArt(ART_SCREENS[screen]())
 }
 
 // A picture just sent to the store is already here, as the very bytes that were sent. It is shown
@@ -3408,7 +3449,7 @@ function adoptPicture(slot, picture, blob) {
   if (!brand || !isArtSlot(slot) || !isArtPicture(picture)) return
   brand.pictures[slot] = { v: picture.v, type: picture.type }
   holdArt(slot, { v: picture.v, url: URL.createObjectURL(blob) })
-  ART_SCREENS[slot.startsWith('agent-') ? 'team' : slot].draw()
+  paintArt(slot)
 }
 
 // The answer from /api/brand, or null - off - if it fails, is refused, or takes longer than

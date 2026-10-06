@@ -3718,6 +3718,47 @@ function storeFetch({ brand: answer = brandOn(), art = () => ({ ok: true, status
   return { fetch, requests, art: () => requests.filter((request) => request.url.startsWith('/api/art')) }
 }
 
+// Stand-ins for the places a store picture is drawn - a banner, a portrait - found the way the page
+// finds them, by data-art inside their own screen. Each holds the one picture in it, so a test reads
+// what a person would see once a picture lands, without the screen being drawn again: a picture
+// arriving puts itself in its place and redraws nothing (T11). Asked about a slot in the wrong
+// screen, they answer nothing, as the real page would.
+function artHolders() {
+  const holders = new Map()
+  const holderFor = (slot) => {
+    if (!holders.has(slot)) {
+      const holder = { slot, image: null, placed: [] }
+      const place = (where, markup) => {
+        holder.placed.push({ where, markup })
+        let src = /\bsrc="([^"]*)"/.exec(markup)?.[1] ?? null
+        holder.image = {
+          getAttribute: (name) => (name === 'src' ? src : null),
+          setAttribute: (name, value) => { if (name === 'src') src = String(value) },
+          remove: () => { holder.image = null },
+          get src() { return src }
+        }
+      }
+      // A portrait's picture goes straight after its initial, so it is drawn over it; a banner's
+      // goes first, under its words.
+      const tile = { insertAdjacentHTML: (where, markup) => place(`after the tile: ${where}`, markup) }
+      holder.querySelector = (selector) =>
+        selector === 'img' ? holder.image : selector === '.portrait-tile' && slot.startsWith('agent-') ? tile : null
+      holder.insertAdjacentHTML = (where, markup) => place(where, markup)
+      holders.set(slot, holder)
+    }
+    return holders.get(slot)
+  }
+  return {
+    select: (id, selector) => {
+      const slot = /^\[data-art="([a-z0-9-]+)"\]$/.exec(selector)?.[1]
+      if (!slot) return undefined
+      return id === (slot.startsWith('agent-') ? 'team' : slot) ? [holderFor(slot)] : []
+    },
+    srcOf: (slot) => holders.get(slot)?.image?.src ?? null,
+    holder: holderFor
+  }
+}
+
 const srcsOf = (markup) => [...markup.matchAll(/\bsrc="([^"]*)"/g)].map((found) => found[1])
 const cardOf = (drawn, slug) => teamCards(drawn)[slug] ?? assert.fail(`the ${slug} card is missing`)
 const pictureOf = (markup) => /<img\b[^>]*>/.exec(markup)?.[0] ?? null
@@ -3840,10 +3881,12 @@ test('while a picture of their own is on its way, the built-in one is never draw
 
 test('a picture from the store reaches a src only as a blob: address, fetched with the view key', async () => {
   const browser = storeFetch({ brand: brandOn({ today: webpAt(V1), team: { v: V2, type: 'image/jpeg' }, 'agent-research': { v: V1, type: 'image/png' } }) })
+  const holders = artHolders()
   const nodes = render(pinnedPayload, {
     fetch: browser.fetch,
     storage: { getItem: (key) => (key === 'agent-cockpit-view-key' ? 'the-view-key' : null), setItem() {}, removeItem() {} },
-    expose: ['showScreen']
+    select: holders.select,
+    expose: ['showScreen', 'renderToday']
   })
   await flush()
   nodes.exposed.showScreen('team')
@@ -3857,32 +3900,42 @@ test('a picture from the store reaches a src only as a blob: address, fetched wi
 
   const made = new Set(nodes.objectUrls.created.map((entry) => entry.url))
   assert.equal(made.size, 3, 'each picture fetched was not made into exactly one address')
-  const shown = [...srcsOf(nodes.get('today').innerHTML), ...srcsOf(nodes.get('team').innerHTML)]
+  // What a person sees: whatever the screens were drawn with, and each picture put in its own place
+  // as it landed.
+  const landed = ['today', 'team', 'agent-research'].map((slot) => holders.srcOf(slot))
+  const shown = [...srcsOf(nodes.get('today').innerHTML), ...srcsOf(nodes.get('team').innerHTML), ...landed]
   const builtIn = new Set(['/art/agent-content.webp', '/art/agent-security.webp'])
   for (const source of shown) {
     assert.ok(builtIn.has(source) || made.has(source), `${source} reached a src, and it is neither a robot nor an address the page made`)
   }
   assert.ok(!shown.some((source) => source.includes('/api/')), 'the store was linked to directly, where an img cannot send the view key')
-  assert.ok(made.has(/src="([^"]*)"/.exec(bannerOf(nodes.get('today').innerHTML))?.[1]), 'Today\'s banner is not the owner\'s picture')
-  assert.ok(made.has(/src="([^"]*)"/.exec(teamBannerOf(nodes.get('team').innerHTML))?.[1]), 'Team\'s banner is not the owner\'s picture')
-  assert.ok(made.has(/src="([^"]*)"/.exec(cardOf(nodes.get('team').innerHTML, 'research'))?.[1]), 'the research card is not the owner\'s picture')
-  // The eager banner keeps everything that made it eager, only its address changes.
+  assert.ok(made.has(holders.srcOf('today')), 'Today\'s banner is not the owner\'s picture')
+  assert.ok(made.has(holders.srcOf('team')), 'Team\'s banner is not the owner\'s picture')
+  assert.ok(made.has(holders.srcOf('agent-research')), 'the research card is not the owner\'s picture')
+  // Today drawn with its picture in hand keeps everything that made the banner eager; only its
+  // address changes.
+  nodes.exposed.renderToday()
+  assert.ok(made.has(/src="([^"]*)"/.exec(bannerOf(nodes.get('today').innerHTML))?.[1]), 'Today drawn again lost the owner\'s banner')
   assert.match(pictureOf(bannerOf(nodes.get('today').innerHTML)), /width="1600" height="686" fetchpriority="high"/)
 })
 
 test('a store picture that cannot be fetched gives way to the built-in one', async () => {
   const browser = storeFetch({ brand: brandOn({ today: webpAt(V1) }), art: () => ({ ok: false, status: 404, type: 'application/json' }) })
-  const nodes = render(pinnedPayload, { fetch: browser.fetch })
+  const holders = artHolders()
+  const nodes = render(pinnedPayload, { fetch: browser.fetch, select: holders.select, expose: ['renderToday'] })
   await flush()
   assert.equal(browser.art().length, 1)
-  assert.match(pictureOf(bannerOf(nodes.get('today').innerHTML)) ?? '', /src="\/art\/today-harbour\.webp"/, 'a missing picture left the banner empty')
+  assert.equal(holders.srcOf('today'), '/art/today-harbour.webp', 'a missing picture left the banner empty')
+  nodes.exposed.renderToday()
+  assert.match(pictureOf(bannerOf(nodes.get('today').innerHTML)) ?? '', /src="\/art\/today-harbour\.webp"/, 'Today drawn again left the banner empty')
   assert.deepEqual(nodes.objectUrls.created, [])
 
   // An answer that is not a picture is a failure too, whatever status came with it.
   const html = storeFetch({ brand: brandOn({ today: webpAt(V1) }), art: () => ({ ok: true, status: 200, type: 'text/html' }) })
-  const second = render(pinnedPayload, { fetch: html.fetch })
+  const placed = artHolders()
+  const second = render(pinnedPayload, { fetch: html.fetch, select: placed.select })
   await flush()
-  assert.match(pictureOf(bannerOf(second.get('today').innerHTML)) ?? '', /src="\/art\/today-harbour\.webp"/, 'a page of HTML was shown as the banner')
+  assert.equal(placed.srcOf('today'), '/art/today-harbour.webp', 'a page of HTML was shown as the banner')
   assert.deepEqual(second.objectUrls.created, [], 'something that is not a picture was made into an address')
 })
 
@@ -3930,7 +3983,8 @@ test('a new version frees the address of the old one, and the same version is ne
 
 test('a picture just uploaded is shown from the copy in hand, without fetching it back', async () => {
   const browser = storeFetch({ brand: brandOn({ today: webpAt(V1) }) })
-  const nodes = render(pinnedPayload, { fetch: browser.fetch, expose: ['adoptPicture'] })
+  const holders = artHolders()
+  const nodes = render(pinnedPayload, { fetch: browser.fetch, select: holders.select, expose: ['adoptPicture'] })
   await flush()
   const before = nodes.objectUrls.created[0].url
   const inHand = { type: 'image/webp', size: 30_000 }
@@ -3940,7 +3994,7 @@ test('a picture just uploaded is shown from the copy in hand, without fetching i
   const made = nodes.objectUrls.created.at(-1)
   assert.equal(made.blob, inHand, 'the address was not made from the copy in hand')
   assert.deepEqual(nodes.objectUrls.revoked, [before], 'the picture it replaced kept its address')
-  assert.match(bannerOf(nodes.get('today').innerHTML), new RegExp(`src="${made.url}"`), 'Today does not show the picture just sent')
+  assert.equal(holders.srcOf('today'), made.url, 'Today does not show the picture just sent')
 })
 
 test('an answer from /api/brand is read only as far as it is shaped like one', () => {
@@ -4139,4 +4193,60 @@ test('a chosen picture is drawn from its centre crop at the size it is sent at, 
   await shrinkPicture({ type: 'image/jpeg' }, 'banner')
   assert.deepEqual(drawn[1], [bitmap, 0, 1357, 3000, 1286, 0, 0, 1600, 686])
   assert.equal(closed, 2)
+})
+
+/* ---------- Personalise: a picture landing redraws nothing ---------------------------------------
+   A picture from the store used to arrive and redraw its whole screen. On a slow connection that is
+   seconds after the screen appears - time enough to start typing in Add task or Add agent - and the
+   redraw put the screen back as it was drawn, the typing gone. Each picture now goes into its own
+   place and nothing else is touched. */
+
+const jsonAnswer = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
+
+test('a picture arriving is put in its own place, and a form somebody is typing into is left exactly as it is', async () => {
+  // Every picture waits until the test lets it through, so the forms can be half-typed first.
+  let release
+  const held = new Promise((resolve) => { release = resolve })
+  const fetch = async (url) => {
+    if (String(url).startsWith('/api/brand')) return jsonAnswer(200, brandOn({ today: webpAt(V1), team: webpAt(V1), 'agent-research': webpAt(V1) }))
+    if (String(url).startsWith('/api/art')) {
+      await held
+      return { ok: true, status: 200, json: async () => ({}), blob: async () => ({ type: 'image/webp', size: 2048 }) }
+    }
+    return jsonAnswer(200, pinnedPayload)
+  }
+  const holders = artHolders()
+  const nodes = render(pinnedPayload, { fetch, select: holders.select, expose: ['showScreen', 'adoptPicture'] })
+  await flush()
+  nodes.exposed.showScreen('team')
+  await flush()
+  for (const slot of ['today', 'team', 'agent-research']) assert.equal(holders.srcOf(slot), null, `${slot} had a picture before any arrived`)
+
+  // Somebody opens Add task on Today and Add agent on Team and starts typing. In this harness a screen
+  // is its markup, so the half-typed words are written into it: drawing the screen again would put
+  // the markup back without them, which is what a phone on a slow connection used to do.
+  const typedToday = nodes.get('today').innerHTML.replace('id="task-text" rows="3" maxlength="2200"', 'id="task-text" rows="3" maxlength="2200" data-typed="Call the plumber about')
+  const typedTeam = nodes.get('team').innerHTML.replace('id="agent-text" rows="3" maxlength="2200"', 'id="agent-text" rows="3" maxlength="2200" data-typed="Watches my invoices and')
+  assert.notEqual(typedToday, nodes.get('today').innerHTML, 'there was no Add task box to type into')
+  assert.notEqual(typedTeam, nodes.get('team').innerHTML, 'there was no Add agent box to type into')
+  nodes.get('today').innerHTML = typedToday
+  nodes.get('team').innerHTML = typedTeam
+
+  release()
+  await flush()
+  for (const slot of ['today', 'team', 'agent-research']) {
+    assert.match(holders.srcOf(slot) ?? '', /^blob:/, `${slot}'s picture arrived and was never put in its place`)
+  }
+  assert.equal(nodes.get('today').innerHTML, typedToday, 'a picture arriving drew Today again and wiped what was being typed')
+  assert.equal(nodes.get('team').innerHTML, typedTeam, 'a picture arriving drew Team again and wiped what was being typed')
+  // A portrait goes in after its initial, so it is drawn over it; a banner goes in under its words.
+  assert.equal(holders.holder('agent-research').placed[0].where, 'after the tile: afterend')
+  assert.equal(holders.holder('today').placed[0].where, 'afterbegin')
+  assert.match(holders.holder('agent-research').placed[0].markup, /class="portrait-img"[^>]*width="480" height="480"/)
+  assert.match(holders.holder('today').placed[0].markup, /width="1600" height="686"/)
+
+  // A picture just sent lands the same way.
+  nodes.exposed.adoptPicture('agent-research', { v: V2, type: 'image/webp' }, { type: 'image/webp', size: 30_000 })
+  assert.equal(holders.srcOf('agent-research'), nodes.objectUrls.created.at(-1).url)
+  assert.equal(nodes.get('team').innerHTML, typedTeam, 'a picture just sent drew Team again and wiped what was being typed')
 })
