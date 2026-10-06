@@ -3,11 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A dashboard for your AI agent team. Reads your team repo, renders your agents, their runs, and your gaps. No database, no API key, no build step.",
+  "description": "A dashboard for your AI agent team. Reads your team repo, renders your agents, their runs, and your gaps. No database, no build step. One dependency, @vercel/blob, used only when you connect a picture store.",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "test": "node --test"
+  },
+  "dependencies": {
+    "@vercel/blob": "2.8.0"
   }
 }
