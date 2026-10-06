@@ -3,7 +3,10 @@
 // GET is how the page learns whether personalising is on at all, and what it should show: each
 // agent's display name, the assistant's name, the art style, which pictures the owner has put in
 // (by version, so each one can be fetched from /api/art and cached forever), and how much of
-// today's allowance is left. One read of settings.json, uncached, per page load.
+// today's allowance is left. One read of settings.json per page load, from the CDN's copy: a
+// cache hit is free, and on an open board anyone can load the page as often as they like. That
+// copy can be up to a minute behind a change made elsewhere; a POST is always answered from the
+// state it just saved, so the person who made the change sees it at once.
 //
 // POST makes one change: { change: 'name' | 'assistant' | 'style' | 'reset-picture', slug?,
 // slot?, value? }. An empty value means "back to the default" - the slug, no assistant name, the

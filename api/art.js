@@ -6,7 +6,13 @@
 //
 // - slot, v and t are checked before the store is touched, so no other path can be asked for.
 //   They are exactly what /api/brand hands the page; t names the extension the picture was
-//   stored under, which saves reading settings.json on every picture.
+//   stored under.
+// - Then they must be the picture settings.json points at now. That read is the CDN's copy, so it
+//   is free when it hits; a picture read is a cache MISS for any version nobody ever asked for,
+//   and a miss is one of the 10,000 simple operations Hobby includes a month. Checked first, a
+//   stranger guessing versions costs cache hits, never misses. The cached copy can be up to a
+//   minute behind a change: a picture replaced in that minute may 404 once, and the next load of
+//   the board finds it.
 // - The bytes are checked again on the way out, and the Content-Type comes from them - not from
 //   the path, the store's record or the URL. A file planted in the store that is not a picture
 //   is refused, never served from the board's own origin.
@@ -18,6 +24,7 @@ import { pictureStore, isPictureVersion, NOT_CONNECTED, failureAnswer } from './
 
 const TYPES = { webp: 'image/webp', jpeg: 'image/jpeg', png: 'image/png' }
 const FOREVER = 'private, max-age=31536000, immutable'
+const GONE = 'That picture is not in the store any more, so reload the board.'
 
 // Each value must be a single string of exactly our own shape; a repeated query parameter
 // arrives as an array and is refused with the rest.
@@ -61,9 +68,12 @@ export function makeHandler({ store, env, loadSdk } = {}) {
     }
 
     try {
-      const bytes = await pictures.getPicture(wanted.slot, wanted.version, wanted.type)
+      const { settings } = await pictures.readSettings()
+      const current = Object.hasOwn(settings.pictures, wanted.slot) ? settings.pictures[wanted.slot] : null
+      const inUse = current && current.v === wanted.version && current.type === wanted.type
+      const bytes = inUse ? await pictures.getPicture(wanted.slot, wanted.version, wanted.type) : null
       if (!bytes) {
-        response.status(404).json({ error: 'That picture is not in the store any more, so reload the board.' })
+        response.status(404).json({ error: GONE })
         return
       }
       const type = sniffImage(bytes)

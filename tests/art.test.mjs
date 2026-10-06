@@ -29,18 +29,26 @@ function board({ env = STORE_ENV } = {}) {
   const connected = connectedStore(env)
   const handler = makeHandler({ store: connected.store, env })
   const fetchArt = (query, headers = asTheBoard()) => call(handler, { method: 'GET', headers, query })
+  // settings.json pointing a slot at a version, the way /api/upload leaves it.
+  const point = (slot, v, type = 'image/webp') =>
+    connected.store.saveSettings((draft) => { draft.pictures[slot] = { v, type, bytes: 1, at: '' } })
+  // A picture in the store and settings.json pointing at it.
+  const keep = async (slot, v, bytes, type = 'image/webp') => {
+    await connected.store.putPicture(slot, v, bytes, type)
+    await point(slot, v, type)
+  }
   // Put a file straight into the fake store, as if something other than /api/upload wrote it.
   const plant = (path, bytes, contentType = 'image/webp') =>
     connected.fake.files.set(path, { bytes, contentType, etag: '"planted"', access: 'private' })
-  return { ...connected, handler, fetchArt, plant }
+  return { ...connected, handler, fetchArt, point, keep, plant }
 }
 
 /* ---------- serving ---------- */
 
 test('a stored picture is served as its bytes, typed by them, cached for good, never sniffed', async () => {
-  const { fetchArt, store } = board()
+  const { fetchArt, keep } = board()
   const bytes = webp(3000)
-  await store.putPicture('agent-content', V, bytes, 'image/webp')
+  await keep('agent-content', V, bytes)
   const response = await fetchArt({ slot: 'agent-content', v: V, t: 'webp' })
   assert.equal(response.statusCode, 200)
   assert.deepEqual(Buffer.from(response.sent), bytes)
@@ -51,8 +59,9 @@ test('a stored picture is served as its bytes, typed by them, cached for good, n
 })
 
 test('the Content-Type comes from the bytes, not from the path or what the store says', async () => {
-  const { fetchArt, plant } = board()
+  const { fetchArt, plant, point } = board()
   plant(`agent-cockpit/art/team/${V}.webp`, png(500), 'image/webp')
+  await point('team', V)
   const response = await fetchArt({ slot: 'team', v: V, t: 'webp' })
   assert.equal(response.statusCode, 200)
   assert.equal(response.headers['Content-Type'], 'image/png')
@@ -61,8 +70,9 @@ test('the Content-Type comes from the bytes, not from the path or what the store
 test('a planted file that is not a picture is refused, and none of it is sent', async () => {
   // Stored with an image content type and an image path, but its bytes are a page with script.
   // Served as-is, a browser opening /api/art directly would get HTML from the board's own origin.
-  const { fetchArt, plant } = board()
+  const { fetchArt, plant, point } = board()
   plant(`agent-cockpit/art/today/${V}.webp`, Buffer.from('<!doctype html><script>alert(1)</script>'), 'image/webp')
+  await point('today', V)
   const response = await fetchArt({ slot: 'today', v: V, t: 'webp' })
   assert.equal(response.statusCode, 502)
   assert.equal(response.sent, null)
@@ -71,18 +81,42 @@ test('a planted file that is not a picture is refused, and none of it is sent', 
 })
 
 test('a stored file over the size limit is refused rather than read whole', async () => {
-  const { fetchArt, plant } = board()
+  const { fetchArt, plant, point } = board()
   plant(`agent-cockpit/art/team/${V}.webp`, webp(111 * 1024))
+  await point('team', V)
   const response = await fetchArt({ slot: 'team', v: V, t: 'webp' })
   assert.equal(response.statusCode, 502)
   assert.equal(response.sent, null)
 })
 
 test('a picture that is not there is a 404', async () => {
-  const { fetchArt } = board()
+  const { fetchArt, point } = board()
+  await point('agent-content', V)
   const response = await fetchArt({ slot: 'agent-content', v: V, t: 'webp' })
   assert.equal(response.statusCode, 404)
   assert.equal(typeof response.body.error, 'string')
+})
+
+test('a version settings.json does not point at is a 404, and that picture is never asked for', async () => {
+  // From the security review: the store's cache misses are what Hobby counts (10,000 simple
+  // operations a month), and every made-up version is a miss. So a version is checked against
+  // settings.json - itself a cached read - before the picture is fetched, and a stranger's
+  // random versions cost nothing but cache hits. An old version, and the right version under the
+  // wrong type, are refused the same way.
+  const { fetchArt, keep, fake } = board()
+  await keep('team', V, webp(800))
+  const asked = []
+  for (let i = 0; i < 50; i += 1) asked.push({ slot: 'team', v: `${i}`.padStart(12, 'r'), t: 'webp' })
+  asked.push({ slot: 'agent-content', v: V, t: 'webp' }, { slot: 'team', v: V, t: 'png' })
+  const before = fake.calls.get.length
+  for (const query of asked) {
+    const response = await fetchArt(query)
+    assert.equal(response.statusCode, 404, `${JSON.stringify(query)} was not a 404`)
+  }
+  const reads = fake.calls.get.slice(before)
+  assert.deepEqual(reads.filter((read) => read.pathname.includes('/art/')), [], 'a version nobody points at was fetched from the store')
+  assert.ok(reads.every((read) => read.options.useCache !== false), 'checking a version skipped the cache')
+  assert.equal((await fetchArt({ slot: 'team', v: V, t: 'webp' })).statusCode, 200, 'the version in use stopped being served')
 })
 
 /* ---------- refusals before the store ---------- */
@@ -132,8 +166,8 @@ test('with no store connected, a good request gets the sentence that says how to
 /* ---------- the gate ---------- */
 
 test('no view key is a 401, and the store is not touched', async () => {
-  const { fetchArt, fake, store } = board()
-  await store.putPicture('team', V, webp(), 'image/webp')
+  const { fetchArt, fake, keep } = board()
+  await keep('team', V, webp())
   const before = storeCalls(fake)
   const response = await fetchArt({ slot: 'team', v: V, t: 'webp' }, {})
   assert.equal(response.statusCode, 401)
@@ -142,8 +176,8 @@ test('no view key is a 401, and the store is not touched', async () => {
 })
 
 test('showing a picture is a read: an edit key does not stand in its way', async () => {
-  const { fetchArt, store } = board({ env: { ...STORE_ENV, EDIT_KEY: 'an-edit-key-for-changes-only' } })
-  await store.putPicture('team', V, webp(), 'image/webp')
+  const { fetchArt, keep } = board({ env: { ...STORE_ENV, EDIT_KEY: 'an-edit-key-for-changes-only' } })
+  await keep('team', V, webp())
   const response = await fetchArt({ slot: 'team', v: V, t: 'webp' })
   assert.equal(response.statusCode, 200)
 })

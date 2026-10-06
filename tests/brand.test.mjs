@@ -73,7 +73,7 @@ test('with no store connected, a change is refused with the same sentence', asyn
 
 /* ---------- what GET says when a store is there ---------- */
 
-test('a connected, empty store reads as the defaults, uncached, with the full day\'s allowance', async () => {
+test('a connected, empty store reads as the defaults, with the full day\'s allowance', async () => {
   const { get, fake } = board()
   const response = await get()
   assert.equal(response.statusCode, 200)
@@ -91,6 +91,35 @@ test('a connected, empty store reads as the defaults, uncached, with the full da
   })
   assert.equal(fake.calls.get.length, 1, 'a page load is one read of settings.json')
   assert.equal(fake.calls.put.length, 0, 'reading never writes')
+})
+
+test('a stranger loading an open board a thousand times costs only cached reads', async () => {
+  // From the security review: on a PUBLIC_DASHBOARD board GET needs no key at all, and a read that
+  // skips the cache is a cache MISS - one of the 10,000 simple operations Hobby includes a month,
+  // and going over locks the store for 30 days. A reload loop must cost cache hits, which are free.
+  const env = { PUBLIC_DASHBOARD: 'true', EDIT_KEY: 'owner-only-edit-key-xyz', BLOB_STORE_ID: 'store_fake' }
+  const { fake, store } = connectedStore(env)
+  const handler = makeHandler({ store, env, now: NOON })
+  for (let i = 0; i < 1000; i += 1) {
+    const response = await call(handler, { method: 'GET', headers: {} })
+    assert.equal(response.statusCode, 200)
+    assert.equal(response.body.enabled, true)
+  }
+  const forced = fake.calls.get.filter((read) => read.options.useCache === false).length
+  assert.equal(forced, 0, `${forced} of 1000 page loads skipped the cache`)
+})
+
+test('a change is answered with the board as it is now, even while the cache still holds the old copy', async () => {
+  // GET may be up to a minute behind; the person who made a change must not be.
+  const connected = connectedStore(STORE_ENV, { cdn: true })
+  const handler = makeHandler({ store: connected.store, env: STORE_ENV, now: NOON })
+  const post = (body) => call(handler, { method: 'POST', headers: asTheBoard(JSON_TYPE), body })
+  await post({ change: 'name', slug: 'content', value: 'Penny' })
+  await call(handler, { method: 'GET', headers: asTheBoard() }) // the cache keeps this copy
+  await post({ change: 'name', slug: 'sales', value: 'Sam' })
+  const answer = await post({ change: 'name', slug: 'email', value: 'Eve' })
+  assert.equal(answer.statusCode, 200)
+  assert.deepEqual(answer.body.names, { content: 'Penny', sales: 'Sam', email: 'Eve' })
 })
 
 test('making pictures from words is on only with OPENAI_API_KEY, and the reason names it', async () => {

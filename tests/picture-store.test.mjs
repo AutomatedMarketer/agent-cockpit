@@ -62,7 +62,7 @@ test('with a store, the SDK is loaded on first use and only once', async () => {
 
 /* ---------- settings ---------- */
 
-test('an empty store reads as the defaults, fresh from the origin rather than a cache', async () => {
+test('an empty store reads as the defaults', async () => {
   const { fake, store } = connected()
   const { settings, etag } = await store.readSettings()
   assert.deepEqual(settings, emptySettings())
@@ -70,7 +70,24 @@ test('an empty store reads as the defaults, fresh from the origin rather than a 
   const [read] = fake.calls.get
   assert.equal(read.pathname, SETTINGS_PATH)
   assert.equal(read.options.access, 'private')
-  assert.equal(read.options.useCache, false, 'a cached read could show a name the owner already changed')
+})
+
+test('a read for showing the board may come from the cache; only a save goes to the origin', async () => {
+  // From the security review: every read that skips the cache is a cache MISS, one of the 10,000
+  // simple operations Hobby includes a month, and GET /api/brand needs no key on an open board.
+  // So showing the board reads the cached copy (free), and only the read a save builds on - which
+  // must see the latest file, or its ifMatch would fail every time - skips the cache.
+  const fake = fakeBlob({ cdn: true })
+  const store = pictureStore(STORE, async () => fake.sdk)
+  await store.saveSettings((draft) => { draft.names.content = 'Penny' })
+  await store.readSettings() // the cache now holds this copy, and keeps it
+  await store.saveSettings((draft) => { draft.names.sales = 'Sam' })
+  await store.saveSettings((draft) => { draft.names.email = 'Eve' })
+  fake.expireCache()
+  assert.deepEqual((await store.readSettings()).settings.names, { content: 'Penny', sales: 'Sam', email: 'Eve' },
+    'a save built on the cached copy and lost a change')
+  const forced = fake.calls.get.filter((read) => read.options.useCache === false).length
+  assert.equal(forced, 3, 'one origin read per save, and none for showing the board')
 })
 
 test('a saved change is there on the next read', async () => {

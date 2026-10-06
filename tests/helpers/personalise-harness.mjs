@@ -20,8 +20,8 @@ export const png = (size = 64) =>
   pad(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from([0, 0, 0, 13]), Buffer.from('IHDR')]), size)
 export const jpeg = (size = 64) => pad(Buffer.from([0xff, 0xd8, 0xff, 0xe0]), size)
 
-export function connectedStore(env = STORE_ENV) {
-  const fake = fakeBlob()
+export function connectedStore(env = STORE_ENV, fakeOptions = {}) {
+  const fake = fakeBlob(fakeOptions)
   let loads = 0
   const store = pictureStore(env, async () => {
     loads += 1

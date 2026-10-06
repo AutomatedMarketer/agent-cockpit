@@ -251,8 +251,19 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
     }
   }
 
-  async function readSettings() {
-    const found = await attempt((blob) => blob.get(SETTINGS_PATH, { access: 'private', useCache: false }))
+  // Showing the board reads the CDN's copy: a cache hit costs nothing, and a miss is one of the
+  // 10,000 simple operations Hobby includes a month - and GET /api/brand needs no key on an open
+  // board, so an uncached read there was a meter anyone could run. The copy can be up to a minute
+  // old (settings.json is stored with cacheControlMaxAge: 60); the person who made a change is
+  // answered from the save itself, so only other screens wait that minute. `fresh` skips the cache
+  // and is for saveSettings alone: a save must build on the latest file, or its ifMatch fails.
+  //
+  // No in-memory copy is kept in the function on top of this. A copy kept under a minute saves no
+  // billed operation (the CDN hit it replaces is free), and one kept longer would make a change
+  // look undone on other screens for that long.
+  async function readSettings({ fresh = false } = {}) {
+    const options = fresh ? { access: 'private', useCache: false } : { access: 'private' }
+    const found = await attempt((blob) => blob.get(SETTINGS_PATH, options))
     if (!found || found.statusCode !== 200 || !found.stream) return { settings: emptySettings(), etag: null }
     const etag = found.blob?.etag || null
     const text = await readCapped(found.stream, SETTINGS_MAX_BYTES)
@@ -273,7 +284,7 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
   // cap, a refusal - passes straight through and nothing is written.
   async function saveSettings(mutate) {
     for (let tries = 1; tries <= SAVE_TRIES; tries += 1) {
-      const { settings, etag } = await readSettings()
+      const { settings, etag } = await readSettings({ fresh: true })
       const draft = structuredClone(settings)
       const next = normaliseSettings((await mutate(draft)) ?? draft)
       // First save creates the file and must not replace one that appeared meanwhile; every save
@@ -292,7 +303,7 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
       } catch (error) {
         const lostRace = etag
           ? typeof blob.BlobPreconditionFailedError === 'function' && error instanceof blob.BlobPreconditionFailedError
-          : (await readSettings()).etag !== null
+          : (await readSettings({ fresh: true })).etag !== null
         if (lostRace) continue
         const { status, error: sentence } = storeFailure(error, blob)
         throw new PictureStoreError(status, sentence)

@@ -5,6 +5,12 @@
 // - put() with ifMatch throws BlobPreconditionFailedError unless the stored etag matches.
 // Every call is recorded, so a test can say which paths were touched, with what access, and
 // that list() was never called at all.
+//
+// fakeBlob({ cdn: true }) also plays the CDN in front of the store: a get() that allows the cache
+// is answered from the first copy the cache saw, however often the file changes after, until the
+// test calls expireCache(). A get() with useCache: false always reaches the origin. That is the
+// worst case the real cache allows (a copy up to cacheControlMaxAge old), so a read that must be
+// fresh - the one inside a save - is caught if it ever comes from the cache.
 
 export class BlobError extends Error {
   constructor(message) {
@@ -25,8 +31,9 @@ export class BlobNotFoundError extends BlobError { constructor() { super('The re
 export class BlobUnknownError extends BlobError { constructor() { super('Unknown error, please visit https://vercel.com/help.') } }
 export class BlobPreconditionFailedError extends BlobError { constructor() { super('Precondition failed: ETag mismatch.') } }
 
-export function fakeBlob() {
+export function fakeBlob({ cdn = false } = {}) {
   const files = new Map()
+  const cached = new Map()
   const calls = { put: [], get: [], del: [], list: [], head: [] }
   let serial = 0
   // Set by a test to make the next call of that kind throw this error instead.
@@ -74,7 +81,9 @@ export function fakeBlob() {
     async get(pathname, options = {}) {
       calls.get.push({ pathname, options: { ...options } })
       takeFailure('get')
-      const file = files.get(pathname)
+      const fromCache = cdn && options.useCache !== false
+      if (fromCache && !cached.has(pathname) && files.has(pathname)) cached.set(pathname, files.get(pathname))
+      const file = fromCache && cached.has(pathname) ? cached.get(pathname) : files.get(pathname)
       if (!file) return null
       // Two chunks, so a reader that only looks at the first one is caught.
       const half = Math.ceil(file.bytes.length / 2)
@@ -113,5 +122,7 @@ export function fakeBlob() {
   // Everything any call touched, for "every path starts agent-cockpit/".
   const touched = () => [...calls.put, ...calls.get, ...calls.del].flatMap((call) => [call.pathname].flat())
 
-  return { sdk, files, calls, failNext, touched }
+  const expireCache = () => cached.clear()
+
+  return { sdk, files, calls, failNext, touched, expireCache }
 }
