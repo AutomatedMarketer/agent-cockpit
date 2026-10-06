@@ -9,9 +9,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { makeHandler } from '../api/brand.js'
-import { NOT_CONNECTED, SETTINGS_PATH } from '../api/_picture-store.js'
+import { NOT_CONNECTED, SETTINGS_PATH, pictureStore } from '../api/_picture-store.js'
 import { DEFAULT_ART_STYLE } from '../api/lib.js'
-import { BlobServiceNotAvailable } from './helpers/fake-blob.mjs'
+import { BlobServiceNotAvailable, fakeBlob } from './helpers/fake-blob.mjs'
 import {
   STORE_ENV,
   NOON,
@@ -107,6 +107,34 @@ test('a stranger loading an open board a thousand times costs only cached reads'
   }
   const forced = fake.calls.get.filter((read) => read.options.useCache === false).length
   assert.equal(forced, 0, `${forced} of 1000 page loads skipped the cache`)
+})
+
+test('on a fresh store with no settings file yet, a thousand page loads cost one store read per instance', async (t) => {
+  // From the second review: before the first change there is no settings.json, and whether the
+  // CDN keeps a "not found" could not be checked - if it does not, every load of an open board is
+  // a billed miss. GET must never create the file (that would let anyone spend writes), so each
+  // instance remembers its last read for 30 s, "not there" included.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-06T12:00:00Z') })
+  const env = { PUBLIC_DASHBOARD: 'true', EDIT_KEY: 'owner-only-edit-key-xyz', BLOB_STORE_ID: 'store_fake' }
+  const fake = fakeBlob()
+  const instances = [1, 2].map(() => makeHandler({ store: pictureStore(env, async () => fake.sdk), env, now: NOON }))
+  for (let i = 0; i < 1000; i += 1) {
+    const response = await call(instances[i % 2], { method: 'GET', headers: {} })
+    assert.equal(response.body.enabled, true)
+  }
+  assert.equal(fake.calls.get.length, 2, 'more than one read of the missing file per instance')
+  assert.equal(fake.calls.put.length, 0, 'a page load wrote to the store')
+  t.mock.timers.tick(30_001)
+  await call(instances[0], { method: 'GET', headers: {} })
+  assert.equal(fake.calls.get.length, 3, 'a remembered read outlived its 30 seconds')
+})
+
+test('a change shows on the next page load from the same instance at once, not 30 seconds later', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-10-06T12:00:00Z') })
+  const { get, post } = board()
+  assert.deepEqual((await get()).body.names, {})
+  await post({ change: 'name', slug: 'content', value: 'Penny' })
+  assert.deepEqual((await get()).body.names, { content: 'Penny' }, 'the instance that saved showed what it remembered from before')
 })
 
 test('a change is answered with the board as it is now, even while the cache still holds the old copy', async () => {

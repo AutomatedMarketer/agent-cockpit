@@ -102,10 +102,11 @@ test('a saved change is there on the next read', async () => {
     settings.assistantName = 'Ada'
     return settings
   })
-  const { settings, etag } = await store.readSettings()
+  const { settings } = await store.readSettings()
   assert.equal(settings.names.content, 'Penny')
   assert.equal(settings.assistantName, 'Ada')
-  assert.ok(etag)
+  // The etag is what a save builds on, so it comes with the fresh read a save makes.
+  assert.ok((await store.readSettings({ fresh: true })).etag)
 })
 
 test('two changes saved at the same moment both survive', async () => {

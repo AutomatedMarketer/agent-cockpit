@@ -154,11 +154,15 @@ the rest of the 2,000 for retries and for you looking at the store in Vercel:
 - The defaults, 20 changes and 10 pictures from words, are 50 a day
 - The Blob library retries a failed write up to 10 times on its own, and a retry can count. Set
   `VERCEL_BLOB_RETRIES=2` in Vercel to keep that small
-- **Showing the board reads the cached copy, which is free.** So a change made on one screen can take
-  up to a minute to show on another (the screen that made it shows it at once). The cached copy is
-  refreshed at most about once a minute while someone is looking, and each refresh is one simple
-  operation. An open board (`PUBLIC_DASHBOARD=true`) that strangers load nonstop, all month, could
-  still use the 10,000 that way - keep a board closed with `VIEW_KEY` if that worries you
+- **Showing the board reads the cached copy, which is free.** Each running copy of the board also
+  remembers what it last read for 30 seconds, so a burst of page loads costs one read. A change made
+  on one screen can take up to about a minute and a half to show on another (the screen that made it
+  shows it at once). The copy is refreshed at most about once a minute while someone is looking, and
+  each refresh is one simple operation. An open board (`PUBLIC_DASHBOARD=true`) that strangers load
+  nonstop, all month, could still use the 10,000 that way - keep a board closed with `VIEW_KEY` if
+  that worries you
+- **A new store has no settings file until your first change creates it.** Looking at the board never
+  writes anything, so nobody can spend the store's writes just by visiting
 
 ### Who can change things
 
@@ -259,7 +263,7 @@ Locally:
 npm test
 ```
 
-848 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+850 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

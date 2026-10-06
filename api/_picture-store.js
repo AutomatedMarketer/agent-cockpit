@@ -286,6 +286,16 @@ const loadRealSdk = () => import('@vercel/blob')
 const TURN_WAIT_MS = 10_000
 const turns = new WeakMap()
 
+// What this instance last read for showing the board, kept SHOWN_MS - "no settings file yet"
+// included. Before the first change there is no settings.json, and whether the CDN keeps a "not
+// found" could not be checked (if it does not, every load of an open board would be a billed
+// miss). A GET must never create the file, or anyone could spend the store's writes, so instead
+// each instance asks at most once per SHOWN_MS. This instance's own saves replace the copy at once,
+// so a change shows on its next page load; other instances can take SHOWN_MS longer, on top of the
+// CDN's minute. Kept per SDK loader, like the turns above.
+const SHOWN_MS = 30_000
+const shown = new WeakMap()
+
 function takeTurn(key, work) {
   const before = turns.get(key) ?? Promise.resolve()
   const mine = before.then(() => work())
@@ -321,11 +331,17 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
   // answered from the save itself, so only other screens wait that minute. `fresh` skips the cache
   // and is for saveSettings alone: a save must build on the latest file, or its ifMatch fails.
   //
-  // No in-memory copy is kept in the function on top of this. A copy kept under a minute saves no
-  // billed operation (the CDN hit it replaces is free), and one kept longer would make a change
-  // look undone on other screens for that long.
+  // On top of that, a display read is answered from `shown` (above) while it is under SHOWN_MS old.
   async function readSettings({ fresh = false } = {}) {
-    const options = fresh ? { access: 'private', useCache: false } : { access: 'private' }
+    if (fresh) return readFromStore({ access: 'private', useCache: false })
+    const kept = shown.get(loadSdk)
+    if (kept && Date.now() - kept.at < SHOWN_MS) return { settings: structuredClone(kept.settings), etag: null }
+    const read = await readFromStore({ access: 'private' })
+    shown.set(loadSdk, { at: Date.now(), settings: structuredClone(read.settings) })
+    return read
+  }
+
+  async function readFromStore(options) {
     const found = await attempt((blob) => blob.get(SETTINGS_PATH, options))
     if (!found || found.statusCode !== 200 || !found.stream) return { settings: emptySettings(), etag: null }
     const etag = found.blob?.etag || null
@@ -379,6 +395,7 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk) {
           cacheControlMaxAge: 60,
           ...guard
         })
+        shown.set(loadSdk, { at: Date.now(), settings: structuredClone(next) })
         return next
       } catch (error) {
         const lostRace = etag
