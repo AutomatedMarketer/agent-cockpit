@@ -1,9 +1,9 @@
-import test from 'node:test'
+import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { shapeHero } from '../api/state.js'
-import { AGENT_PALETTE, agentColorIndex } from '../api/lib.js'
+import { AGENT_PALETTE, agentColorIndex, PICTURE_BUDGET } from '../api/lib.js'
 import { cssRules } from './helpers/css-rules.mjs'
 
 /* Every other test in this repo checks the API, or greps the page source for a string. None of
@@ -62,7 +62,9 @@ function render(payload, options = {}) {
     querySelectorAll: () => [],
     querySelector: () => null,
     addEventListener(type, handler, options) { documentListeners.push({ type, handler, options }) },
-    createElement: () => node('scratch'),
+    // `options.create(tag)` hands back a stand-in for one kind of element - a canvas with a
+    // recording context, for the picture pipeline. Unanswered, the scratch node, as before.
+    createElement: (tag) => options.create?.(tag) ?? node('scratch'),
     body: node('body'),
     documentElement: node('html')
   }
@@ -73,22 +75,49 @@ function render(payload, options = {}) {
   // before this option existed. `options.storage` stands in for localStorage, including one whose
   // every method throws - what a private window or blocked site data hands the page.
   const media = options.media ?? {}
+  // Every address the page makes from a blob, and every one it lets go of, RECORDED. A picture
+  // from the store reaches a src only through createObjectURL, so this list is the whole set of
+  // store pictures the page can show - and the revoked list is how a test sees one being freed.
+  const objectUrls = { created: [], revoked: [] }
+  nodes.objectUrls = objectUrls
+  class RecordingURL extends URL {
+    static createObjectURL(blob) {
+      const url = `blob:cockpit/${objectUrls.created.length + 1}`
+      objectUrls.created.push({ url, blob })
+      return url
+    }
+    static revokeObjectURL(url) { objectUrls.revoked.push(url) }
+  }
   // `options.history` and `options.fetch` stand in for the browser's own, so a test can read what
   // a control pushed onto the history and every request the page made. Left out, history is
-  // absent - as it was before these existed - and fetch answers with the payload.
+  // absent - as it was before these existed - and fetch answers with the payload. The one
+  // exception is a test that sets `state.brand`: the page's own boot asks /api/brand too, and is
+  // told the same brand the test set, so the boot that finishes after the test's render agrees
+  // with it instead of quietly switching personalising off again.
+  const givenBrand = options.state?.brand
+  const answer = async (url) => ({
+    ok: true, status: 200,
+    json: async () => (givenBrand !== undefined && String(url).startsWith('/api/brand') ? givenBrand : payload)
+  })
   const context = {
     document,
     window: { addEventListener() {}, matchMedia: (query) => ({ matches: Boolean(media[query]), addEventListener() {} }), location: { hash }, scrollTo() {}, requestAnimationFrame: (fn) => fn(), history: options.history },
     location: { hash, search: '' },
     localStorage: options.storage ?? { getItem: () => null, setItem() {}, removeItem() {} },
-    fetch: options.fetch ?? (async () => ({ ok: true, status: 200, json: async () => payload })),
+    fetch: options.fetch ?? answer,
     console,
     setTimeout,
     clearTimeout,
-    Date,
+    // `options.Date` pins the clock, for the one test that compares whole screens byte for byte.
+    Date: options.Date ?? Date,
     Math,
     JSON,
-    Intl
+    Intl,
+    URL: RecordingURL,
+    // Neither exists in node. A test of the picture pipeline hands in its own; left out, the page
+    // sees what node would show it - nothing.
+    createImageBitmap: options.createImageBitmap,
+    Image: options.Image
   }
 
   // The page defines everything as top-level declarations, so evaluating it and then calling
@@ -113,6 +142,8 @@ function render(payload, options = {}) {
      ; const given = arguments[arguments.length - 1]
      ; if (given.memoryQuery !== undefined) memoryQuery = given.memoryQuery
      ; if (given.memorySource !== undefined) memorySource = given.memorySource
+     ; if (given.brand !== undefined) brand = parseBrand(given.brand)
+     ; if (given.art) for (const [slot, entry] of Object.entries(given.art)) artUrls.set(slot, entry)
      ; render(); return { ${exposeNames.join(', ')} };`
   )
   nodes.exposed = run(...Object.values(context), payload, state)
@@ -3572,4 +3603,364 @@ test('Add task and New workflow sit in one row that wraps, with no margin left o
     .filter((rule) => Object.keys(valuesIn(rule)).some((name) => name.startsWith('margin')))
     .map((rule) => `${rule.selector} { ${rule.body.trim()} }`)
   assert.deepEqual(strays, [], `a margin still lands on a button in the row:\n${strays.join('\n')}`)
+})
+
+/* ---------- Personalise: pictures and names from the board's own store -------------------------
+   With a picture store connected, /api/brand says personalising is on and lists the owner's own
+   pictures by version; each one is fetched from /api/art with the view key and shown from memory as
+   a blob: address. Everything here hangs off one rule: with personalising OFF - no store, a failed
+   or slow answer, anything that is not `enabled: true` - Today and Team are byte for byte the board
+   that shipped before personalising existed. That is pinned against a copy of the two screens taken
+   from the board at 2750c0d, drawn from one fixed payload at one fixed moment. */
+
+const PINNED_AT = Date.UTC(2026, 9, 7, 10, 30) // a Wednesday, mid-morning in UTC
+// The clock, the time zone and the language of the dates are all pinned, so the copy is the same on
+// every machine: a laptop in Lisbon and one in Los Angeles would otherwise greet differently.
+class PinnedDate extends Date {
+  constructor(...args) { if (args.length) super(...args); else super(PINNED_AT) }
+  static now() { return PINNED_AT }
+  toLocaleDateString(locales, options) { return super.toLocaleDateString('en-GB', { ...options, timeZone: 'UTC' }) }
+  toLocaleString(locales, options) { return super.toLocaleString('en-GB', { ...options, timeZone: 'UTC' }) }
+}
+const pinnedIso = (hoursFromNow) => new Date(PINNED_AT + hoursFromNow * 3600_000).toISOString()
+
+// Every kind of thing Today and Team draw: template agents with a robot, the owner's own agent with
+// a tile, a switched-off one, a job that rings and one that does not, a board in all four columns,
+// a fortnight of runs and a part-finished setup.
+const pinnedRun = (agentSlug, hoursAgo, extra = {}) => ({
+  workflow: 'morning-brief', agent: agentSlug, status: 'ok', started_at: pinnedIso(-hoursAgo),
+  summary: `${agentSlug} did a thing`, session_url: null, ...extra
+})
+const pinnedRuns = [
+  pinnedRun('research', 2, { session_url: 'https://claude.ai/code/session_1' }),
+  pinnedRun('research', 26), pinnedRun('bookkeeper', 50), pinnedRun('research', 98), pinnedRun('content', 200)
+]
+const pinnedPayload = {
+  ...base,
+  owner: { name: 'Jordan Avery' },
+  generatedAt: pinnedIso(-0.02),
+  agents: [
+    agent({ slug: 'research', state: 'working', model: 'sonnet', runsThisWeek: 3, totalRuns: 4, lastRun: pinnedIso(-2), recentRuns: pinnedRuns.filter((run) => run.agent === 'research') }),
+    agent({ slug: 'content', state: 'quiet', totalRuns: 1, lastRun: pinnedIso(-200) }),
+    agent({ slug: 'bookkeeper', state: 'working', totalRuns: 1, runsThisWeek: 1, lastRun: pinnedIso(-50) }),
+    agent({ slug: 'security', state: 'not-in-use', notInUseBecause: 'I do not sell anything online.' })
+  ],
+  runs: pinnedRuns,
+  totalRuns: pinnedRuns.length,
+  activity: { since: pinnedIso(-15 * 24), runs: pinnedRuns.map(({ agent: who, started_at }) => ({ agent: who, started_at })), complete: true },
+  workflows: [
+    workflow({ slug: 'morning-brief', name: 'Morning brief', arm: 'armed', armed: true, routineId: 'trig_1', fire: true, nextRun: pinnedIso(2), lastRun: pinnedIso(-22), state: 'working' }),
+    workflow({ slug: 'wishful', name: 'Wishful', owner: 'content', arm: 'declared', armed: true, schedule: 'weekly mon 09:00' })
+  ],
+  board: {
+    todo: [{ slug: 'chase-acme', title: 'Chase Acme', for: 'research', doing: false }, { slug: 'books', title: 'Close the month', for: 'bookkeeper', doing: true }],
+    upNext: [{ name: 'Morning brief', when: pinnedIso(2), owner: 'research' }],
+    running: [{ name: 'Inbox sweep', agent: 'research', started_at: pinnedIso(-0.2), session_url: 'https://claude.ai/code/session_2' }],
+    done: [{ name: 'Morning brief', agent: 'research', status: 'ok', started_at: pinnedIso(-2), summary: 'Five things worth reading', session_url: null }],
+    finishedTasks: []
+  },
+  goneQuiet: [{ name: 'content', kind: 'agent', lastRun: pinnedIso(-200) }],
+  setup: ['Brief', 'Access', 'Training'].map((label, index) => ({ rung: label.toLowerCase(), label, pass: index < 2, detail: 'd' })),
+  routines: { takenAt: pinnedIso(-5), usable: true, stale: false, why: null, count: 1, known: true, orphans: [], problems: [] }
+}
+
+const BOARD_BEFORE = fileURLToPath(new URL('./fixtures/board-before-personalise.json', import.meta.url))
+
+// Draws the pinned payload with the pinned clock in UTC. Async, because the page's own boot finishes
+// after the first draw and draws again: the time zone stays pinned until it has.
+async function pinnedScreens(options = {}, settle = async () => { await new Promise((resolve) => setImmediate(resolve)) }) {
+  const zone = process.env.TZ
+  process.env.TZ = 'UTC'
+  try {
+    const nodes = render(pinnedPayload, { Date: PinnedDate, ...options })
+    await settle(nodes)
+    return nodes
+  } finally {
+    if (zone === undefined) delete process.env.TZ
+    else process.env.TZ = zone
+  }
+}
+
+if (process.env.COCKPIT_WRITE_BOARD_BEFORE === '1') {
+  // Run once, against the board at 2750c0d, to take the copy. Never again: a copy retaken from a
+  // board that already changed would pin the change instead of catching it.
+  const nodes = await pinnedScreens()
+  const { writeFileSync } = await import('node:fs')
+  writeFileSync(BOARD_BEFORE, JSON.stringify({ today: nodes.get('today').innerHTML, team: nodes.get('team').innerHTML }, null, 2) + '\n')
+}
+
+const BOARD_BEFORE_COPY = JSON.parse(readFileSync(BOARD_BEFORE, 'utf8'))
+const flush = async (times = 4) => { for (let turn = 0; turn < times; turn += 1) await new Promise((resolve) => setImmediate(resolve)) }
+
+const V1 = 'aaaa1111aaaa'
+const V2 = 'bbbb2222bbbb'
+const webpAt = (v) => ({ v, type: 'image/webp' })
+// Word for word the shape /api/brand sends with a store connected and no OpenAI key.
+const brandOn = (pictures = {}) => ({
+  enabled: true, canGenerate: false, why: 'Making pictures from words is off.', assistantName: '', artStyle: '',
+  defaultArtStyle: 'Painterly.', names: {}, pictures, left: { writes: 25, generated: 10 }
+})
+const EVERY_SLOT = { today: webpAt(V1), team: webpAt(V1), 'agent-research': webpAt(V1), 'agent-bookkeeper': webpAt(V1), 'agent-content': webpAt(V1) }
+
+// A browser's answers: the payload, the brand it is given, and a picture for every /api/art asked
+// for. Every request is recorded with its headers.
+function storeFetch({ brand: answer = brandOn(), art = () => ({ ok: true, status: 200, type: 'image/webp' }), payload = pinnedPayload } = {}) {
+  const requests = []
+  const fetch = async (url, init = {}) => {
+    requests.push({ url: String(url), headers: { ...(init.headers ?? {}) } })
+    if (String(url).startsWith('/api/brand')) return typeof answer === 'function' ? answer() : { ok: true, status: 200, json: async () => answer }
+    if (String(url).startsWith('/api/art')) {
+      const picture = art(String(url))
+      return { ok: picture.ok, status: picture.status, json: async () => ({}), blob: async () => ({ type: picture.type, size: 2048, from: String(url) }) }
+    }
+    return { ok: true, status: 200, json: async () => payload }
+  }
+  return { fetch, requests, art: () => requests.filter((request) => request.url.startsWith('/api/art')) }
+}
+
+const srcsOf = (markup) => [...markup.matchAll(/\bsrc="([^"]*)"/g)].map((found) => found[1])
+const cardOf = (drawn, slug) => teamCards(drawn)[slug] ?? assert.fail(`the ${slug} card is missing`)
+const pictureOf = (markup) => /<img\b[^>]*>/.exec(markup)?.[0] ?? null
+
+test('with personalising off, Today and Team are byte for byte the board before personalising', async () => {
+  // The control: the copy really is this payload drawn by this harness, so every comparison below
+  // is a real one and not two empty strings agreeing.
+  assert.match(BOARD_BEFORE_COPY.today, /src="\/art\/today-harbour\.webp"/)
+  assert.match(BOARD_BEFORE_COPY.team, /src="\/art\/agent-research\.webp"/)
+
+  // Everything that is not exactly `enabled: true` is off - including an answer that lists pictures,
+  // and pictures the page already holds an address for.
+  const offs = [undefined, null, 'on', [], {}, { ...brandOn(EVERY_SLOT), enabled: false }, { ...brandOn(EVERY_SLOT), enabled: 'true' }, { ...brandOn(EVERY_SLOT), enabled: 1 }]
+  const art = { today: { v: V1, url: 'blob:cockpit/held' }, 'agent-research': { v: V1, url: 'blob:cockpit/held' } }
+  for (const brand of offs) {
+    const label = JSON.stringify(brand)?.slice(0, 40) ?? 'no brand at all'
+    const nodes = await pinnedScreens(brand === undefined ? {} : { state: { brand, art } })
+    assert.equal(nodes.get('today').innerHTML, BOARD_BEFORE_COPY.today, `Today changed with personalising off (${label})`)
+    assert.equal(nodes.get('team').innerHTML, BOARD_BEFORE_COPY.team, `Team changed with personalising off (${label})`)
+    assert.deepEqual(nodes.objectUrls.created, [], `a picture was made into an address with personalising off (${label})`)
+  }
+})
+
+test('however /api/brand fails, the board boots with personalising off and draws the board as before', async () => {
+  const failures = {
+    'a network failure': () => Promise.reject(new TypeError('Failed to fetch')),
+    // A refusal that carries something shaped like "on" is still a refusal.
+    'a 503': () => ({ ok: false, status: 503, json: async () => brandOn(EVERY_SLOT) }),
+    'a 401': () => ({ ok: false, status: 401, json: async () => brandOn(EVERY_SLOT) }),
+    'an answer that is not JSON': () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token <') } }),
+    'no store connected': () => ({ ok: true, status: 200, json: async () => ({ ...brandOn(EVERY_SLOT), enabled: false }) })
+  }
+  for (const [what, answer] of Object.entries(failures)) {
+    const browser = storeFetch({ brand: answer })
+    const nodes = await pinnedScreens({ fetch: browser.fetch }, async (drawn) => {
+      // Wiped, so what is compared is what the page's own boot drew once /api/brand had answered.
+      drawn.get('today').innerHTML = ''
+      drawn.get('team').innerHTML = ''
+      await flush()
+    })
+    assert.ok(browser.requests.some((request) => request.url === '/api/brand'), `the boot never asked /api/brand (${what})`)
+    assert.equal(nodes.get('today').innerHTML, BOARD_BEFORE_COPY.today, `Today changed after ${what}`)
+    assert.equal(nodes.get('team').innerHTML, BOARD_BEFORE_COPY.team, `Team changed after ${what}`)
+    assert.deepEqual(browser.art(), [], `a picture was asked for after ${what}`)
+  }
+})
+
+test('an /api/brand that never answers holds the board up for three seconds, no longer, and then it is off', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const browser = storeFetch({ brand: () => new Promise(() => {}) })
+    const nodes = await pinnedScreens({ fetch: browser.fetch }, async (drawn) => {
+      drawn.get('today').innerHTML = ''
+      await flush()
+      mock.timers.tick(2999)
+      await flush()
+      assert.equal(drawn.get('today').innerHTML, '', 'the board was drawn before the brand had its three seconds')
+      mock.timers.tick(1)
+      await flush()
+    })
+    assert.equal(nodes.get('today').innerHTML, BOARD_BEFORE_COPY.today, 'a silent /api/brand left the board undrawn or changed it')
+    assert.deepEqual(browser.art(), [])
+  } finally {
+    mock.timers.reset()
+  }
+})
+
+test('a picture of their own comes first, then the built-in robot, then the initial', () => {
+  const agents = ['research', 'bookkeeper', 'content', 'security', 'zed'].map((slug) => agent({ slug }))
+  const drawn = render({ ...base, agents }, {
+    state: {
+      brand: brandOn({ 'agent-research': webpAt(V1), 'agent-bookkeeper': webpAt(V1), 'agent-content': webpAt(V1) }),
+      art: {
+        'agent-research': { v: V1, url: 'blob:cockpit/research' },
+        'agent-bookkeeper': { v: V1, url: 'blob:cockpit/bookkeeper' },
+        // Fetched and failed: the robot it would have replaced, rather than nothing.
+        'agent-content': { v: V1, failed: true }
+      }
+    }
+  }).get('team').innerHTML
+
+  // A template agent with a picture of its own: that picture, not the robot.
+  assert.match(pictureOf(cardOf(drawn, 'research')) ?? '', /\bsrc="blob:cockpit\/research"/, 'the robot won over the owner\'s own picture')
+  // The owner's own agent has no robot, so its own picture goes where the tile showed alone - with
+  // the tile still under it, for when it fails.
+  const own = cardOf(drawn, 'bookkeeper')
+  assert.match(pictureOf(own) ?? '', /\bsrc="blob:cockpit\/bookkeeper"/, 'an agent with no robot never shows its own picture')
+  assert.match(pictureOf(own), /class="portrait-img"[^>]*width="480" height="480" loading="lazy"/, 'its own picture is not drawn as a portrait')
+  assert.ok(own.indexOf('class="portrait-tile"') < own.indexOf('<img'), 'the initial is not under the picture')
+  // No picture of its own, or one that failed: the robot.
+  assert.match(pictureOf(cardOf(drawn, 'content')) ?? '', /\bsrc="\/art\/agent-content\.webp"/, 'a picture that failed left no robot behind')
+  assert.match(pictureOf(cardOf(drawn, 'security')) ?? '', /\bsrc="\/art\/agent-security\.webp"/)
+  // Neither: the initial on its own colour, as before.
+  assert.equal(pictureOf(cardOf(drawn, 'zed')), null)
+  assert.match(cardOf(drawn, 'zed'), /class="portrait-tile" aria-hidden="true">Z</)
+})
+
+test('while a picture of their own is on its way, the built-in one is never drawn in its place', () => {
+  const agents = ['research', 'bookkeeper', 'content'].map((slug) => agent({ slug }))
+  const nodes = render({ ...base, agents }, {
+    state: { brand: brandOn({ today: webpAt(V1), team: webpAt(V1), 'agent-research': webpAt(V1), 'agent-bookkeeper': webpAt(V1) }) }
+  })
+  // Read at once: nothing has come back from /api/art yet.
+  const banner = bannerOf(nodes.get('today').innerHTML)
+  assert.equal(pictureOf(banner), null, 'the harbour was drawn while the owner\'s own banner was on its way')
+  assert.match(banner, /class="greeting"/, 'the banner lost its words while its picture loads')
+  const team = nodes.get('team').innerHTML
+  assert.equal(pictureOf(teamBannerOf(team)), null, 'the workshop was drawn while the owner\'s own banner was on its way')
+  const research = cardOf(team, 'research')
+  assert.equal(pictureOf(research), null, 'the robot flashed up before the owner\'s own picture')
+  assert.match(research, /class="portrait-tile" aria-hidden="true">R</, 'nothing holds the place while the picture loads')
+  assert.equal(pictureOf(cardOf(team, 'bookkeeper')), null)
+  // An agent with no picture of its own is not held up by the ones that have one.
+  assert.match(pictureOf(cardOf(team, 'content')) ?? '', /src="\/art\/agent-content\.webp"/)
+  // And nothing anywhere asked for a built-in picture it is about to replace.
+  for (const source of [...srcsOf(nodes.get('today').innerHTML), ...srcsOf(team)]) {
+    assert.ok(!['/art/today-harbour.webp', '/art/team-workshop.webp', '/art/agent-research.webp'].includes(source), `${source} was drawn and then replaced`)
+  }
+})
+
+test('a picture from the store reaches a src only as a blob: address, fetched with the view key', async () => {
+  const browser = storeFetch({ brand: brandOn({ today: webpAt(V1), team: { v: V2, type: 'image/jpeg' }, 'agent-research': { v: V1, type: 'image/png' } }) })
+  const nodes = render(pinnedPayload, {
+    fetch: browser.fetch,
+    storage: { getItem: (key) => (key === 'agent-cockpit-view-key' ? 'the-view-key' : null), setItem() {}, removeItem() {} },
+    expose: ['showScreen']
+  })
+  await flush()
+  nodes.exposed.showScreen('team')
+  await flush()
+
+  const asked = browser.art()
+  assert.deepEqual(asked.map((request) => request.url).sort(), [
+    `/api/art?slot=agent-research&v=${V1}&t=png`, `/api/art?slot=team&v=${V2}&t=jpeg`, `/api/art?slot=today&v=${V1}&t=webp`
+  ], 'the pictures were not asked for exactly as /api/brand named them')
+  for (const request of asked) assert.equal(request.headers['x-view-key'], 'the-view-key', `${request.url} was asked for without the view key`)
+
+  const made = new Set(nodes.objectUrls.created.map((entry) => entry.url))
+  assert.equal(made.size, 3, 'each picture fetched was not made into exactly one address')
+  const shown = [...srcsOf(nodes.get('today').innerHTML), ...srcsOf(nodes.get('team').innerHTML)]
+  const builtIn = new Set(['/art/agent-content.webp', '/art/agent-security.webp'])
+  for (const source of shown) {
+    assert.ok(builtIn.has(source) || made.has(source), `${source} reached a src, and it is neither a robot nor an address the page made`)
+  }
+  assert.ok(!shown.some((source) => source.includes('/api/')), 'the store was linked to directly, where an img cannot send the view key')
+  assert.ok(made.has(/src="([^"]*)"/.exec(bannerOf(nodes.get('today').innerHTML))?.[1]), 'Today\'s banner is not the owner\'s picture')
+  assert.ok(made.has(/src="([^"]*)"/.exec(teamBannerOf(nodes.get('team').innerHTML))?.[1]), 'Team\'s banner is not the owner\'s picture')
+  assert.ok(made.has(/src="([^"]*)"/.exec(cardOf(nodes.get('team').innerHTML, 'research'))?.[1]), 'the research card is not the owner\'s picture')
+  // The eager banner keeps everything that made it eager, only its address changes.
+  assert.match(pictureOf(bannerOf(nodes.get('today').innerHTML)), /width="1600" height="686" fetchpriority="high"/)
+})
+
+test('a store picture that cannot be fetched gives way to the built-in one', async () => {
+  const browser = storeFetch({ brand: brandOn({ today: webpAt(V1) }), art: () => ({ ok: false, status: 404, type: 'application/json' }) })
+  const nodes = render(pinnedPayload, { fetch: browser.fetch })
+  await flush()
+  assert.equal(browser.art().length, 1)
+  assert.match(pictureOf(bannerOf(nodes.get('today').innerHTML)) ?? '', /src="\/art\/today-harbour\.webp"/, 'a missing picture left the banner empty')
+  assert.deepEqual(nodes.objectUrls.created, [])
+
+  // An answer that is not a picture is a failure too, whatever status came with it.
+  const html = storeFetch({ brand: brandOn({ today: webpAt(V1) }), art: () => ({ ok: true, status: 200, type: 'text/html' }) })
+  const second = render(pinnedPayload, { fetch: html.fetch })
+  await flush()
+  assert.match(pictureOf(bannerOf(second.get('today').innerHTML)) ?? '', /src="\/art\/today-harbour\.webp"/, 'a page of HTML was shown as the banner')
+  assert.deepEqual(second.objectUrls.created, [], 'something that is not a picture was made into an address')
+})
+
+test('Today\'s picture is fetched with the board, and Team\'s only when Team is first opened', async () => {
+  const browser = storeFetch({ brand: brandOn({ today: webpAt(V1), team: webpAt(V1), 'agent-research': webpAt(V1) }) })
+  const nodes = render(pinnedPayload, { fetch: browser.fetch, expose: ['showScreen'] })
+  await flush()
+  assert.deepEqual(browser.art().map((request) => request.url), [`/api/art?slot=today&v=${V1}&t=webp`],
+    'a phone opening Today paid for pictures on a screen it has not opened')
+  nodes.exposed.showScreen('team')
+  await flush()
+  assert.equal(browser.art().length, 3, 'opening Team did not fetch its pictures')
+  nodes.exposed.showScreen('today')
+  nodes.exposed.showScreen('team')
+  await flush()
+  assert.equal(browser.art().length, 3, 'opening Team again fetched its pictures again')
+})
+
+test('a new version frees the address of the old one, and the same version is neither fetched nor freed again', async () => {
+  const browser = storeFetch({ brand: brandOn({ today: webpAt(V1) }) })
+  const nodes = render(pinnedPayload, { fetch: browser.fetch, expose: ['useBrand', 'loadArt', 'renderToday'] })
+  await flush()
+  const { useBrand, loadArt } = nodes.exposed
+  const first = nodes.objectUrls.created[0]?.url ?? assert.fail('the first version was never made into an address')
+
+  useBrand(brandOn({ today: webpAt(V1) }))
+  await loadArt(['today'])
+  assert.equal(browser.art().length, 1, 'the same version was fetched again')
+  assert.deepEqual(nodes.objectUrls.revoked, [], 'the address on screen was freed though nothing changed')
+
+  useBrand(brandOn({ today: webpAt(V2) }))
+  await loadArt(['today'])
+  assert.equal(browser.art().at(-1)?.url, `/api/art?slot=today&v=${V2}&t=webp`, 'the new version was never fetched')
+  const second = nodes.objectUrls.created[1]?.url ?? assert.fail('the new version was never made into an address')
+  assert.deepEqual(nodes.objectUrls.revoked, [first], 'the old version\'s address was kept after it was replaced')
+  nodes.exposed.renderToday()
+  assert.match(bannerOf(nodes.get('today').innerHTML), new RegExp(`src="${second}"`), 'the banner did not move to the new version')
+
+  // Back to the default: the picture is gone from the brand, so its address goes too.
+  useBrand(brandOn({}))
+  assert.deepEqual(nodes.objectUrls.revoked, [first, second], 'a picture taken away kept its address')
+  nodes.exposed.renderToday()
+  assert.match(bannerOf(nodes.get('today').innerHTML), /src="\/art\/today-harbour\.webp"/, 'back to the default did not bring the harbour back')
+})
+
+test('a picture just uploaded is shown from the copy in hand, without fetching it back', async () => {
+  const browser = storeFetch({ brand: brandOn({ today: webpAt(V1) }) })
+  const nodes = render(pinnedPayload, { fetch: browser.fetch, expose: ['adoptPicture'] })
+  await flush()
+  const before = nodes.objectUrls.created[0].url
+  const inHand = { type: 'image/webp', size: 30_000 }
+  nodes.exposed.adoptPicture('today', { v: V2, type: 'image/webp' }, inHand)
+  await flush()
+  assert.equal(browser.art().length, 1, 'the picture just sent was fetched straight back')
+  const made = nodes.objectUrls.created.at(-1)
+  assert.equal(made.blob, inHand, 'the address was not made from the copy in hand')
+  assert.deepEqual(nodes.objectUrls.revoked, [before], 'the picture it replaced kept its address')
+  assert.match(bannerOf(nodes.get('today').innerHTML), new RegExp(`src="${made.url}"`), 'Today does not show the picture just sent')
+})
+
+test('an answer from /api/brand is read only as far as it is shaped like one', () => {
+  const { parseBrand } = render(base, { expose: ['parseBrand'] }).exposed
+  for (const off of [undefined, null, 'yes', [], {}, { enabled: 'true' }, { enabled: false }]) assert.equal(parseBrand(off), null, JSON.stringify(off))
+  const pictures = JSON.parse(JSON.stringify({
+    today: webpAt(V1),
+    'agent-research': { v: V1, type: 'image/png' },
+    // Every one of these would become part of an /api/art address, or of the page's own lookups.
+    'agent-../x': webpAt(V1), 'agent-A': webpAt(V1), constructor: webpAt(V1), 'today.webp': webpAt(V1),
+    team: { v: '../../x', type: 'image/webp' },
+    'agent-email': { v: V1, type: 'image/svg+xml' },
+    'agent-sales': { v: V1, type: 'constructor' },
+    'agent-editor': { v: 'short', type: 'image/webp' }
+  }))
+  // As JSON.parse hands it over: an own key called __proto__, not a prototype.
+  Object.defineProperty(pictures, '__proto__', { value: webpAt(V1), enumerable: true })
+  const names = JSON.parse('{"research":"Penny","sales":42,"__proto__":"x","A":"Bad"}')
+  const parsed = parseBrand({ ...brandOn(), pictures, names })
+  assert.deepEqual(Object.keys(parsed.pictures).sort(), ['agent-research', 'today'])
+  assert.deepEqual(Object.entries(parsed.names), [['research', 'Penny']])
+  assert.deepEqual(parseBrand({ ...brandOn(), pictures: 'today' }).pictures, {}, 'a string of pictures was read letter by letter')
 })

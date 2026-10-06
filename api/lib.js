@@ -194,12 +194,16 @@ export const cleanStyle = (value) => cleanText(value, 1, 600)
 export const cleanDescription = (value) => cleanText(value, 3, 400)
 
 // The style new pictures are made in until the owner writes their own: the look of the built-in
-// art, in words. "No text" because image models letter badly, and a word baked into a picture
-// cannot be renamed or read by a screen reader.
+// art, in words, so a new picture sits beside the eight robots and two scenes that ship rather
+// than looking like it came from somewhere else. One style serves both kinds of picture, so it
+// says what a portrait and a scene each look like. "No text" because image models letter badly,
+// and a word baked into a picture cannot be renamed or read by a screen reader.
 export const DEFAULT_ART_STYLE =
-  'A painterly, cinematic digital painting: dusk or night sky, soft glowing light, a calm space, ' +
-  'dark edges framing the scene. Friendly robot characters. Deep navy blue and warm red as accent ' +
-  'light. No text, letters or logos anywhere in the picture.'
+  'Painterly illustration, hand-painted gouache and watercolour with soft anime film lighting. ' +
+  'Portraits: a friendly small brass-and-porcelain robot with round glowing amber eyes, one role ' +
+  'prop and a coloured ribbon or scarf, warm lamp light on one side and deep navy shadows on the ' +
+  'other, soft deep-navy background with subtle stars. Scenes: calm, spacious dusk or night ' +
+  'settings with deep navy blues and crimson accent light. No text, letters, logos or watermark.'
 
 // The JSON body of a write that has already passed writeGate (so its type is application/json).
 // The platform usually hands over an object; a string is parsed here. Anything that is not a

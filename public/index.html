@@ -1668,13 +1668,14 @@ function setupRingHtml(setup) {
 
 // The picture is the one image on the board fetched at once rather than when it scrolls into view:
 // it is the first thing Today shows, the head preloads it, and its size is written down so
-// nothing jumps when it lands.
+// nothing jumps when it lands. The owner's own banner, when they have put one in, takes its place
+// and keeps all of that - only the address changes.
 function bannerHtml(now = new Date()) {
   const name = typeof data.owner?.name === 'string' ? data.owner.name.trim() : ''
   const first = name.split(/\s+/)[0] ?? ''
   const greeting = `${greetingFor(now.getHours())}${first ? `, ${escapeHtml(first)}` : ''}.`
   const day = `${now.toLocaleDateString(undefined, { weekday: 'long' })} &middot; ${now.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}`
-  return `<section class="banner">
+  return pictureSwap(`<section class="banner">
     <img src="/art/today-harbour.webp" alt="" width="1600" height="686" fetchpriority="high" decoding="async" />
     <div class="banner-text">
       <div class="banner-words">
@@ -1684,7 +1685,7 @@ function bannerHtml(now = new Date()) {
       </div>
       ${setupRingHtml(data.setup)}
     </div>
-  </section>`
+  </section>`, '/art/today-harbour.webp', 'today')
 }
 
 // A smooth line through the values with the area under it washed in the card's colour, drawn
@@ -1947,11 +1948,14 @@ const PORTRAITS = new Set(['content', 'customer-service', 'editor', 'email', 'or
 
 // The initial is always drawn, and the picture over it. It is what shows while a lazy picture is on
 // its way, and what is left if one fails. Array.from so a slug starting with an emoji or an
-// accented letter gives a whole character rather than half of one.
+// accented letter gives a whole character rather than half of one. The owner's own picture of the
+// agent comes first, then the robot, then the initial alone - and the owner's own agent, which has
+// no robot, can have a picture this way too.
 function portraitHtml(agent) {
   const initial = Array.from(String(agent.slug ?? ''))[0] ?? '?'
-  const picture = PORTRAITS.has(agent.slug)
-    ? `<img class="portrait-img" src="/art/agent-${agent.slug}.webp" alt="" width="480" height="480" loading="lazy" decoding="async" />`
+  const src = pictureSrc(`agent-${agent.slug}`, PORTRAITS.has(agent.slug) ? `/art/agent-${agent.slug}.webp` : null)
+  const picture = src
+    ? `<img class="portrait-img" src="${escapeHtml(src)}" alt="" width="480" height="480" loading="lazy" decoding="async" />`
     : ''
   return `<div class="portrait" style="--agent:${agentColor(agent.slug) ?? AGENT_PALETTE[0].hex}">
       <span class="portrait-tile" aria-hidden="true">${escapeHtml(initial.toUpperCase())}</span>${picture}
@@ -1987,7 +1991,7 @@ function teamBannerHtml(agents) {
     .map(([state, words]) => [agents.filter((agent) => agent.state === state).length, words])
     .filter(([number]) => number)
     .map(([number, words]) => `${number} ${words(number)}`)
-  return `<section class="banner team-banner">
+  return pictureSwap(`<section class="banner team-banner">
     <img src="/art/team-workshop.webp" alt="" width="1600" height="686" loading="lazy" decoding="async" />
     <div class="banner-text">
       <div class="banner-words">
@@ -1996,7 +2000,7 @@ function teamBannerHtml(agents) {
         ${counts.length ? `<p class="banner-strap">${counts.join(' &middot; ')}</p>` : ''}
       </div>
     </div>
-  </section>`
+  </section>`, '/art/team-workshop.webp', 'team')
 }
 
 function renderTeam() {
@@ -3252,6 +3256,174 @@ function renderSkills() {
     link.addEventListener('click', (event) => { event.preventDefault(); openFile(link.dataset.open) }))
 }
 
+/* ---------- Personalise: the owner's own pictures ----------
+   With a picture store connected, /api/brand says personalising is on and lists the owner's own
+   pictures, each by version. A picture sits behind the view key, and an img cannot send a header,
+   so each one is fetched here with the key and shown from memory as a blob: address - the only
+   kind of address a store picture ever gets on this page.
+
+   Everything hangs off one rule: with personalising off - no store, an answer that failed or did
+   not come, anything that is not exactly `enabled: true` - `brand` stays null, every function below
+   hands back what it was given, and Today and Team are the board as it was before any of this
+   existed (tests/render.test.mjs holds the two screens to a copy of that board, byte for byte). */
+
+// How long the board waits for /api/brand before drawing without it. The board is the point: a
+// store slow to answer costs three seconds once, and never the board.
+const BRAND_WAIT_MS = 3000
+// What /api/art can be asked for: the server's own shapes - parseSlot in api/lib.js, and the
+// version and three types in api/_picture-store.js. Anything else in an answer is dropped here,
+// before it can become part of an address or a key the page looks things up by.
+const ART_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const ART_VERSION = /^[a-z0-9]{8,32}$/
+const ART_TYPES = { 'image/webp': 'webp', 'image/jpeg': 'jpeg', 'image/png': 'png' }
+const isArtSlug = (slug) => typeof slug === 'string' && slug.length <= 100 && ART_SLUG.test(slug)
+const isArtSlot = (slot) => slot === 'today' || slot === 'team' ||
+  (typeof slot === 'string' && slot.startsWith('agent-') && isArtSlug(slot.slice('agent-'.length)))
+const isArtPicture = (picture) => Boolean(picture) && typeof picture.v === 'string' &&
+  ART_VERSION.test(picture.v) && Object.hasOwn(ART_TYPES, picture.type)
+const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+
+let brand = null
+// slot -> { v, url } once a picture is in hand, or { v, failed: true } once fetching it failed.
+// A slot the brand lists with no entry here, or an entry for another version, is on its way.
+const artUrls = new Map()
+// slot -> the version being fetched for it, so a second ask while the first is out is not a second fetch.
+const artLoading = new Map()
+let teamArtAsked = false
+
+function parseBrand(answer) {
+  if (!isRecord(answer) || answer.enabled !== true) return null
+  const text = (value) => (typeof value === 'string' ? value : '')
+  const count = (value) => (Number.isInteger(value) && value >= 0 ? value : 0)
+  const pictures = {}
+  for (const [slot, picture] of Object.entries(isRecord(answer.pictures) ? answer.pictures : {})) {
+    if (isArtSlot(slot) && isArtPicture(picture)) pictures[slot] = { v: picture.v, type: picture.type }
+  }
+  const names = {}
+  for (const [slug, name] of Object.entries(isRecord(answer.names) ? answer.names : {})) {
+    if (isArtSlug(slug) && typeof name === 'string' && name.trim()) names[slug] = name
+  }
+  return {
+    canGenerate: answer.canGenerate === true,
+    why: text(answer.why),
+    assistantName: text(answer.assistantName),
+    artStyle: text(answer.artStyle),
+    defaultArtStyle: text(answer.defaultArtStyle),
+    names,
+    pictures,
+    left: { writes: count(answer.left?.writes), generated: count(answer.left?.generated) }
+  }
+}
+
+const storePicture = (slot) => (brand && Object.hasOwn(brand.pictures, slot) ? brand.pictures[slot] : null)
+
+// Holds one slot's picture, letting go of the address it replaces. An address is only freed once
+// nothing will draw it again.
+function holdArt(slot, entry) {
+  const old = artUrls.get(slot)
+  if (old?.url && old.url !== entry?.url) URL.revokeObjectURL(old.url)
+  if (entry) artUrls.set(slot, entry)
+  else artUrls.delete(slot)
+}
+
+// A new answer from /api/brand. A picture it no longer lists, or lists at another version, is let
+// go of here; the new version is fetched when its screen asks.
+function useBrand(answer) {
+  brand = parseBrand(answer)
+  for (const [slot, held] of artUrls) {
+    if (storePicture(slot)?.v !== held.v) holdArt(slot, null)
+  }
+}
+
+// Which address a picture is drawn from: the owner's own when it is in hand, the built-in one
+// (null for an agent with none) when they have not put one in or theirs could not be fetched, and
+// null - nothing at all - while theirs is on its way, so the built-in one never flashes up first.
+function pictureSrc(slot, builtIn) {
+  const wanted = storePicture(slot)
+  if (!wanted) return builtIn
+  const held = artUrls.get(slot)
+  if (held?.v !== wanted.v) return null
+  return held.url ?? builtIn
+}
+
+// The same, for markup that already carries its built-in picture as src="...". The tag is found by
+// that attribute rather than rebuilt, so the Today banner keeps the very tag the head preloads and
+// the tests pin. Unchanged whenever the built-in picture is the one to show.
+function pictureSwap(markup, builtIn, slot) {
+  const src = pictureSrc(slot, builtIn)
+  if (src === builtIn) return markup
+  const attribute = `src="${builtIn}"`
+  const at = markup.indexOf(attribute)
+  if (at < 0) return markup
+  if (src) return markup.slice(0, at) + `src="${escapeHtml(src)}"` + markup.slice(at + attribute.length)
+  return markup.slice(0, markup.lastIndexOf('<', at)) + markup.slice(markup.indexOf('>', at) + 1)
+}
+
+// One picture from the store, with the view key, or null. Only what came back as one of the three
+// picture types counts: anything else - an error page, a refusal - is a picture that failed.
+async function fetchPicture(slot, wanted) {
+  const key = viewKey()
+  const response = await fetch(`/api/art?slot=${encodeURIComponent(slot)}&v=${wanted.v}&t=${ART_TYPES[wanted.type]}`,
+    { headers: key ? { 'x-view-key': key } : {} })
+  if (!response.ok) return null
+  const blob = await response.blob()
+  return blob && Object.hasOwn(ART_TYPES, blob.type) && blob.size > 0 ? blob : null
+}
+
+// Fetches the store pictures for these slots that are not already in hand. A version already held
+// is never fetched again. Says whether anything changed, so the caller redraws only then. Never
+// throws: a picture that cannot be had leaves the built-in one, and the board goes on.
+async function loadArt(slots) {
+  const changed = await Promise.all(slots.map(async (slot) => {
+    const wanted = storePicture(slot)
+    if (!wanted || artUrls.get(slot)?.v === wanted.v || artLoading.get(slot) === wanted.v) return false
+    artLoading.set(slot, wanted.v)
+    let picture = null
+    try { picture = await fetchPicture(slot, wanted) } catch (error) { picture = null }
+    if (artLoading.get(slot) === wanted.v) artLoading.delete(slot)
+    // The brand moved on while this was out: a version nobody wants any more is not kept.
+    if (storePicture(slot)?.v !== wanted.v) return false
+    holdArt(slot, picture ? { v: wanted.v, url: URL.createObjectURL(picture) } : { v: wanted.v, failed: true })
+    return true
+  }))
+  return changed.includes(true)
+}
+
+// Which pictures each screen shows, and how it redraws. A redraw comes once per screen, after all
+// of its pictures have settled - straight after the screen is first drawn, before anyone has had
+// time to open a card or type in a form it would reset.
+const ART_SCREENS = {
+  today: { slots: () => ['today'], draw: () => renderToday() },
+  team: { slots: () => ['team', ...data.agents.map((agent) => `agent-${agent.slug}`)], draw: () => renderTeam() }
+}
+
+async function showArt(screen) {
+  if (!brand) return
+  if (await loadArt(ART_SCREENS[screen].slots())) ART_SCREENS[screen].draw()
+}
+
+// A picture just sent to the store is already here, as the very bytes that were sent. It is shown
+// from them rather than fetched straight back.
+function adoptPicture(slot, picture, blob) {
+  if (!brand || !isArtSlot(slot) || !isArtPicture(picture)) return
+  brand.pictures[slot] = { v: picture.v, type: picture.type }
+  holdArt(slot, { v: picture.v, url: URL.createObjectURL(blob) })
+  ART_SCREENS[slot.startsWith('agent-') ? 'team' : slot].draw()
+}
+
+// The answer from /api/brand, or null - off - if it fails, is refused, or takes longer than
+// BRAND_WAIT_MS.
+async function readBrand() {
+  let timer
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), BRAND_WAIT_MS) })
+  const answer = apiGet('/api/brand').then((result) => (result.ok ? result.payload : null), () => null)
+  try {
+    return await Promise.race([answer, late])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /* ---------- shell ---------- */
 
 function showScreen(name) {
@@ -3265,6 +3437,12 @@ function showScreen(name) {
   // Today's banner carries this line itself, so the copy under the top bar would say it twice.
   el('strap').hidden = screen === 'today'
   window.scrollTo(0, 0)
+  // Team's pictures are fetched the first time Team is shown, never with Today: most visits are a
+  // glance at Today on a phone, and should not pay for eight portraits nobody looked at.
+  if (screen === 'team' && brand && !teamArtAsked) {
+    teamArtAsked = true
+    showArt('team')
+  }
 }
 
 window.addEventListener('hashchange', () => showScreen(location.hash.slice(1)))
@@ -3355,6 +3533,7 @@ function render() {
   renderShell()
   el('foot').textContent = `Read from your repo ${stamp(data.generatedAt)}. Nothing on this page comes from anywhere else.`
   showScreen(location.hash.slice(1))
+  showArt('today')
 }
 
 function renderError(message) {
@@ -3396,8 +3575,10 @@ function renderUnlock(message) {
   })
 }
 
+// The repo and the brand are asked for together, so personalising adds no wait of its own unless
+// /api/brand is the slower of the two - and then three seconds at most.
 async function boot() {
-  const result = await apiGet('/api/state')
+  const [result, brandAnswer] = await Promise.all([apiGet('/api/state'), readBrand()])
   if (result.status === 401) {
     // A stored key that stopped working is dropped, so the next attempt is a clean one
     // rather than a loop against a key the deployment no longer accepts.
@@ -3410,6 +3591,7 @@ async function boot() {
     return
   }
   data = result.payload
+  useBrand(brandAnswer)
   render()
 }
 

@@ -16,7 +16,8 @@ import {
   cleanDescription,
   writeGate,
   isSameOriginRequest,
-  isValidSlug
+  isValidSlug,
+  DEFAULT_ART_STYLE
 } from '../api/lib.js'
 
 /* ---------- slots: which picture a request is about ---------- */
@@ -143,6 +144,20 @@ test('the art style runs up to 600 characters, one paragraph', () => {
   assert.equal(cleanStyle(''), null)
   assert.equal(cleanStyle('Water\u202ecolour'), null)
   assert.equal(cleanStyle(undefined), null)
+})
+
+test('the built-in art style is one paragraph the style field itself would take, and asks for no words in the picture', () => {
+  // It is offered to the owner as the style to go back to, so it must be a style they could have
+  // typed: cleanStyle hands it back unchanged only if it is one paragraph of at most 600 characters.
+  assert.equal(cleanStyle(DEFAULT_ART_STYLE), DEFAULT_ART_STYLE, 'the default is not a style the board would accept from its owner')
+  assert.ok(!/\n/.test(DEFAULT_ART_STYLE), 'the default runs over more than one line')
+  // Image models letter badly, and a word baked into a picture can neither be renamed nor read out.
+  assert.match(DEFAULT_ART_STYLE, /\bNo text\b/, 'the default no longer asks for a picture without words')
+  assert.match(DEFAULT_ART_STYLE, /\blogos\b/, 'the default no longer rules out logos')
+  // One style makes both kinds of picture, so it says what each should look like - a portrait in
+  // the manner of the eight robots that ship, a banner in the manner of the two scenes.
+  assert.match(DEFAULT_ART_STYLE, /\bPortraits:[^.]*\brobot\b/, 'the default does not describe the robots a new portrait has to sit beside')
+  assert.match(DEFAULT_ART_STYLE, /\bScenes:/, 'the default does not say what a banner should look like')
 })
 
 test('a picture description runs 3 to 400 characters', () => {
