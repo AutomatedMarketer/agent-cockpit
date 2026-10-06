@@ -468,14 +468,18 @@
   .agent-card .chev { display: inline-block; margin-left: .35rem; transition: transform .15s ease; }
   .agent-card[open] .chev { transform: rotate(90deg); }
   .agent-runs { border-top: 1px solid var(--line); }
-  /* The last tile of the grid, dashed like the mock-up's: an agent that is not here yet. */
-  .team-grid > .add-panel { margin-bottom: 0; border-style: dashed; background: transparent; box-shadow: none; }
-  .team-grid > .add-panel #agent-open {
-    width: 100%; min-height: 5.5rem; justify-content: center;
-    background: transparent; border-color: transparent; color: var(--muted);
+  /* Add agent sits at the TOP of Team, under the banner and above the cards. It was the last tile
+     of the grid, as in the mock-up, which on a phone put it after eight tall portraits - so most
+     people never learned they could add an agent at all. One button in the accent, so it reads as
+     the thing to do here; the form it opens is the same one as everywhere else. The grid's own top
+     margin spaces it from the cards, so this one only takes the room above. */
+  .team-banner + .add-panel { margin: .9rem 0 0; }
+  #agent-open {
+    width: 100%; justify-content: center;
+    background: var(--accent-soft); color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
   }
-  .team-grid > .add-panel:hover { border-color: var(--accent); }
-  .team-grid > .add-panel #agent-open:hover { color: var(--ink); }
+  #agent-open:hover { border-color: var(--accent); }
 
   /* Memory */
   input[type=search] {
@@ -835,6 +839,8 @@
        reads as correct - this repo has shipped that bug once already. */
     .add-panel .fire-form { max-width: 34rem; }
     .add-panel .fire-form .fire { justify-self: start; }
+    /* Full width is a thumb target on a phone; across a laptop's content column it is a red bar. */
+    #agent-open { width: auto; }
   }
   .d7-date { font-size: .6875rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin-bottom: .35rem; }
   .d7-row {
@@ -1373,7 +1379,10 @@ function addTaskHtml() {
 // It renders in the empty state too, at the top. Somebody with no skills is the person most likely
 // to want one, and both empty states replace their whole innerHTML — a button appended after the
 // list would simply not exist on the screen that needs it most. With agents to show, Team draws it
-// as the last tile of its grid instead; Skills keeps it at the top.
+// under its banner and above the cards; Skills keeps it at the top too.
+//
+// Because Team draws it BEFORE the cards, nothing in here may name an agent - no owner list, no
+// slug in the example. Tests find a card by the first place its slug appears in the screen.
 //
 // The copy carries two facts this page cannot show happening. It lands in about a minute, same as
 // every other dispatch here. And the file is written from a guess: nobody is in front of the
@@ -2075,9 +2084,11 @@ function renderTeam() {
       <div class="agent-runs">${runRows}${runsNote}</div>
     </details>`
   }).join('')
-  // The add form is the last tile of the grid, as in the mock-up: an agent that is not here yet.
-  // With no agents it stays at the top of the screen, above the sentence saying how to get some.
-  el('team').innerHTML = `${teamBannerHtml(data.agents)}<div class="team-grid">${cards}${createFormHtml('agent')}</div>`
+  // Add agent goes under the banner and above the cards, on every screen size. It was the last tile
+  // of the grid, as in the mock-up - after eight tall portraits on a phone, where most people never
+  // scrolled far enough to learn they could add one (Nuno's call, 2026-10-06). With no agents it is
+  // at the top as well, above the sentence saying how to get some.
+  el('team').innerHTML = `${teamBannerHtml(data.agents)}${createFormHtml('agent')}<div class="team-grid">${cards}</div>`
   bindCreateForm('agent', el('team'))
 }
 

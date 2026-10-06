@@ -36,7 +36,9 @@ function render(payload, options = {}) {
         // `options.select(id, selector)` hands back stand-in elements for one query, so a test can
         // reach a handler the page binds to elements it finds inside a screen. Unanswered, nothing.
         querySelectorAll: (selector) => options.select?.(id, selector) ?? [],
-        querySelector: () => null,
+        // `options.find(id, selector)` is the same for a single query - the Add agent button and the
+        // form it opens are found this way. Unanswered, null, which is what every test got before.
+        querySelector: (selector) => options.find?.(id, selector) ?? null,
         listeners: {},
         addEventListener(type, handler) { (this.listeners[type] ??= []).push(handler) },
         closest: () => null,
@@ -3379,7 +3381,6 @@ test('the cards are one column on a phone and a grid on a laptop, and opening on
   const grid = drawn.indexOf('<div class="team-grid">')
   assert.ok(grid >= 0, 'the cards are not in the grid')
   assert.ok(grid < drawn.indexOf('<details class="agent-card'), 'a card is drawn outside the grid')
-  assert.ok(grid < drawn.indexOf('id="agent-open"'), 'the Add agent tile is not in the grid with the cards')
 
   const declared = Object.assign({}, ...exactRules('.team-grid').filter((rule) => !rule.inMedia).map(valuesIn))
   assert.equal(declared.display, 'grid')
@@ -3392,6 +3393,77 @@ test('the cards are one column on a phone and a grid on a laptop, and opening on
   assert.ok(columns(1440 - 240 - 56) >= 3, 'a laptop gets a column of cards as tall as a phone\'s')
   // A grid row stretches to its tallest item, so an opened card would pull every card beside it long.
   assert.equal(declared['align-items'], 'start', 'opening one card stretches the cards beside it')
+})
+
+/* ---------- Add agent, at the top --------------------------------------------------------------
+   It was the last tile of the grid, as in the mock-up - after eight tall portrait cards on a phone,
+   so most people would never scroll far enough to find out they could add an agent at all. Nuno
+   decided on 2026-10-06 that it goes at the top: under the banner, above the cards, on every
+   screen size. These pin where it is, that pressing it still opens the same form, and that it did
+   not quietly break the tests above that find a card by the first place its slug appears. */
+
+test('Add agent is under the banner and above the first card, and the grid holds only cards', () => {
+  const drawn = render({ ...base, agents: [agent({ slug: 'research' }), agent({ slug: 'email' })] }).get('team').innerHTML
+  const button = drawn.indexOf('id="agent-open"')
+  const grid = drawn.indexOf('<div class="team-grid">')
+  assert.ok(button >= 0 && grid >= 0, 'the Team screen lost its Add agent button or its grid')
+  assert.ok(drawn.indexOf('team-banner') < button, 'Add agent is drawn above the banner rather than under it')
+  assert.ok(button < drawn.indexOf('<details class="agent-card'),
+    'Add agent comes after the cards, where somebody has to scroll past every portrait to learn they can add one')
+  assert.ok(button < grid, 'Add agent is inside the grid of cards rather than above it')
+  const inGrid = drawn.slice(grid)
+  for (const leftover of ['add-panel', 'agent-open', 'agent-form', 'Add agent']) {
+    assert.ok(!inGrid.includes(leftover), `an end-of-grid Add agent tile is still drawn (found ${leftover} in the grid)`)
+  }
+  assert.equal(drawn.split('id="agent-open"').length - 1, 1, 'Add agent is drawn more than once')
+})
+
+test('the Add agent control names no agent, so every card is still found by its slug', () => {
+  // The never-run test and the switched-off test above slice the screen from the FIRST place a slug
+  // appears. The control is drawn before every card now, so a slug anywhere in it - an owner list,
+  // an example, a help line - would make those slices start in the control and test the wrong text.
+  const slugs = [...new Set([...SHIPPED_PORTRAITS, 'research', 'email', 'content', 'sales', 'editor', 'security', 'bookkeeper'])]
+  const drawn = render({ ...base, agents: slugs.map((slug) => agent({ slug })) }).get('team').innerHTML
+  const grid = drawn.indexOf('<div class="team-grid">')
+  const control = drawn.slice(drawn.indexOf('add-panel'), grid)
+  assert.ok(control.includes('id="agent-form"'), 'the form is not part of the control above the cards')
+  for (const slug of slugs) {
+    assert.ok(!control.includes(slug), `the Add agent control mentions "${slug}" before that agent's own card`)
+    assert.ok(drawn.indexOf(slug) > grid, `"${slug}" first appears above the cards, so a slice from it misses its card`)
+  }
+  // And the exact slice the never-run test takes still lands on research's card and nothing else.
+  const two = render({ ...base, agents: [agent({ slug: 'research' }), agent({ slug: 'email', totalRuns: 1, state: 'working' })] }).get('team').innerHTML
+  const slice = two.slice(two.indexOf('research'), two.indexOf('email'))
+  assert.ok(slice.includes('class="title">research<') && !slice.includes('agent-open'),
+    'the slice from "research" to "email" no longer isolates the research card')
+})
+
+test('pressing Add agent opens the same form, and pressing it again puts it away', () => {
+  for (const agents of [[agent()], []]) {
+    const stand = () => ({ hidden: true, focused: false, listeners: {},
+      addEventListener(type, handler) { (this.listeners[type] ??= []).push(handler) },
+      focus() { this.focused = true } })
+    const parts = { '#agent-open': stand(), '#agent-form': stand(), '#agent-text': stand() }
+    const drawn = render({ ...base, agents }, { find: (id, selector) => (id === 'team' ? parts[selector] : undefined) }).get('team').innerHTML
+    assert.match(drawn, /<form id="agent-form" class="fire-form" hidden>/, 'the form is open before anyone pressed anything')
+    const press = parts['#agent-open'].listeners.click ?? []
+    assert.equal(press.length, 1, `nothing listens for a press on Add agent (${agents.length} agents)`)
+    press[0]({})
+    assert.equal(parts['#agent-form'].hidden, false, 'pressing Add agent did not open the form')
+    assert.ok(parts['#agent-text'].focused, 'the form opened without putting the cursor in the box')
+    press[0]({})
+    assert.equal(parts['#agent-form'].hidden, true, 'pressing Add agent again did not put the form away')
+    assert.equal((parts['#agent-form'].listeners.submit ?? []).length, 1, 'the form no longer sends anything')
+  }
+})
+
+test('the Add agent button is styled to be seen, and the end-of-grid tile styling is gone', () => {
+  const declared = Object.assign({}, ...rulesFor('#agent-open').map(valuesIn))
+  assert.match(declared.background ?? '', /^var\(--accent-soft\)$/, 'Add agent is a plain button, easy to miss at the top')
+  assert.match(declared.color ?? '', /^var\(--accent\)$/, 'Add agent text is not in the accent')
+  assert.ok(Number.parseFloat(declared['min-height'] ?? '2.9') >= 2.75, 'Add agent is a smaller tap target than 2.75rem')
+  assert.deepEqual(cssRules().filter((rule) => /\.team-grid\s*>\s*\.add-panel/.test(rule.selector)).map((rule) => rule.selector), [],
+    'the dashed end-of-grid tile is still styled, for a tile that is no longer drawn')
 })
 
 /* ---------- The look, carried to every screen, and "Why?" -----------------------------------------
