@@ -191,6 +191,15 @@ test('at the daily cap an upload is refused before the picture is stored', async
   assert.equal(settingsOf(fake).pictures.today, undefined)
 })
 
+test('uploads refused at the cap cost no read that skips the cache', async () => {
+  const { upload, fake } = board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: '1' } })
+  assert.equal((await upload('team', webp())).statusCode, 200)
+  const uncached = ((fake) => fake.calls.get.filter((read) => read.options.useCache === false).length)
+  const before = uncached(fake)
+  for (let i = 0; i < 100; i += 1) assert.equal((await upload('today', webp())).statusCode, 429)
+  assert.equal(uncached(fake) - before, 0, 'refused uploads skipped the cache')
+})
+
 test('if settings.json cannot be saved, no picture is stored and the old one stays in use', async () => {
   const { upload, fake } = board()
   const old = (await upload('team', webp())).body.picture

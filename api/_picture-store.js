@@ -270,6 +270,18 @@ export function spendAllowance(settings, kind, caps, day) {
   settings.usage[kind] += 1
 }
 
+// Before a save, the same charge run on the CACHED copy (`charge` is the save's own counting, so
+// the two can never disagree). Every save starts with a read that skips the cache - a simple
+// operation, 10,000 a month on Hobby - so a change refused at the cap used to cost one anyway, and
+// a thousand refused changes a thousand. The cached copy can only be behind the real one: counts
+// only rise within a day and the day only moves forward. So when it says the day is spent, the day
+// is spent, and the refusal costs a cache hit; when it says there is room, the save checks again
+// against the latest file.
+export async function refuseIfSpent(pictures, charge) {
+  const { settings } = await pictures.readSettings()
+  charge(settings)
+}
+
 // --- the store ---------------------------------------------------------------------------
 
 const loadRealSdk = () => import('@vercel/blob')

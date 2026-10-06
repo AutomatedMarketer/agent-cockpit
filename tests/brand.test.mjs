@@ -360,6 +360,21 @@ test('changes stop at the daily cap with a sentence, and nothing is written past
   assert.equal((await readSettings(fake)).names.email, undefined)
 })
 
+test('a thousand changes refused at the cap cost no read that skips the cache', async () => {
+  // From the second review (attack2, part A): every save began with an uncached read - one of the
+  // 10,000 simple operations a month - before the cap was checked, so changes refused at the cap
+  // still ran the meter. The cached copy is checked first: it can only be behind (counts only
+  // rise, the day only moves forward), so when it says the day is spent, the day is spent.
+  const { post, fake } = board()
+  for (let i = 0; i < 20; i += 1) assert.equal((await post({ change: 'name', slug: 'content', value: `N${i}` })).statusCode, 200)
+  const uncached = ((fake) => fake.calls.get.filter((read) => read.options.useCache === false).length)
+  const before = uncached(fake)
+  const puts = fake.calls.put.length
+  for (let i = 0; i < 1000; i += 1) assert.equal((await post({ change: 'name', slug: 'content', value: 'x' })).statusCode, 429)
+  assert.equal(uncached(fake) - before, 0, 'refused changes skipped the cache')
+  assert.equal(fake.calls.put.length, puts)
+})
+
 test('the day the cap counts is the UTC day: it starts again at midnight UTC', async () => {
   let clock = new Date('2026-10-06T23:59:00Z')
   const { post } = board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: '1' }, now: () => clock })

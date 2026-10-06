@@ -30,7 +30,8 @@ import {
   dailyCaps,
   usageDay,
   allowanceLeft,
-  spendAllowance
+  spendAllowance,
+  refuseIfSpent
 } from './_picture-store.js'
 
 // 16 lowercase hex characters: inside the store's ^[a-z0-9]{8,32}$, and 64 random bits, so two
@@ -138,8 +139,10 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, versi
     try {
       const v = version()
       let replaced = null
+      const charge = (settings) => spendAllowance(settings, 'writes', caps, day)
+      await refuseIfSpent(pictures, charge)
       const saved = await pictures.saveSettings((draft) => {
-        spendAllowance(draft, 'writes', caps, day)
+        charge(draft)
         replaced = draft.pictures[slot] ?? null
         draft.pictures[slot] = { v, type, bytes: bytes.length, at: moment.toISOString() }
       })

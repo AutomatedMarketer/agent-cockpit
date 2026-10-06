@@ -32,7 +32,8 @@ import {
   dailyCaps,
   usageDay,
   allowanceLeft,
-  spendAllowance
+  spendAllowance,
+  refuseIfSpent
 } from './_picture-store.js'
 
 export const NO_OPENAI =
@@ -175,8 +176,10 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
 
     try {
       let removed = null
+      const charge = (settings) => spendAllowance(settings, 'writes', context.caps, context.day)
+      await refuseIfSpent(pictures, charge)
       const saved = await pictures.saveSettings((draft) => {
-        spendAllowance(draft, 'writes', context.caps, context.day)
+        charge(draft)
         removed = plan.apply(draft) ?? null
       })
       // Pointer first, picture second, and only once the pointer is gone. The other order, if

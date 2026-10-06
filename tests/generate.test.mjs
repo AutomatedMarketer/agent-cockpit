@@ -183,6 +183,23 @@ test('at the daily cap it is refused before OpenAI is called', async (t) => {
   assert.equal(calls.length, 1, 'the cap must stop the spend, not count it afterwards')
 })
 
+test('pictures refused at either cap cost no read that skips the cache, and no OpenAI call', async (t) => {
+  const calls = stubOpenAI(t, imageAnswer(webp()))
+  const uncached = ((fake) => fake.calls.get.filter((read) => read.options.useCache === false).length)
+  // Out of pictures from words.
+  const pictures = board({ env: { ...ENV, GENERATE_DAILY_CAP: '1' } })
+  assert.equal((await pictures.generate(PORTRAIT)).statusCode, 200)
+  let before = uncached(pictures.fake)
+  for (let i = 0; i < 100; i += 1) assert.equal((await pictures.generate(PORTRAIT)).statusCode, 429)
+  assert.equal(uncached(pictures.fake) - before, 0, 'refused pictures skipped the cache')
+  // Out of changes to keep one with.
+  const changes = board({ env: { ...ENV, WRITE_DAILY_CAP: '0' } })
+  before = uncached(changes.fake)
+  for (let i = 0; i < 100; i += 1) assert.equal((await changes.generate(PORTRAIT)).statusCode, 429)
+  assert.equal(uncached(changes.fake) - before, 0, 'pictures refused for want of a change skipped the cache')
+  assert.equal(calls.length, 1)
+})
+
 test('an attempt OpenAI fails still counts, so a failing upstream cannot be hammered past the cap', async (t) => {
   const calls = stubOpenAI(t, errorAnswer(500, { message: 'server error' }))
   const { generate } = board({ env: { ...ENV, GENERATE_DAILY_CAP: '2' } })

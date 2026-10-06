@@ -32,6 +32,7 @@ import {
   usageDay,
   allowanceLeft,
   spendAllowance,
+  refuseIfSpent,
   PictureStoreError
 } from './_picture-store.js'
 
@@ -175,10 +176,15 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
     try {
       const caps = dailyCaps(environment)
       const day = usageDay(now())
+      // Checked in the same save that counts the picture, so it is the count as it is now - and
+      // first against the cached copy, so a refusal costs no read that skips the cache.
+      const charge = (settings) => {
+        if (allowanceLeft(settings, caps, day).writes === 0) throw new PictureStoreError(429, NO_CHANGE_LEFT)
+        spendAllowance(settings, 'generated', caps, day)
+      }
+      await refuseIfSpent(pictures, charge)
       await pictures.saveSettings((draft) => {
-        // Checked in the same save that counts the picture, so it is the count as it is now.
-        if (allowanceLeft(draft, caps, day).writes === 0) throw new PictureStoreError(429, NO_CHANGE_LEFT)
-        spendAllowance(draft, 'generated', caps, day)
+        charge(draft)
         style = draft.artStyle || DEFAULT_ART_STYLE
       })
     } catch (error) {
