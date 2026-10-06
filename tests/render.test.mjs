@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { shapeHero } from '../api/state.js'
-import { AGENT_PALETTE, agentColorIndex, PICTURE_BUDGET } from '../api/lib.js'
+import { AGENT_PALETTE, agentColorIndex, PICTURE_BUDGET, DEFAULT_ART_STYLE } from '../api/lib.js'
 import { cssRules } from './helpers/css-rules.mjs'
 
 /* Every other test in this repo checks the API, or greps the page source for a string. None of
@@ -101,7 +101,9 @@ function render(payload, options = {}) {
   })
   const context = {
     document,
-    window: { addEventListener() {}, matchMedia: (query) => ({ matches: Boolean(media[query]), addEventListener() {} }), location: { hash }, scrollTo() {}, requestAnimationFrame: (fn) => fn(), history: options.history },
+    // `options.prompt` answers window.prompt - the edit key a person types when the store asks for
+    // one. Left out, there is no prompt, as before.
+    window: { addEventListener() {}, matchMedia: (query) => ({ matches: Boolean(media[query]), addEventListener() {} }), location: { hash }, scrollTo() {}, requestAnimationFrame: (fn) => fn(), history: options.history, prompt: options.prompt },
     location: { hash, search: '' },
     localStorage: options.storage ?? { getItem: () => null, setItem() {}, removeItem() {} },
     fetch: options.fetch ?? answer,
@@ -144,6 +146,7 @@ function render(payload, options = {}) {
      ; if (given.memorySource !== undefined) memorySource = given.memorySource
      ; if (given.brand !== undefined) brand = parseBrand(given.brand)
      ; if (given.art) for (const [slot, entry] of Object.entries(given.art)) artUrls.set(slot, entry)
+     ; if (given.brandPanelOpen !== undefined) brandPanelOpen = given.brandPanelOpen
      ; render(); return { ${exposeNames.join(', ')} };`
   )
   nodes.exposed = run(...Object.values(context), payload, state)
@@ -3075,7 +3078,10 @@ test('the top bar holds the title, the way out and the switch, and is sticky on 
   assert.equal(valuesIn(wide.at(-1)).top, '0')
 })
 
-const THUMB = ['button.fire', '.small-fire', '.theme-switch', '.topbar-btn', 'a.watch', 'a.title[data-open]', '.why > summary', '.finished-tasks > summary']
+// The last three are Personalise's: the button on a banner, Choose a picture (a label drawn as a
+// button, around the file input), and the name field a thumb has to land in.
+const THUMB = ['button.fire', '.small-fire', '.theme-switch', '.topbar-btn', 'a.watch', 'a.title[data-open]', '.why > summary', '.finished-tasks > summary',
+  'button.banner-btn', 'label.fire', '.brand-field']
 
 test('every control a thumb presses is at least 44px tall on a phone', () => {
   // 2.75rem is 44px, the smallest target a thumb hits without aiming. Unconditional rules only: a
@@ -3763,7 +3769,19 @@ const srcsOf = (markup) => [...markup.matchAll(/\bsrc="([^"]*)"/g)].map((found) 
 const cardOf = (drawn, slug) => teamCards(drawn)[slug] ?? assert.fail(`the ${slug} card is missing`)
 const pictureOf = (markup) => /<img\b[^>]*>/.exec(markup)?.[0] ?? null
 
-test('with personalising off, Today and Team are byte for byte the board before personalising', async () => {
+// With personalising off, Team is the board before it plus ONE thing: "Make it yours" in the
+// banner, which is how somebody finds out personalising exists and how to switch it on. That one
+// difference is on purpose (T11); anything else is a change to a board that was meant to stay put.
+// The copy is still the board at 2750c0d - retaken at 1de171d it came out byte for byte the same.
+const MAKE_IT_YOURS = /<button\b[^>]*>Make it yours<\/button>/g
+function onlyMakeItYoursAdded(team, label) {
+  const buttons = team.match(MAKE_IT_YOURS) ?? []
+  assert.equal(buttons.length, 1, `Team does not carry exactly one Make it yours button (${label})`)
+  assert.ok(teamBannerOf(team).includes(buttons[0]), `Make it yours is not in the Team banner (${label})`)
+  assert.equal(team.replace(buttons[0], ''), BOARD_BEFORE_COPY.team, `Team changed by more than the Make it yours button (${label})`)
+}
+
+test('with personalising off, Today is byte for byte the board before personalising, and Team only gains Make it yours', async () => {
   // The control: the copy really is this payload drawn by this harness, so every comparison below
   // is a real one and not two empty strings agreeing.
   assert.match(BOARD_BEFORE_COPY.today, /src="\/art\/today-harbour\.webp"/)
@@ -3777,7 +3795,7 @@ test('with personalising off, Today and Team are byte for byte the board before 
     const label = JSON.stringify(brand)?.slice(0, 40) ?? 'no brand at all'
     const nodes = await pinnedScreens(brand === undefined ? {} : { state: { brand, art } })
     assert.equal(nodes.get('today').innerHTML, BOARD_BEFORE_COPY.today, `Today changed with personalising off (${label})`)
-    assert.equal(nodes.get('team').innerHTML, BOARD_BEFORE_COPY.team, `Team changed with personalising off (${label})`)
+    onlyMakeItYoursAdded(nodes.get('team').innerHTML, `personalising off: ${label}`)
     assert.deepEqual(nodes.objectUrls.created, [], `a picture was made into an address with personalising off (${label})`)
   }
 })
@@ -3801,7 +3819,7 @@ test('however /api/brand fails, the board boots with personalising off and draws
     })
     assert.ok(browser.requests.some((request) => request.url === '/api/brand'), `the boot never asked /api/brand (${what})`)
     assert.equal(nodes.get('today').innerHTML, BOARD_BEFORE_COPY.today, `Today changed after ${what}`)
-    assert.equal(nodes.get('team').innerHTML, BOARD_BEFORE_COPY.team, `Team changed after ${what}`)
+    onlyMakeItYoursAdded(nodes.get('team').innerHTML, `after ${what}`)
     assert.deepEqual(browser.art(), [], `a picture was asked for after ${what}`)
   }
 })
@@ -4195,13 +4213,525 @@ test('a chosen picture is drawn from its centre crop at the size it is sent at, 
   assert.equal(closed, 2)
 })
 
-/* ---------- Personalise: a picture landing redraws nothing ---------------------------------------
-   A picture from the store used to arrive and redraw its whole screen. On a slow connection that is
-   seconds after the screen appears - time enough to start typing in Add task or Add agent - and the
-   redraw put the screen back as it was drawn, the typing gone. Each picture now goes into its own
-   place and nothing else is touched. */
+/* ---------- Personalise: the controls -------------------------------------------------------------
+   With a store connected, every Team card opens to a Personalise section - its name, Choose a
+   picture, Describe it and Make it, Back to the default - and each banner has a small Personalise
+   button for its own picture. "Make it yours" in the Team banner opens the assistant's name and the
+   art style straight under the banner, with no dialog. With personalising off, that button is the
+   only new thing on the board, and it opens to the one sentence saying how to switch it on.
+
+   Every write carries the view key, the edit key once there is one, and the exact Content-Type the
+   server's write gate insists on. A picture is shrunk on the device, sent as its bytes and shown from
+   the copy in hand. And a picture arriving never redraws a screen: it is put into its own place, so
+   a form somebody is halfway through typing is still there when it lands. */
 
 const jsonAnswer = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
+// What /api/generate sends back: a picture's bytes, never JSON.
+const madePicture = (made) => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('Unexpected token R') }, blob: async () => made })
+// /api/brand with OpenAI connected, as the server words it, and some of the day already spent.
+const brandMaking = (over = {}) => ({ ...brandOn(), canGenerate: true, why: '', left: { writes: 7, generated: 3 }, ...over })
+
+// A browser that answers the board, the brand it is given and the pictures, and hands every write to
+// `writes` - recording each request with its method, headers and body.
+function writingBrowser({ brand = brandOn(), writes = () => jsonAnswer(500, {}) } = {}) {
+  const requests = []
+  const fetch = async (url, init = {}) => {
+    const request = { url: String(url), method: init.method ?? 'GET', headers: { ...(init.headers ?? {}) }, body: init.body }
+    requests.push(request)
+    if (request.method === 'POST') return writes(request)
+    if (request.url.startsWith('/api/brand')) return jsonAnswer(200, brand)
+    if (request.url.startsWith('/api/art')) return { ok: true, status: 200, json: async () => ({}), blob: async () => ({ type: 'image/webp', size: 2048 }) }
+    return jsonAnswer(200, pinnedPayload)
+  }
+  return { fetch, requests, posts: () => requests.filter((request) => request.method === 'POST'), art: () => requests.filter((request) => request.url.startsWith('/api/art')) }
+}
+
+// localStorage holding these keys, recording every write the page makes to it.
+function keyStorage(held = {}) {
+  const values = { ...held }
+  const writes = []
+  return {
+    writes,
+    getItem: (key) => values[key] ?? null,
+    setItem: (key, value) => { values[key] = String(value); writes.push([key, String(value)]) },
+    removeItem: (key) => { delete values[key]; writes.push([key, null]) }
+  }
+}
+const VIEW_ONLY = { 'agent-cockpit-view-key': 'the-view-key' }
+
+// A canvas and a decoder, so a picture can be shrunk in node: whatever is drawn comes out as a small
+// webp marked as shrunk, and every picture opened is recorded.
+function shrinker() {
+  const opened = []
+  return {
+    opened,
+    createImageBitmap: async (source) => { opened.push(source); return { width: 2000, height: 1500, close() {} } },
+    create: (tag) => (tag === 'canvas'
+      ? { width: 0, height: 0, getContext: () => ({ drawImage() {} }), toBlob(done, type) { done({ type, size: 9_000, shrunk: true }) } }
+      : undefined)
+  }
+}
+
+// The parts of the page one control touches: the box it sits in and that box's note, and - for a
+// card's name - the card around it. Anything else it asks for, it is told is not there.
+const noteStand = () => ({ className: 'fire-note', textContent: '' })
+function pictureBox() {
+  const note = noteStand()
+  return { note, querySelector: (selector) => (selector === '.fire-note' ? note : null), querySelectorAll: () => [] }
+}
+const fileInput = (slot, file, box) => ({
+  dataset: { upload: slot }, files: [file], value: 'C:\\fakepath\\photo.jpg',
+  closest: (selector) => (selector === '.picture-controls' ? box : null)
+})
+function makeForm(slot, words, box) {
+  const field = { value: words }
+  return { dataset: { make: slot }, field, querySelector: (selector) => (selector === 'textarea' ? field : null), closest: (selector) => (selector === '.picture-controls' ? box : null) }
+}
+function changeForm({ change, slug, value = '', card = null }) {
+  const note = noteStand()
+  const field = { value }
+  const form = {
+    dataset: slug ? { change, slug } : { change }, note, field,
+    querySelector: (selector) => (selector === '.fire-note' ? note : selector === 'input, textarea' ? field : null),
+    querySelectorAll: () => [],
+    closest: (selector) => (selector === 'form[data-change]' ? form : selector === '.agent-card' ? card : null)
+  }
+  return form
+}
+// A card, holding its display name the way the page leaves it: as text in a span it makes.
+function cardStand() {
+  const classes = new Set()
+  let label = null
+  const body = { insertAdjacentHTML: (where, markup) => { if (where === 'afterbegin' && /class="display-name"/.test(markup)) label = { textContent: '', remove: () => { label = null } } } }
+  return {
+    classes,
+    classList: { toggle: (name, on) => (on ? classes.add(name) : classes.delete(name)), add: (name) => classes.add(name), remove: (name) => classes.delete(name) },
+    querySelector: (selector) => (selector === '.display-name' ? label : selector === '.agent-body' ? body : null),
+    shownName: () => label?.textContent ?? null
+  }
+}
+
+// Does to the page what the browser would on an event: every listener the page put on the document
+// for that kind of event hears it, and then whatever it started is let run.
+async function dispatch(nodes, type, target) {
+  const event = { target, prevented: false, preventDefault() { this.prevented = true } }
+  for (const listener of nodes.documentListeners) if (listener.type === type) listener.handler(event)
+  await flush(8)
+  return event
+}
+// A control the page's click listener can be handed: it is its own closest match for `own`, and
+// sits in nothing else.
+const pressable = (own, extra = {}) => {
+  const control = { ...extra, closest: (selector) => (selector === own ? control : extra.closest?.(selector) ?? null) }
+  return control
+}
+
+const EVERY_TEMPLATE_AGENT = [...new Set([...SHIPPED_PORTRAITS, 'research', 'email', 'content', 'sales', 'editor', 'security', 'bookkeeper'])]
+
+test('with personalising off, Make it yours opens straight under the banner to the one sentence saying how to switch it on', () => {
+  const placed = []
+  let panel = null
+  const banner = { insertAdjacentHTML: (where, markup) => { placed.push({ where, markup }); panel = { removed: false, remove() { this.removed = true; panel = null } } } }
+  const nodes = render(pinnedPayload, {
+    find: (id, selector) => (id !== 'team' ? undefined : selector === '.team-banner' ? banner : selector === '#brand-panel' ? panel : undefined),
+    expose: ['toggleBrandPanel']
+  })
+  const button = { attributes: {}, setAttribute(name, value) { this.attributes[name] = String(value) } }
+  nodes.exposed.toggleBrandPanel(button)
+  assert.equal(placed.length, 1, 'pressing Make it yours put nothing on the screen')
+  assert.equal(placed[0].where, 'afterend', 'the sentence is not straight under the banner')
+  const words = textOf(placed[0].markup)
+  assert.match(words, /Private Blob store/, 'the sentence does not say what to create')
+  assert.match(words, /Vercel/)
+  assert.match(words, /redeploy/i, 'the sentence leaves out the redeploy, the step most people miss')
+  assert.equal((words.match(/[.!?](?=\s|$)/g) ?? []).length, 1, `that is not one sentence: ${words}`)
+  assert.ok(!/<(form|input|button|textarea|select|label)\b/.test(placed[0].markup), 'with personalising off the panel offers controls that cannot work')
+  assert.equal(button.attributes['aria-expanded'], 'true', 'a screen reader is not told it opened')
+
+  const first = panel
+  nodes.exposed.toggleBrandPanel(button)
+  assert.ok(first.removed, 'pressing it again left the sentence on the screen')
+  assert.equal(placed.length, 1, 'pressing it again put a second one up')
+  assert.equal(button.attributes['aria-expanded'], 'false')
+})
+
+test('with personalising on, nothing drawn above the first agent card names an agent or says "content"', () => {
+  // The older Team tests find a card by the first place its slug appears, and the template has an
+  // agent called content. Everything personalising draws above the cards - the banner's buttons, its
+  // picture controls, the open Make it yours panel - has to stay clear of both.
+  const names = Object.fromEntries(EVERY_TEMPLATE_AGENT.map((slug, index) => [slug, `Helper ${index + 1}`]))
+  for (const canGenerate of [true, false]) {
+    const brand = { ...brandOn({ team: webpAt(V1) }), canGenerate, why: canGenerate ? '' : brandOn().why, names, defaultArtStyle: DEFAULT_ART_STYLE }
+    const drawn = render({ ...base, agents: EVERY_TEMPLATE_AGENT.map((slug) => agent({ slug })) }, { state: { brand, brandPanelOpen: true } }).get('team').innerHTML
+    const first = drawn.indexOf('<details class="agent-card')
+    assert.ok(first > 0, 'there are no cards to be above')
+    const above = drawn.slice(0, first)
+    // The control: what personalising adds above the cards really is in this slice.
+    for (const part of ['id="brand-panel"', 'data-personalise="team"', 'data-upload="team"', 'data-reset="team"', 'Make it yours', 'data-change="style"']) {
+      assert.ok(above.includes(part), `${part} is not above the cards, so this checks less than it says`)
+    }
+    if (canGenerate) assert.ok(above.includes('data-make="team"'), 'Make it is not offered for the Team banner')
+    assert.ok(!/content/i.test(above), `"content" appears above the first card (canGenerate ${canGenerate})`)
+    for (const slug of EVERY_TEMPLATE_AGENT) {
+      assert.ok(!above.includes(slug), `"${slug}" appears above the cards, so a slice from it misses its card`)
+      assert.ok(drawn.indexOf(slug) >= first)
+    }
+  }
+})
+
+test('a display name is drawn above the slug, and the slug stays what the card is found and routed by', () => {
+  const brand = { ...brandOn(), names: { research: 'Penny' } }
+  const drawn = render({ ...base, agents: [agent({ slug: 'research' }), agent({ slug: 'email' })] }, { state: { brand } }).get('team').innerHTML
+  const cards = teamCards(drawn)
+  assert.deepEqual(Object.keys(cards).sort(), ['email', 'research'], 'a card is no longer found by its slug')
+  const penny = cards.research
+  assert.match(penny.slice(0, penny.indexOf('>')), /class="agent-card[^"]*\bnamed\b/, 'the named card is not marked, so its slug is not drawn smaller')
+  const summary = penny.slice(0, penny.indexOf('</summary>'))
+  const nameAt = summary.indexOf('<span class="display-name">Penny</span>')
+  assert.ok(nameAt > 0, 'the display name is not on the card')
+  assert.ok(nameAt < summary.indexOf('<span class="title">research</span>'), 'the display name is not above the slug')
+  assert.ok(!/class="display-name"/.test(cards.email), 'an agent with no name of its own was given one')
+  assert.ok(!/\bnamed\b/.test(cards.email.slice(0, cards.email.indexOf('>'))))
+
+  // Personalise is in the drawer. In the summary, a tap on any of it would open and shut the card.
+  assert.ok(!/data-change|data-upload|data-make|data-reset|<form|<input|<textarea/.test(summary), 'a Personalise control is inside the part of the card a tap opens')
+  const drawer = penny.slice(penny.indexOf('</summary>'))
+  assert.match(drawer, /<form class="fire-form" data-change="name" data-slug="research">/, 'the name is not saved against the slug')
+  assert.match(drawer, /id="name-research"[^>]*value="Penny"/)
+  assert.match(drawer, /data-upload="agent-research"/, 'the picture is not kept against the slug')
+  assert.match(textOf(drawer), /research/, 'the drawer does not say what jobs still call this agent')
+})
+
+test('a display name, the assistant\'s name and the art style are drawn as text, never as markup', () => {
+  const hostile = '<img src=x onerror=alert(1)>'
+  const brand = { ...brandMaking(), names: { research: hostile }, assistantName: hostile, artStyle: `${hostile} "quoted"` }
+  const drawn = render({ ...base, agents: [agent({ slug: 'research' })] }, { state: { brand, brandPanelOpen: true } }).get('team').innerHTML
+  assert.ok(!drawn.includes('<img src=x'), 'something the owner typed was drawn as markup')
+  const escaped = '&lt;img src=x onerror=alert(1)&gt;'
+  assert.ok(cardOf(drawn, 'research').includes(`<span class="display-name">${escaped}</span>`), 'the display name is not shown as the words typed')
+  assert.ok(drawn.includes(`id="name-research" class="brand-field" type="text" maxlength="40" autocomplete="off" value="${escaped}"`), 'the name field does not hold the words typed')
+  assert.ok(drawn.includes(`id="brand-assistant" class="brand-field" type="text" maxlength="40" autocomplete="off" value="${escaped}"`), 'the assistant field does not hold the words typed')
+  assert.ok(drawn.includes(`${escaped} &quot;quoted&quot;</textarea>`), 'the art style is not shown as the words typed')
+})
+
+test('each card opens to Personalise: a name, Choose a picture, Describe it and Make it, and Back to the default', () => {
+  const drawn = render({ ...base, agents: [agent({ slug: 'research' })] }, { state: { brand: brandMaking() } }).get('team').innerHTML
+  const card = cardOf(drawn, 'research')
+  const drawer = card.slice(card.indexOf('</summary>'))
+  const name = /<input\b[^>]*id="name-research"[^>]*>/.exec(drawer)?.[0] ?? assert.fail('the card has no name field')
+  assert.match(name, /type="text"/)
+  assert.match(name, /maxlength="40"/, 'the field takes more than the 40 characters the server keeps')
+  assert.match(drawer, /<label for="name-research">/, 'the name field has no label')
+  // The file input sits inside a label drawn as a button, so the whole button opens the picker, and
+  // image/* is what makes a phone offer its camera and its photo library. No capture attribute: that
+  // would force the camera and hide the library.
+  const chooser = /<label class="fire">([\s\S]*?)<\/label>/.exec(drawer)?.[1] ?? assert.fail('there is no Choose a picture button')
+  assert.match(chooser, /^Choose a picture/)
+  const input = /<input\b[^>]*type="file"[^>]*>/.exec(chooser)?.[0] ?? assert.fail('Choose a picture has no file input in it')
+  assert.match(input, /accept="image\/\*"/)
+  assert.match(input, /class="visually-hidden"/, 'the browser\'s own file box is drawn as well as the button')
+  assert.match(input, /data-upload="agent-research"/)
+  assert.ok(!/\bcapture\b/.test(input), 'the picker is forced to the camera, so a saved photo cannot be chosen')
+  const make = /<form class="fire-form" data-make="agent-research">[\s\S]*?<\/form>/.exec(drawer)?.[0] ?? assert.fail('there is no Make it')
+  assert.match(make, /<label for="describe-agent-research">Describe it<\/label>/)
+  assert.match(make, /<textarea id="describe-agent-research"[^>]*maxlength="400"/, 'the description takes more than the server will read')
+  assert.match(make, /<button class="fire" type="submit">Make it<\/button>/)
+  assert.match(drawer, /<button class="fire" type="button" data-reset="agent-research">Back to the default<\/button>/)
+})
+
+test('with no OpenAI key, Make it is not offered anywhere and one sentence says why', () => {
+  const why = 'Making pictures from words is off: set OPENAI_API_KEY in Vercel (the same key the voice assistant uses) and redeploy. Choosing your own picture still works.'
+  const nodes = render(pinnedPayload, { state: { brand: { ...brandOn(), why } } })
+  const today = nodes.get('today').innerHTML
+  const team = nodes.get('team').innerHTML
+  assert.ok(!/data-make=/.test(today + team), 'Make it is offered with no key to make anything with')
+  assert.ok(!/Describe it/.test(today + team))
+  // One sentence where each Make it would have been: Today's banner, Team's banner, and four cards.
+  assert.equal(today.split(why).length - 1, 1, 'Today\'s picture controls do not say why')
+  assert.equal(team.split(why).length - 1, 1 + pinnedPayload.agents.length, 'the Team controls do not each say why')
+  for (const slot of ['today', 'team', 'agent-research']) assert.ok((today + team).includes(`data-upload="${slot}"`), `choosing a picture went too, for ${slot}`)
+})
+
+test('each banner has a Personalise button that opens its own picture controls, straight under it', () => {
+  const nodes = render(pinnedPayload, { state: { brand: brandMaking() }, expose: ['togglePersonalise', 'el'] })
+  for (const slot of ['today', 'team']) {
+    const drawn = nodes.get(slot).innerHTML
+    const banner = slot === 'today' ? bannerOf(drawn) : teamBannerOf(drawn)
+    assert.ok(banner.includes(`<button class="fire banner-btn" type="button" data-personalise="${slot}" aria-expanded="false">Personalise</button>`),
+      `the ${slot} banner has no Personalise button`)
+    const after = drawn.slice(drawn.indexOf(banner) + banner.length)
+    assert.ok(after.startsWith(`<div class="panel banner-personalise" id="personalise-${slot}" hidden>`), `the ${slot} picture controls are not straight under its banner, shut`)
+    const block = after.slice(0, after.indexOf(slot === 'today' ? '<div class="kpis">' : 'class="panel add-panel"'))
+    for (const part of [`data-upload="${slot}"`, `data-make="${slot}"`, `data-reset="${slot}"`]) assert.ok(block.includes(part), `the ${slot} controls have no ${part}`)
+
+    // As drawn: shut.
+    const controls = nodes.exposed.el(`personalise-${slot}`)
+    controls.hidden = true
+    const button = { dataset: { personalise: slot }, attributes: {}, setAttribute(name, value) { this.attributes[name] = String(value) } }
+    nodes.exposed.togglePersonalise(button)
+    assert.equal(controls.hidden, false, `pressing Personalise did not open the ${slot} controls`)
+    assert.equal(button.attributes['aria-expanded'], 'true')
+    nodes.exposed.togglePersonalise(button)
+    assert.equal(controls.hidden, true, `pressing it again did not put the ${slot} controls away`)
+    assert.equal(button.attributes['aria-expanded'], 'false')
+  }
+})
+
+test('what is left of today\'s allowance is shown beside the controls, in words', () => {
+  const leftLine = (drawn) => [...drawn.matchAll(/<p class="small muted allowance">([^<]*)<\/p>/g)].map((found) => found[1])
+  const making = render(pinnedPayload, { state: { brand: brandMaking({ left: { writes: 7, generated: 3 } }), brandPanelOpen: true } })
+  const lines = [...leftLine(making.get('today').innerHTML), ...leftLine(making.get('team').innerHTML)]
+  // Today's banner, Team's banner, the Make it yours panel, and every card.
+  assert.equal(lines.length, 3 + pinnedPayload.agents.length, 'some controls do not say what is left')
+  assert.ok(lines.every((line) => line === 'Left today: 7 changes and 3 new pictures.'), lines.join(' | '))
+  const one = render(pinnedPayload, { state: { brand: brandMaking({ left: { writes: 1, generated: 1 } }) } })
+  assert.deepEqual([...new Set(leftLine(one.get('today').innerHTML))], ['Left today: 1 change and 1 new picture.'])
+  // Pictures from words that cannot be made are not counted out loud.
+  const off = render(pinnedPayload, { state: { brand: { ...brandOn(), left: { writes: 0, generated: 10 } } } })
+  assert.deepEqual([...new Set(leftLine(off.get('today').innerHTML))], ['Left today: 0 changes.'])
+})
+
+test('a chosen picture is shrunk, sent as its bytes with both keys and the exact type, and shown from the copy in hand', async () => {
+  const browser = writingBrowser({
+    brand: brandOn({ 'agent-research': webpAt(V1) }),
+    writes: () => jsonAnswer(200, { slot: 'agent-research', picture: { v: V2, type: 'image/webp' }, left: { writes: 6, generated: 10 } })
+  })
+  const holders = artHolders()
+  const pictures = shrinker()
+  const nodes = render(pinnedPayload, {
+    fetch: browser.fetch, select: holders.select, storage: keyStorage({ ...VIEW_ONLY, 'agent-cockpit-edit-key': 'the-edit-key' }),
+    createImageBitmap: pictures.createImageBitmap, create: pictures.create, expose: ['showScreen', 'allowanceText']
+  })
+  await flush()
+  nodes.exposed.showScreen('team')
+  await flush()
+  const before = holders.srcOf('agent-research')
+  const fetchedBefore = browser.art().length
+
+  const box = pictureBox()
+  const photo = { type: 'image/jpeg', size: 1_800_000 }
+  const input = fileInput('agent-research', photo, box)
+  await dispatch(nodes, 'change', input)
+
+  assert.equal(browser.posts().length, 1, 'choosing a picture did not send it')
+  const [sent] = browser.posts()
+  assert.equal(sent.url, '/api/upload?slot=agent-research')
+  assert.equal(sent.headers['Content-Type'], 'application/octet-stream', 'the bytes went with a type the write gate refuses')
+  assert.equal(sent.headers['x-view-key'], 'the-view-key')
+  assert.equal(sent.headers['x-edit-key'], 'the-edit-key')
+  assert.equal(pictures.opened[0], photo, 'the photo chosen was not the one opened')
+  assert.equal(sent.body?.shrunk, true, 'the photo was sent as it came off the camera, not shrunk first')
+
+  const made = nodes.objectUrls.created.at(-1)
+  assert.equal(made.blob, sent.body, 'what is shown is not the bytes that were sent')
+  assert.equal(holders.srcOf('agent-research'), made.url, 'the card does not show the picture just sent')
+  assert.ok(nodes.objectUrls.revoked.includes(before), 'the picture it replaced kept its address')
+  assert.equal(browser.art().length, fetchedBefore, 'the picture just sent was fetched straight back')
+  assert.equal(input.value, '', 'choosing the same photo again would do nothing')
+  assert.equal(box.note.className, 'fire-note ok')
+  assert.equal(nodes.exposed.allowanceText(), 'Left today: 6 changes.', 'the allowance did not come down')
+})
+
+test('Make it sends the description as JSON, puts what comes back through the same shrink, and sends that', async () => {
+  const fromOpenAi = { type: 'image/webp', size: 1_400_000 }
+  const browser = writingBrowser({
+    brand: brandMaking({ left: { writes: 5, generated: 2 } }),
+    writes: (request) => (request.url === '/api/generate'
+      ? madePicture(fromOpenAi)
+      : jsonAnswer(200, { slot: 'team', picture: { v: V2, type: 'image/webp' }, left: { writes: 4, generated: 1 } }))
+  })
+  const holders = artHolders()
+  const pictures = shrinker()
+  const nodes = render(pinnedPayload, {
+    fetch: browser.fetch, select: holders.select, storage: keyStorage(VIEW_ONLY),
+    createImageBitmap: pictures.createImageBitmap, create: pictures.create, expose: ['allowanceText']
+  })
+  await flush()
+  const box = pictureBox()
+  const form = makeForm('team', '  a lighthouse at dusk  ', box)
+  const event = await dispatch(nodes, 'submit', form)
+  assert.ok(event.prevented, 'the form was left to submit itself and leave the page')
+
+  const [generate, upload] = browser.posts()
+  assert.equal(generate?.url, '/api/generate')
+  assert.equal(generate.headers['Content-Type'], 'application/json')
+  assert.equal(generate.headers['x-view-key'], 'the-view-key')
+  assert.ok(!('x-edit-key' in generate.headers), 'an edit key nobody gave was sent')
+  assert.deepEqual(JSON.parse(generate.body), { slot: 'team', description: 'a lighthouse at dusk' })
+  assert.equal(pictures.opened[0], fromOpenAi, 'the picture OpenAI made was not the one shrunk')
+  assert.equal(upload?.url, '/api/upload?slot=team')
+  assert.equal(upload.headers['Content-Type'], 'application/octet-stream')
+  assert.equal(upload.body?.shrunk, true, 'the made picture was sent at its full size')
+  assert.equal(holders.srcOf('team'), nodes.objectUrls.created.at(-1).url, 'the banner does not show the picture just made')
+  assert.equal(form.field.value, '', 'the description stayed in the box after the picture was made')
+  assert.equal(box.note.className, 'fire-note ok')
+  assert.equal(nodes.exposed.allowanceText(), 'Left today: 4 changes and 1 new picture.')
+
+  // Too short to describe anything: refused here, with nothing spent.
+  const short = makeForm('team', 'ab', pictureBox())
+  await dispatch(nodes, 'submit', short)
+  assert.equal(browser.posts().length, 2, 'a two-letter description was sent to OpenAI')
+})
+
+test('Back to the default drops the store picture and puts the built-in one back in its place', async () => {
+  const browser = writingBrowser({ brand: brandOn({ today: webpAt(V1) }), writes: () => jsonAnswer(200, { ...brandOn({}), left: { writes: 9, generated: 10 } }) })
+  const holders = artHolders()
+  const nodes = render(pinnedPayload, { fetch: browser.fetch, select: holders.select, storage: keyStorage(VIEW_ONLY) })
+  await flush()
+  const shown = holders.srcOf('today')
+  assert.match(shown ?? '', /^blob:/, 'the owner\'s banner never landed, so there is nothing to put back')
+  const box = pictureBox()
+  const button = pressable('button[data-reset]', { dataset: { reset: 'today' }, closest: (selector) => (selector === '.picture-controls' ? box : null) })
+  await dispatch(nodes, 'click', button)
+
+  const [sent] = browser.posts()
+  assert.equal(sent?.url, '/api/brand')
+  assert.equal(sent.headers['Content-Type'], 'application/json')
+  assert.deepEqual(JSON.parse(sent.body), { change: 'reset-picture', slot: 'today' })
+  assert.equal(holders.srcOf('today'), '/art/today-harbour.webp', 'the harbour did not come back')
+  assert.deepEqual(nodes.objectUrls.revoked, [shown], 'the picture taken away kept its address')
+  assert.equal(box.note.className, 'fire-note ok')
+
+  // Already the default: nothing to take away, so no write is spent on it.
+  await dispatch(nodes, 'click', button)
+  assert.equal(browser.posts().length, 1, 'a write was spent on a picture that is already the default')
+  assert.match(box.note.textContent, /already/)
+})
+
+test('a new name is saved and shown on the card at once, and an empty one goes back to the slug', async () => {
+  let names = { research: 'Penny' }
+  const browser = writingBrowser({ writes: () => jsonAnswer(200, { ...brandOn(), names }) })
+  const nodes = render(pinnedPayload, { fetch: browser.fetch, storage: keyStorage(VIEW_ONLY) })
+  await flush()
+  const card = cardStand()
+  const form = changeForm({ change: 'name', slug: 'research', value: '  Penny ', card })
+  const event = await dispatch(nodes, 'submit', form)
+  assert.ok(event.prevented)
+  const [sent] = browser.posts()
+  assert.equal(sent?.url, '/api/brand')
+  assert.equal(sent.headers['Content-Type'], 'application/json')
+  assert.deepEqual(JSON.parse(sent.body), { change: 'name', slug: 'research', value: 'Penny' })
+  assert.equal(card.shownName(), 'Penny', 'the card does not show its new name')
+  assert.ok(card.classes.has('named'), 'the slug under the name is not drawn smaller')
+  assert.equal(form.field.value, 'Penny')
+  assert.equal(form.note.className, 'fire-note ok')
+
+  names = {}
+  form.field.value = ''
+  await dispatch(nodes, 'submit', form)
+  assert.deepEqual(JSON.parse(browser.posts()[1].body), { change: 'name', slug: 'research', value: '' })
+  assert.equal(card.shownName(), null, 'an emptied name is still on the card')
+  assert.ok(!card.classes.has('named'))
+})
+
+test('the assistant\'s name and the art style are saved from Make it yours, and the style can go back to the default', async () => {
+  let answer = { ...brandOn(), assistantName: 'Iris' }
+  const browser = writingBrowser({ writes: () => jsonAnswer(200, answer) })
+  const nodes = render(pinnedPayload, { fetch: browser.fetch, storage: keyStorage(VIEW_ONLY) })
+  await flush()
+  const assistant = changeForm({ change: 'assistant', value: 'Iris' })
+  await dispatch(nodes, 'submit', assistant)
+  assert.deepEqual(JSON.parse(browser.posts()[0].body), { change: 'assistant', value: 'Iris' })
+  assert.equal(assistant.note.className, 'fire-note ok')
+
+  answer = { ...brandOn(), artStyle: 'Watercolour foxes.' }
+  const style = changeForm({ change: 'style', value: 'Watercolour foxes.' })
+  await dispatch(nodes, 'submit', style)
+  assert.deepEqual(JSON.parse(browser.posts()[1].body), { change: 'style', value: 'Watercolour foxes.' })
+
+  // Back to the default sends an empty style, and the box then shows the default it went back to.
+  answer = { ...brandOn(), artStyle: '' }
+  const plain = pressable('button[data-default-style]', { dataset: { defaultStyle: '1' }, closest: (selector) => (selector === 'form[data-change]' ? style : null) })
+  await dispatch(nodes, 'click', plain)
+  assert.deepEqual(JSON.parse(browser.posts()[2].body), { change: 'style', value: '' })
+  assert.equal(style.field.value, brandOn().defaultArtStyle, 'the box does not show the default style it went back to')
+})
+
+test('the edit key is asked for once, only when the store says it needs one, kept on the device, and the change sent again with it', async () => {
+  const needsKey = { needs: 'edit-key', error: 'Missing or wrong edit key. Send it in the x-edit-key header.' }
+  const browser = writingBrowser({
+    brand: brandOn({ today: webpAt(V1) }),
+    writes: (request) => (request.headers['x-edit-key'] === 'typed-key' ? jsonAnswer(200, { ...brandOn(), names: { research: 'Penny' } }) : jsonAnswer(401, needsKey))
+  })
+  const asked = []
+  const storage = keyStorage(VIEW_ONLY)
+  const nodes = render(pinnedPayload, { fetch: browser.fetch, storage, prompt: (message) => { asked.push(message); return '  typed-key  ' } })
+  await flush()
+  const form = changeForm({ change: 'name', slug: 'research', value: 'Penny', card: cardStand() })
+  await dispatch(nodes, 'submit', form)
+  assert.equal(asked.length, 1, 'the edit key was not asked for, or asked for more than once')
+  assert.match(asked[0], /EDIT_KEY/, 'the question does not say which key it wants')
+  const [first, again] = browser.posts()
+  assert.ok(!('x-edit-key' in first.headers), 'a key was sent before there was one')
+  assert.equal(again?.headers['x-edit-key'], 'typed-key', 'the change was not sent again with the key typed')
+  assert.equal(again.headers['x-view-key'], 'the-view-key')
+  assert.equal(again.body, first.body, 'the change sent again is not the change asked for')
+  assert.deepEqual(storage.writes, [['agent-cockpit-edit-key', 'typed-key']], 'the edit key was not kept like the view key')
+  assert.equal(form.note.className, 'fire-note ok')
+
+  // The next change carries it without asking.
+  await dispatch(nodes, 'submit', form)
+  assert.equal(asked.length, 1, 'the edit key was asked for again')
+  assert.equal(browser.posts()[2].headers['x-edit-key'], 'typed-key')
+
+  // A key the store refuses is not kept; and putting the question away changes nothing.
+  const refused = writingBrowser({ writes: () => jsonAnswer(401, needsKey) })
+  const kept = keyStorage(VIEW_ONLY)
+  const wrong = render(pinnedPayload, { fetch: refused.fetch, storage: kept, prompt: () => 'wrong-key' })
+  await flush()
+  const tried = changeForm({ change: 'assistant', value: 'Iris' })
+  await dispatch(wrong, 'submit', tried)
+  assert.equal(refused.posts().length, 2, 'the change was not tried once with the key typed')
+  assert.deepEqual(kept.writes.at(-1), ['agent-cockpit-edit-key', null], 'a key the store refused was kept, so every change fails the same way')
+  assert.equal(tried.note.className, 'fire-note bad')
+  assert.equal(tried.note.textContent, needsKey.error)
+
+  const cancelled = writingBrowser({ writes: () => jsonAnswer(401, needsKey) })
+  const nobody = render(pinnedPayload, { fetch: cancelled.fetch, storage: keyStorage(VIEW_ONLY), prompt: () => null })
+  await flush()
+  const left = changeForm({ change: 'assistant', value: 'Iris' })
+  await dispatch(nobody, 'submit', left)
+  assert.equal(cancelled.posts().length, 1, 'the change was sent again with no key')
+  assert.equal(left.note.className, 'fire-note bad')
+  assert.match(left.note.textContent, /edit key/)
+})
+
+test('any other refusal shows the server\'s own sentence and never asks for a key', async () => {
+  const refusals = [
+    [401, { error: 'Missing or wrong view key. Send it in the x-view-key header.' }],
+    [403, { error: 'This board is open to everyone, so changes are off. Set EDIT_KEY in your hosting environment and redeploy to turn them on.' }],
+    [429, { error: 'This board has made all the changes it allows today, so try again tomorrow (the count starts again at midnight UTC), or raise WRITE_DAILY_CAP in Vercel and redeploy.' }],
+    [503, { error: 'This picture store is public and the board only uses private ones, so create a private one, connect it to this project and redeploy.' }]
+  ]
+  for (const [status, refusal] of refusals) {
+    const browser = writingBrowser({ writes: () => jsonAnswer(status, refusal) })
+    let asked = 0
+    const nodes = render(pinnedPayload, { fetch: browser.fetch, storage: keyStorage(VIEW_ONLY), prompt: () => { asked += 1; return 'k' } })
+    await flush()
+    const form = changeForm({ change: 'assistant', value: 'Iris' })
+    await dispatch(nodes, 'submit', form)
+    assert.equal(asked, 0, `a ${status} asked for an edit key`)
+    assert.equal(browser.posts().length, 1, `a ${status} was sent again`)
+    assert.equal(form.note.className, 'fire-note bad')
+    assert.equal(form.note.textContent, refusal.error, `a ${status} did not show the server's sentence`)
+  }
+
+  // OpenAI saying no to a description, and the day's pictures used up, are told the same way - and
+  // nothing is sent to the store after either.
+  for (const refusal of [
+    { error: 'OpenAI would not make that picture because of its safety rules, so describe it differently.' },
+    { error: 'This board has made all the pictures it allows today, so try again tomorrow (the count starts again at midnight UTC), or raise GENERATE_DAILY_CAP in Vercel and redeploy.' }
+  ]) {
+    const browser = writingBrowser({ brand: brandMaking(), writes: () => jsonAnswer(refusal.error.startsWith('OpenAI') ? 400 : 429, refusal) })
+    const nodes = render(pinnedPayload, { fetch: browser.fetch, storage: keyStorage(VIEW_ONLY) })
+    await flush()
+    const box = pictureBox()
+    await dispatch(nodes, 'submit', makeForm('today', 'a quiet harbour at dusk', box))
+    assert.equal(browser.posts().length, 1, 'something was uploaded after the picture was refused')
+    assert.equal(box.note.className, 'fire-note bad')
+    assert.equal(box.note.textContent, refusal.error)
+  }
+})
 
 test('a picture arriving is put in its own place, and a form somebody is typing into is left exactly as it is', async () => {
   // Every picture waits until the test lets it through, so the forms can be half-typed first.
@@ -4249,4 +4779,42 @@ test('a picture arriving is put in its own place, and a form somebody is typing 
   nodes.exposed.adoptPicture('agent-research', { v: V2, type: 'image/webp' }, { type: 'image/webp', size: 30_000 })
   assert.equal(holders.srcOf('agent-research'), nodes.objectUrls.created.at(-1).url)
   assert.equal(nodes.get('team').innerHTML, typedTeam, 'a picture just sent drew Team again and wiped what was being typed')
+})
+
+test('every Personalise control is styled, the slug under a name is smaller, and wide-screen limits come after what they narrow', () => {
+  const declared = (selector, options) => Object.assign({}, ...rulesFor(selector, options).map(valuesIn))
+  // Choose a picture is a label, so the button rules have to reach it by name.
+  for (const property of ['background', 'border', 'color', 'min-height']) {
+    assert.ok(exactRules('label.fire').some((rule) => !rule.inMedia && valuesIn(rule)[property]), `Choose a picture declares no ${property}, so it is not drawn as a button`)
+  }
+  assert.ok(rulesFor('label.fire:focus-within').length, 'a keyboard on the hidden file input shows nowhere on its button')
+  // Hidden from sight, never from a screen reader or the keyboard - display: none would do both.
+  const hidden = declared('.visually-hidden')
+  assert.equal(hidden.position, 'absolute')
+  assert.match(hidden['clip-path'] ?? '', /inset\(50%\)/)
+  assert.ok(!('display' in hidden) && !('visibility' in hidden), 'the file input is taken out of reach of the keyboard')
+  // A name over the slug: the name the larger of the two, and the slug drawn smaller under it - by a
+  // rule placed after the one it overrides, or it never reaches a pixel.
+  const rem = (value) => Number(/^([\d.]+)rem$/.exec(value ?? '')?.[1] ?? 0)
+  const title = exactRules('.agent-card .title').filter((rule) => !rule.inMedia)
+  const named = exactRules('.agent-card.named .title').filter((rule) => !rule.inMedia)
+  assert.ok(title.length && named.length, 'there is no rule drawing the slug smaller under a name')
+  assert.ok(named[0].at > title[0].at, 'the smaller slug is written above the rule it overrides')
+  const slugSize = rem(valuesIn(named[0])['font-size'])
+  assert.ok(slugSize > 0 && slugSize < rem(declared('.display-name')['font-size']), 'the slug is not smaller than the name over it')
+  assert.ok(!('text-transform' in declared('.display-name')) || declared('.display-name')['text-transform'] === 'none',
+    'the owner\'s own name is re-cased on the card')
+  // The field and the banner button.
+  const field = declared('.brand-field')
+  for (const property of ['width', 'background', 'border', 'color', 'padding']) assert.ok(field[property], `the name field declares no ${property}: a bare browser box on a dark page`)
+  const onArt = Object.assign({}, ...exactRules('button.banner-btn').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.match(onArt.color ?? '', /var\(--on-art\)/, 'the banner button is not in the colour words over a picture take')
+  const fire = exactRules('button.fire').find((rule) => !rule.inMedia && valuesIn(rule).background)
+  assert.ok(exactRules('button.banner-btn').find((rule) => !rule.inMedia && valuesIn(rule).background)?.at > fire.at,
+    'the banner button\'s look is written above the button rule it overrides')
+  // On a laptop the forms keep a reading measure, placed after the unconditional form rules.
+  const capped = rulesFor('.brand-panel .fire-form', { desktop: true })
+  assert.ok(capped.some((rule) => valuesIn(rule)['max-width']), 'the Make it yours forms stretch the width of a laptop')
+  assert.ok(capped[0].at > rulesFor('.fire-form').find((rule) => rule.selector === '.fire-form').at)
+  assert.ok(rulesFor('.picture-controls', { desktop: true }).some((rule) => valuesIn(rule)['max-width']), 'the picture controls stretch the width of a laptop')
 })

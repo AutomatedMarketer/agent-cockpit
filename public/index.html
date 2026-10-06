@@ -273,7 +273,10 @@
   /* Every button on the board is the mock-up's job button: a rounded tile on the panel colour with a
      hairline, the accent arriving only on hover. It was a filled block in --panel-2 with a panel's
      radius, so a row of them read as a row of small cards. */
-  button.fire {
+  /* Choose a picture is a label drawn as one of these buttons, with the file input hidden inside it:
+     a label opens its own input's picker wherever it is pressed, which a button cannot do for a
+     file input, and the browser's own file box looks different on every phone. */
+  button.fire, label.fire {
     font: inherit; font-size: .875rem; font-weight: 600;
     color: var(--ink); background: var(--panel); border: 1px solid var(--line);
     border-radius: var(--radius-sm); padding: .6rem 1rem; min-height: 2.9rem;
@@ -283,6 +286,16 @@
   button.fire:not([disabled]) { cursor: pointer; }
   button.fire:not([disabled]):hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
   button.fire:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  label.fire { position: relative; cursor: pointer; }
+  label.fire:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+  /* The keyboard lands on the hidden input, so its button shows where the keyboard is. */
+  label.fire:focus-within { outline: 2px solid var(--link); outline-offset: 2px; }
+  label.fire:has(> input[disabled]) { opacity: .55; }
+  /* Out of sight, never out of reach: display: none would take the input away from the keyboard
+     and from a screen reader as well. */
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
   /* A run button: the job's name after a small play mark in the accent. The mark is drawn, because
      the character for it is one a phone may turn into an emoji. */
   button.job { font-weight: 500; padding: .5rem 1rem .5rem .55rem; gap: .6rem; }
@@ -460,6 +473,14 @@
   }
   .agent-body { display: block; padding: .8rem .95rem .95rem; }
   .agent-card .title { text-transform: capitalize; overflow-wrap: anywhere; }
+  /* An agent the owner has named: the name large, and the slug kept under it, smaller, because the
+     slug is what every job and task card still calls it. Below the rule it narrows. The name is the
+     owner's own words, so it keeps the case they typed it in. */
+  .display-name {
+    display: block; margin: 0 0 .2rem; font-size: 1.2rem; font-weight: 650; line-height: 1.2;
+    letter-spacing: -.02em; overflow-wrap: anywhere;
+  }
+  .agent-card.named .title { font-size: .8125rem; font-weight: 500; color: var(--muted); }
   .agent-card p.desc { margin: .35rem 0 .5rem; color: var(--muted); font-size: .8125rem; }
   /* The card opens to show what this agent actually did. The marker above is hidden, and a
      `cursor: pointer` is invisible on the phone this board is built to be read on - so on the
@@ -480,6 +501,33 @@
     border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
   }
   #agent-open:hover { border-color: var(--accent); }
+
+  /* Personalise: a card's own section in its drawer, ruled off from the runs above it; the picture
+     controls each banner opens under itself; and Make it yours, opened under the Team banner. Each
+     is a panel or a slice of one, in the same family as the Add agent form beside it. */
+  .personalise { display: grid; gap: .6rem; padding: .85rem .95rem 1rem; border-top: 1px solid var(--line); }
+  .personalise > .eyebrow, .banner-personalise > .eyebrow, .brand-panel > .eyebrow { margin: 0; }
+  .banner-personalise, .brand-panel { display: grid; gap: .6rem; margin-top: .9rem; padding: .9rem 1rem 1rem; }
+  .brand-panel > p, .banner-personalise > p { padding: 0; }
+  .banner-personalise + .add-panel, .brand-panel + .add-panel { margin-top: .9rem; }
+  .picture-controls { display: grid; gap: .55rem; }
+  .picture-controls > .fire-form { margin-top: 0; }
+  .allowance { margin: 0; font-size: .75rem; }
+  .brand-field {
+    flex: 1; min-width: 0; min-height: 2.9rem; font: inherit; font-size: .9375rem; color: var(--ink);
+    width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: .55rem .75rem;
+  }
+  .brand-field:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+  /* A button laid over a banner picture: the words over-the-art colour on the same wash as the setup
+     pill, so it reads on a bright sky as well as a dark one. Written as button.banner-btn so it
+     outranks button.fire, which it follows. */
+  button.banner-btn {
+    min-height: 2.75rem; padding: .45rem .95rem; font-size: .8125rem;
+    color: var(--on-art); background: color-mix(in srgb, var(--scrim) 70%, transparent);
+    border: 1px solid color-mix(in srgb, var(--on-art) 22%, transparent); backdrop-filter: blur(8px);
+  }
+  button.banner-btn[aria-expanded="true"] { border-color: var(--on-art); }
 
   /* Memory */
   input[type=search] {
@@ -841,6 +889,11 @@
     .add-panel .fire-form .fire { justify-self: start; }
     /* Full width is a thumb target on a phone; across a laptop's content column it is a red bar. */
     #agent-open { width: auto; }
+    /* The same measure for Personalise's forms and picture controls, for the same reason: on a
+       laptop a banner's controls and Make it yours span the whole content column otherwise. A card's
+       drawer is already narrow, so this caps nothing there. */
+    .brand-panel .fire-form, .picture-controls { max-width: 34rem; }
+    .brand-panel .fire-form .fire, .picture-controls .fire-form .fire { justify-self: start; }
   }
   .d7-date { font-size: .6875rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin-bottom: .35rem; }
   .d7-row {
@@ -1683,7 +1736,7 @@ function bannerHtml(now = new Date()) {
         <h2 class="greeting">${greeting} <span class="soft">Here is where things stand.</span></h2>
         <p class="banner-strap">${escapeHtml(strapText())}</p>
       </div>
-      ${setupRingHtml(data.setup)}
+      ${setupRingHtml(data.setup)}${bannerButtonsHtml('today')}
     </div>
   </section>`, '/art/today-harbour.webp', 'today')
 }
@@ -1922,7 +1975,7 @@ function renderToday() {
   // The snapshot banner belongs here too. Today is the first screen anybody opens, and it was the
   // one place a month-old snapshot was presented with no age at all.
   el('today').innerHTML =
-    bannerHtml() +
+    bannerHtml() + bannerPersonaliseHtml('today') +
     kpiCardsHtml() +
     snapshotBannerHtml(data.routines) +
     ladderHtml(data.setup) +
@@ -1998,7 +2051,7 @@ function teamBannerHtml(agents) {
         <p class="eyebrow">Your team</p>
         <h2 class="headline">${headline}</h2>
         ${counts.length ? `<p class="banner-strap">${counts.join(' &middot; ')}</p>` : ''}
-      </div>
+      </div>${bannerButtonsHtml('team')}
     </div>
   </section>`, '/art/team-workshop.webp', 'team')
 }
@@ -2038,10 +2091,12 @@ function renderTeam() {
       ? `<div class="run small muted">The newest ${mine.length} of ${total}. The rest are files in runs/ in your repo.</div>`
       : ''
     // The portrait and the words are both inside the summary, so a tap anywhere on the card opens it.
-    return `<details class="agent-card agent-accent ${agent.state}"${accentStyle(agent.slug)}>
+    // A name the owner gave the agent goes over its slug; the slug stays, as what jobs call it.
+    const name = displayName(agent.slug)
+    return `<details class="agent-card agent-accent ${agent.state}${name ? ' named' : ''}"${accentStyle(agent.slug)}>
       <summary>
         ${portraitHtml(agent)}
-        <div class="agent-body">
+        <div class="agent-body">${name ? `<span class="display-name">${escapeHtml(name)}</span>` : ''}
         <div class="row between">
           <span class="row"><span class="swatch" style="background:${agentColor(agent.slug)}"></span><span class="title">${escapeHtml(agent.slug)}</span></span>
           <span class="chip">${escapeHtml(agent.model)}</span>
@@ -2085,14 +2140,17 @@ function renderTeam() {
         }</span>
         </div>
       </summary>
-      <div class="agent-runs">${runRows}${runsNote}</div>
+      <div class="agent-runs">${runRows}${runsNote}</div>${personaliseHtml(agent)}
     </details>`
   }).join('')
   // Add agent goes under the banner and above the cards, on every screen size. It was the last tile
   // of the grid, as in the mock-up - after eight tall portraits on a phone, where most people never
   // scrolled far enough to learn they could add one (Nuno's call, 2026-10-06). With no agents it is
   // at the top as well, above the sentence saying how to get some.
-  el('team').innerHTML = `${teamBannerHtml(data.agents)}${createFormHtml('agent')}<div class="team-grid">${cards}</div>`
+  // Make it yours, when it is open, and the banner's own picture controls sit between the banner
+  // and Add agent: straight under the button that opened them, and above every card.
+  el('team').innerHTML = `${teamBannerHtml(data.agents)}${brandPanelOpen ? brandPanelHtml() : ''}${bannerPersonaliseHtml('team')}` +
+    `${createFormHtml('agent')}<div class="team-grid">${cards}</div>`
   bindCreateForm('agent', el('team'))
 }
 
@@ -3584,6 +3642,400 @@ async function shrinkPicture(file, kind) {
     source.close?.()
   }
 }
+
+/* ---------- Personalise: the controls ----------
+   With a store connected, every Team card opens to a Personalise section, each banner has a small
+   Personalise button for its own picture, and Make it yours in the Team banner opens the assistant's
+   name and the art style under it. All of it happens here on the board, at once - and the board's
+   only write power is over its own picture store: names and pictures, never the team repo.
+
+   With personalising off, Make it yours is the one control there is, and it opens to a single
+   sentence saying how to switch personalising on. Nothing else is drawn (tests/render.test.mjs holds
+   Today to the board before personalising, byte for byte, and Team to that plus this one button). */
+
+// Kept on this device like the view key, through the same two guarded helpers - and in this
+// variable too, so a browser that refuses storage still gets the change it just typed the key for.
+const EDIT_KEY_STORE = 'agent-cockpit-edit-key'
+let editKeyHeld = ''
+const editKey = () => readStore(EDIT_KEY_STORE) || editKeyHeld
+const EDIT_KEY_ASK = 'Changing this board needs its edit key.\n\n' +
+  'Paste the EDIT_KEY you set in Vercel. It is kept on this device, like the view key, and never appears in this page.'
+const SWITCH_ON = 'Personalising is off: to switch it on, create a Private Blob store in Vercel (your project, then ' +
+  'Storage, Create Storage, Blob), connect it to this project and redeploy.'
+
+let brandPanelOpen = false
+
+const pictureKind = (slot) => (slot.startsWith('agent-') ? 'portrait' : 'banner')
+const allowanceCount = (value) => (Number.isInteger(value) && value >= 0 ? value : 0)
+// The name an agent has been given, or '' for none. Own keys only: an agent called "constructor"
+// must not be named after a function every object has.
+const displayName = (slug) => (brand && Object.hasOwn(brand.names, slug) ? brand.names[slug] : '')
+
+// What is left of today's allowance, in words. Pictures from words are not counted out loud on a
+// board that cannot make them.
+function allowanceText() {
+  const changes = plural(brand.left.writes, 'change')
+  return brand.canGenerate
+    ? `Left today: ${changes} and ${plural(brand.left.generated, 'new picture')}.`
+    : `Left today: ${changes}.`
+}
+
+function showAllowance() {
+  if (!brand) return
+  for (const line of document.querySelectorAll('.allowance')) line.textContent = allowanceText()
+}
+
+// The buttons on a banner. Off, Today gets none and Team gets only Make it yours.
+function bannerButtonsHtml(slot) {
+  const personalise = brand
+    ? `<button class="fire banner-btn" type="button" data-personalise="${slot}" aria-expanded="false">Personalise</button>`
+    : ''
+  const yours = slot === 'team'
+    ? `<button class="fire banner-btn" type="button" id="brand-open" aria-expanded="${brandPanelOpen}">Make it yours</button>`
+    : ''
+  return personalise + yours
+}
+
+// Choose a picture, Describe it and Make it, Back to the default, and what is left today - the same
+// for a card and a banner. The file input is inside the label, so pressing the button opens the
+// picker; image/* is what makes a phone offer its camera and its photo library both.
+function pictureControlsHtml(slot) {
+  const make = brand.canGenerate
+    ? `<form class="fire-form" data-make="${slot}">
+        <label for="describe-${slot}">Describe it</label>
+        <textarea id="describe-${slot}" rows="2" maxlength="400"
+          placeholder="${pictureKind(slot) === 'portrait' ? 'e.g. a cheerful fox in a tweed waistcoat, holding a lantern' : 'e.g. a quiet harbour at dusk, the lamps coming on'}"></textarea>
+        <button class="fire" type="submit">Make it</button>
+      </form>`
+    : `<p class="small muted">${escapeHtml(brand.why || 'Making pictures from words is off on this board.')}</p>`
+  return `<div class="picture-controls">
+      <div class="fires">
+        <label class="fire">Choose a picture<input class="visually-hidden" type="file" accept="image/*" data-upload="${slot}" /></label>
+        <button class="fire" type="button" data-reset="${slot}">Back to the default</button>
+      </div>
+      ${make}
+      <p class="small muted allowance">${allowanceText()}</p>
+      <span class="fire-note"></span>
+    </div>`
+}
+
+// A banner's own controls, straight under it and shut until its Personalise button is pressed.
+// Nothing in here may name an agent: on Team it is drawn above every card.
+function bannerPersonaliseHtml(slot) {
+  if (!brand) return ''
+  return `<div class="panel banner-personalise" id="personalise-${slot}" hidden>
+    <p class="eyebrow">${slot === 'today' ? 'The Today picture' : 'The Team picture'}</p>
+    ${pictureControlsHtml(slot)}
+  </div>`
+}
+
+// A card's Personalise, in its drawer - never in the summary, where a tap on a field would open and
+// shut the card. An agent whose slug the store would refuse gets none; there is nothing it could save.
+function personaliseHtml(agent) {
+  if (!brand || !isArtSlug(agent.slug)) return ''
+  const slug = escapeHtml(agent.slug)
+  return `<div class="personalise">
+      <p class="eyebrow">Personalise</p>
+      <form class="fire-form" data-change="name" data-slug="${slug}">
+        <label for="name-${slug}">Name on the card</label>
+        <div class="row">
+          <input id="name-${slug}" class="brand-field" type="text" maxlength="40" autocomplete="off" value="${escapeHtml(displayName(agent.slug))}" placeholder="${slug}" />
+          <button class="fire" type="submit">Save</button>
+        </div>
+        <span class="small muted">Jobs and task cards still call this agent <b>${slug}</b>. Leave the name empty to show that again.</span>
+        <span class="fire-note"></span>
+      </form>
+      ${pictureControlsHtml(`agent-${agent.slug}`)}
+    </div>`
+}
+
+// Make it yours. Off, the one sentence saying how to switch it on. On, the assistant's name and the
+// art style every picture made from words follows. It is drawn above every card, so nothing in it
+// may name an agent.
+function brandPanelHtml() {
+  if (!brand) return `<div class="panel brand-panel" id="brand-panel"><p class="small">${SWITCH_ON}</p></div>`
+  return `<div class="panel brand-panel" id="brand-panel">
+    <p class="eyebrow">Make it yours</p>
+    <p class="small muted">Rename an agent or change its picture from its own card below. Each banner has a Personalise button for its picture.</p>
+    <form class="fire-form" data-change="assistant">
+      <label for="brand-assistant">Your assistant's name</label>
+      <div class="row">
+        <input id="brand-assistant" class="brand-field" type="text" maxlength="40" autocomplete="off" value="${escapeHtml(brand.assistantName)}" placeholder="No name yet" />
+        <button class="fire" type="submit">Save</button>
+      </div>
+      <span class="fire-note"></span>
+    </form>
+    <form class="fire-form" data-change="style">
+      <label for="brand-style">The art style new pictures are made in</label>
+      <textarea id="brand-style" rows="5" maxlength="600">${escapeHtml(brand.artStyle || brand.defaultArtStyle)}</textarea>
+      <span class="small muted" data-style-says>${styleSaysHtml()}</span>
+      <div class="fires">
+        <button class="fire" type="submit">Save the style</button>
+        <button class="fire" type="button" data-default-style="1">Back to the default</button>
+      </div>
+      <span class="fire-note"></span>
+    </form>
+    <p class="small muted allowance">${allowanceText()}</p>
+  </div>`
+}
+
+// Whose style is in the box: the default, or the owner's own - with the default shown beside it, so
+// going back is never a guess.
+const styleSaysHtml = () => (brand.artStyle
+  ? `Your own style. The default is: ${escapeHtml(brand.defaultArtStyle)}`
+  : 'This is the default style. Change it, and every picture made from words after that follows it.')
+
+// Make it yours, opened or put away under the Team banner. Put in and taken out on its own, so
+// nothing else on the screen is drawn again - Add agent half-typed stays half-typed.
+function toggleBrandPanel(button) {
+  brandPanelOpen = !brandPanelOpen
+  button.setAttribute('aria-expanded', String(brandPanelOpen))
+  const team = el('team')
+  team.querySelector('#brand-panel')?.remove()
+  if (brandPanelOpen) team.querySelector('.team-banner')?.insertAdjacentHTML('afterend', brandPanelHtml())
+}
+
+// A banner's picture controls, opened or put away.
+function togglePersonalise(button) {
+  const controls = el(`personalise-${button.dataset.personalise}`)
+  if (!controls) return
+  controls.hidden = !controls.hidden
+  button.setAttribute('aria-expanded', String(!controls.hidden))
+}
+
+// --- writing to the picture store ---------------------------------------------------------------
+
+// Every write carries the view key, the edit key once there is one, and exactly the type the
+// server's write gate asks for - it refuses anything else.
+function writeHeaders(type) {
+  const headers = { 'Content-Type': type }
+  const view = viewKey()
+  if (view) headers['x-view-key'] = view
+  const edit = editKey()
+  if (edit) headers['x-edit-key'] = edit
+  return headers
+}
+
+async function answerOf(response) {
+  try {
+    const answer = await response.json()
+    return isRecord(answer) ? answer : {}
+  } catch (error) {
+    return {}
+  }
+}
+
+/* One write. A 401 that names the edit key asks for it once, keeps it, and sends the same change
+   again; any other refusal is thrown as the server's own sentence, which says what to do. Returns
+   the response when the store took the change. */
+async function storeWrite(path, body, type) {
+  const send = async () => {
+    try {
+      return await fetch(path, { method: 'POST', headers: writeHeaders(type), body })
+    } catch (error) {
+      throw new Error('Could not reach the board, so nothing was changed.')
+    }
+  }
+  let response = await send()
+  if (response.ok) return response
+  let refusal = await answerOf(response)
+  if (response.status === 401 && refusal.needs === 'edit-key') {
+    const entered = window.prompt?.(EDIT_KEY_ASK)
+    if (typeof entered !== 'string' || !entered.trim()) throw new Error('Nothing was changed: this board needs its edit key for that.')
+    editKeyHeld = entered.trim()
+    writeStore(EDIT_KEY_STORE, editKeyHeld)
+    response = await send()
+    if (response.ok) return response
+    refusal = await answerOf(response)
+    // A key the store refused is not kept, so the next change asks again instead of failing the
+    // same way every time.
+    if (response.status === 401 && refusal.needs === 'edit-key') {
+      editKeyHeld = ''
+      writeStore(EDIT_KEY_STORE, null)
+    }
+  }
+  throw new Error(typeof refusal.error === 'string' && refusal.error ? refusal.error : `That did not go through (${response.status}), so nothing was changed.`)
+}
+
+// The board's new names and pictures, from /api/brand's answer to a change. A picture that went or
+// moved is put right in its place; one that moved on another device is fetched.
+function takeBrand(answer) {
+  if (!brand || !parseBrand(answer)) return
+  const before = { ...brand.pictures }
+  useBrand(answer)
+  const moved = [...new Set([...Object.keys(before), ...Object.keys(brand.pictures)])]
+    .filter((slot) => before[slot]?.v !== storePicture(slot)?.v)
+  for (const slot of moved) paintArt(slot)
+  loadArt(moved)
+  showAllowance()
+}
+
+function takeLeft(left) {
+  if (!brand || !isRecord(left)) return
+  brand.left = { writes: allowanceCount(left.writes), generated: allowanceCount(left.generated) }
+  showAllowance()
+}
+
+// A shrunk picture into the store, then shown from the copy in hand.
+async function sendPicture(slot, picture) {
+  const response = await storeWrite(`/api/upload?slot=${encodeURIComponent(slot)}`, picture, 'application/octet-stream')
+  const answer = await answerOf(response)
+  if (!isArtPicture(answer.picture)) throw new Error('The store took the picture but did not say which it is, so reload the board to see it.')
+  takeLeft(answer.left)
+  adoptPicture(slot, answer.picture, picture)
+}
+
+// --- what the controls do -----------------------------------------------------------------------
+
+function tell(note, words, tone = '') {
+  if (!note) return
+  note.className = tone ? `fire-note ${tone}` : 'fire-note'
+  note.textContent = words
+}
+
+// One change from a control: everything in its box is off while it is out, the box's note says what
+// is happening and then what happened, and a refusal is shown as the sentence it came with.
+async function personaliseDo(control, working, work) {
+  const box = control.closest?.('form[data-change]') ?? control.closest?.('.picture-controls') ?? null
+  const note = box?.querySelector?.('.fire-note') ?? null
+  const parts = [...(box?.querySelectorAll?.('button, input, textarea') ?? [])]
+  for (const part of parts) part.disabled = true
+  tell(note, working)
+  try {
+    tell(note, await work((words) => tell(note, words)), 'ok')
+  } catch (error) {
+    tell(note, error?.message || 'That did not work, so nothing was changed.', 'bad')
+  } finally {
+    for (const part of parts) part.disabled = false
+  }
+}
+
+async function choosePicture(input) {
+  const slot = input.dataset.upload
+  const file = input.files?.[0]
+  // Emptied straight away, so choosing the same photo again is still a choice.
+  input.value = ''
+  if (!brand || !isArtSlot(slot) || !file) return
+  await personaliseDo(input, 'Making it small enough to send…', async (say) => {
+    const picture = await shrinkPicture(file, pictureKind(slot))
+    say('Sending…')
+    await sendPicture(slot, picture)
+    return 'Done. This is the picture now.'
+  })
+}
+
+async function makePicture(form) {
+  const slot = form.dataset.make
+  if (!brand || !isArtSlot(slot)) return
+  const field = form.querySelector('textarea')
+  const description = String(field?.value ?? '').trim()
+  await personaliseDo(form, 'Making the picture. This can take up to a minute…', async (say) => {
+    if (description.length < 3) throw new Error('Describe the picture in a few words first.')
+    const response = await storeWrite('/api/generate', JSON.stringify({ slot, description }), 'application/json')
+    // Spent the moment OpenAI was asked, whatever happens next.
+    takeLeft({ ...brand.left, generated: brand.left.generated - 1 })
+    const made = await response.blob()
+    if (!made || !Object.hasOwn(ART_TYPES, made.type)) throw new Error('What came back was not a picture, so nothing was changed. Try again.')
+    say('Making it small enough to send…')
+    const picture = await shrinkPicture(made, pictureKind(slot))
+    say('Sending…')
+    await sendPicture(slot, picture)
+    if (field) field.value = ''
+    return 'Done. This is the picture now.'
+  })
+}
+
+async function resetPicture(button) {
+  const slot = button.dataset.reset
+  if (!brand || !isArtSlot(slot)) return
+  await personaliseDo(button, 'Putting the default back…', async () => {
+    // Nothing of the owner's to take away, so no write is spent on it.
+    if (!storePicture(slot)) return 'This already shows the default picture.'
+    const response = await storeWrite('/api/brand', JSON.stringify({ change: 'reset-picture', slot }), 'application/json')
+    takeBrand(await answerOf(response))
+    return 'Done. The default picture is back.'
+  })
+}
+
+// A card's name on the card, put right in place: the name over the slug, or the slug alone again.
+function showDisplayName(form, slug) {
+  const card = form.closest?.('.agent-card')
+  if (!card) return
+  const name = displayName(slug)
+  let shown = card.querySelector('.display-name')
+  if (name && !shown) {
+    card.querySelector('.agent-body')?.insertAdjacentHTML('afterbegin', '<span class="display-name"></span>')
+    shown = card.querySelector('.display-name')
+  }
+  if (shown) {
+    if (name) shown.textContent = name
+    else shown.remove()
+  }
+  card.classList.toggle('named', Boolean(name))
+}
+
+const BRAND_CHANGES = ['name', 'assistant', 'style']
+
+// A name, the assistant's name or the art style. An empty value is "back to the default".
+async function saveBrand(form, value) {
+  const change = form?.dataset?.change
+  if (!brand || !BRAND_CHANGES.includes(change)) return
+  const field = form.querySelector('input, textarea')
+  const typed = String(value ?? field?.value ?? '').trim()
+  const slug = form.dataset.slug
+  await personaliseDo(form, 'Saving…', async () => {
+    const body = change === 'name' ? { change, slug, value: typed } : { change, value: typed }
+    const response = await storeWrite('/api/brand', JSON.stringify(body), 'application/json')
+    takeBrand(await answerOf(response))
+    if (change === 'name') showDisplayName(form, slug)
+    if (field) {
+      field.value = change === 'name' ? displayName(slug)
+        : change === 'assistant' ? brand.assistantName
+        : brand.artStyle || brand.defaultArtStyle
+    }
+    if (change === 'style') {
+      const says = form.querySelector('[data-style-says]')
+      if (says) says.innerHTML = styleSaysHtml()
+    }
+    return typed ? 'Saved.' : 'Back to the default.'
+  })
+}
+
+// Delegated, because the screens are drawn again on every reading of the repo and a listener on a
+// node that has since been replaced is a button that does nothing.
+document.addEventListener('click', (event) => {
+  const target = event.target
+  const yours = target.closest?.('#brand-open')
+  if (yours) {
+    toggleBrandPanel(yours)
+    return
+  }
+  const banner = target.closest?.('button[data-personalise]')
+  if (banner) {
+    togglePersonalise(banner)
+    return
+  }
+  const reset = target.closest?.('button[data-reset]')
+  if (reset) {
+    if (!reset.disabled) resetPicture(reset)
+    return
+  }
+  const plain = target.closest?.('button[data-default-style]')
+  if (plain && !plain.disabled) saveBrand(plain.closest('form[data-change]'), '')
+})
+document.addEventListener('submit', (event) => {
+  const form = event.target
+  if (form?.dataset?.change) {
+    event.preventDefault()
+    saveBrand(form)
+  } else if (form?.dataset?.make) {
+    event.preventDefault()
+    makePicture(form)
+  }
+})
+document.addEventListener('change', (event) => {
+  if (event.target?.dataset?.upload) choosePicture(event.target)
+})
 
 /* ---------- shell ---------- */
 
