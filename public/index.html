@@ -354,19 +354,60 @@
   h3.group { margin: 1.1rem 0 .1rem; font-size: .95rem; }
   .group-note { margin: 0 0 .45rem; }
 
-  /* Team */
+  /* A row in a list of skills. The Team screen used this too until its agents became cards. */
   .agent { padding: .85rem .9rem; border-bottom: 1px solid var(--line); }
   .agent:last-child { border-bottom: 0; }
-  .agent p.desc { margin: .3rem 0 .45rem; color: var(--muted); font-size: .8125rem; }
-  details.agent > summary { list-style: none; cursor: pointer; }
-  details.agent > summary::-webkit-details-marker { display: none; }
+
+  /* Team: one card per agent, the portrait on top and its state on a pill over the picture.
+     auto-fill with a 15rem floor is one column on a phone and four on a laptop with no query of
+     its own. align-items: start because a grid row stretches to its tallest item - without it,
+     opening one card to read its runs would pull every card beside it down to the same length. */
+  .team-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .9rem;
+    align-items: start; margin-top: .9rem;
+  }
+  .agent-card {
+    overflow: hidden; border-radius: 16px; border: 1px solid var(--line);
+    background: var(--panel); box-shadow: var(--shadow);
+  }
+  .agent-card > summary { display: block; list-style: none; cursor: pointer; }
+  .agent-card > summary::-webkit-details-marker { display: none; }
+  .agent-card > summary:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
+  /* The agent's initial on its own palette colour sits UNDER every portrait, not only where there
+     is none: it is what shows while a lazy picture is still on its way, and what is left when one
+     fails and the script takes it away. */
+  .portrait { position: relative; display: block; aspect-ratio: 4 / 3; overflow: hidden; background: var(--panel-2); }
+  .portrait-tile {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: 2.6rem; font-weight: 600; letter-spacing: -.04em; color: var(--ink);
+    background: radial-gradient(80% 80% at 50% 35%, color-mix(in srgb, var(--agent) 45%, transparent), transparent 70%), var(--panel-2);
+  }
+  .portrait-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 30%; }
+  /* The pill is a slice of the card's own surface, so the state keeps the colour it is measured
+     against in both themes rather than a green or amber laid straight over a picture. */
+  .status-pill {
+    position: absolute; top: .6rem; left: .6rem; display: inline-flex; align-items: center; gap: .4rem;
+    padding: .22rem .6rem; border-radius: 999px;
+    background: color-mix(in srgb, var(--panel) 90%, transparent); backdrop-filter: blur(6px);
+  }
+  .agent-body { display: block; padding: .8rem .95rem .95rem; }
+  .agent-card .title { text-transform: capitalize; overflow-wrap: anywhere; }
+  .agent-card p.desc { margin: .35rem 0 .5rem; color: var(--muted); font-size: .8125rem; }
   /* The card opens to show what this agent actually did. The marker above is hidden, and a
      `cursor: pointer` is invisible on the phone this board is built to be read on - so on the
      device that matters there was nothing at all saying a tap did anything. This is that sign. */
-  .agent .runcount { display: block; margin-top: .35rem; color: var(--muted); font-size: .75rem; }
-  .agent .chev { display: inline-block; margin-left: .35rem; transition: transform .15s ease; }
-  details.agent[open] .chev { transform: rotate(90deg); }
-  .agent-runs { margin-top: .6rem; border-top: 1px solid var(--line); }
+  .agent-card .runcount { display: block; margin-top: .35rem; color: var(--muted); font-size: .75rem; }
+  .agent-card .chev { display: inline-block; margin-left: .35rem; transition: transform .15s ease; }
+  .agent-card[open] .chev { transform: rotate(90deg); }
+  .agent-runs { border-top: 1px solid var(--line); }
+  /* The last tile of the grid, dashed like the mock-up's: an agent that is not here yet. */
+  .team-grid > .add-panel { margin-bottom: 0; border-style: dashed; background: transparent; }
+  .team-grid > .add-panel #agent-open {
+    width: 100%; min-height: 5.5rem; justify-content: center;
+    background: transparent; border-color: transparent; color: var(--muted);
+  }
+  .team-grid > .add-panel:hover { border-color: var(--accent); }
+  .team-grid > .add-panel #agent-open:hover { color: var(--ink); }
 
   /* Memory */
   input[type=search] {
@@ -729,11 +770,16 @@
   }
   /* An h2 for the outline, so a screen reader can jump to it - drawn as the biggest words on the
      board rather than as the small capitals every other h2 here is. */
-  .banner .greeting {
+  .banner .greeting, .banner .headline {
     margin: .35rem 0 0; font-size: clamp(1.6rem, 5.2vw, 2.6rem); font-weight: 600; line-height: 1.08;
     letter-spacing: -.04em; text-transform: none; color: var(--on-art);
   }
-  .greeting .soft { color: color-mix(in srgb, var(--on-art) 60%, transparent); }
+  .greeting .soft, .headline .soft { color: color-mix(in srgb, var(--on-art) 60%, transparent); }
+  /* Team's picture is the workshop: its desks sit higher in the frame than the harbour's hull. */
+  .team-banner img { object-position: 50% 45%; }
+  /* "One desk each." is a phrase. On a phone it moves to its own line whole rather than leaving
+     "each." alone under it. */
+  .headline .soft { white-space: nowrap; }
   .banner-strap { margin: .45rem 0 0; font-size: .8125rem; color: color-mix(in srgb, var(--on-art) 82%, transparent); }
   .score {
     display: inline-flex; align-items: center; gap: .6rem; padding: .4rem .9rem .4rem .4rem;
@@ -805,7 +851,7 @@
     .banner-text { padding: 1.6rem 1.9rem; }
     /* Beside the setup pill a laptop has about 830px for the greeting; at 2.6rem the last word of
        "Here is where things stand." fell onto a line of its own. */
-    .banner .greeting { font-size: clamp(1.6rem, 2.5vw, 2.25rem); }
+    .banner .greeting, .banner .headline { font-size: clamp(1.6rem, 2.5vw, 2.25rem); }
     .kpis { gap: 1rem; margin: 1.1rem 0 1.25rem; }
   }
 </style>
@@ -1183,9 +1229,10 @@ function addTaskHtml() {
 // agent are described exactly the same way: one sentence. What differs is the word on the button,
 // the example, and the action the sentence is posted under.
 //
-// It sits at the TOP of its screen and renders in the empty state too. Somebody with no skills is
-// the person most likely to want one, and both empty states replace their whole innerHTML — a
-// button appended after the list would simply not exist on the screen that needs it most.
+// It renders in the empty state too, at the top. Somebody with no skills is the person most likely
+// to want one, and both empty states replace their whole innerHTML — a button appended after the
+// list would simply not exist on the screen that needs it most. With agents to show, Team draws it
+// as the last tile of its grid instead; Skills keeps it at the top.
 //
 // The copy carries two facts this page cannot show happening. It lands in about a minute, same as
 // every other dispatch here. And the file is written from a guess: nobody is in front of the
@@ -1741,6 +1788,66 @@ function renderToday() {
 
 /* ---------- Team ---------- */
 
+/* The eight agents the template ships, which are the eight with a portrait in public/art. Anybody
+   else on the team is the owner's own agent, and gets its initial on its own palette colour. The
+   address of a picture is only ever built from a name in this list: a slug is a file name from the
+   repo, and a src made from it would ask the server for whatever that file name says. */
+const PORTRAITS = new Set(['content', 'customer-service', 'editor', 'email', 'orchestrator', 'research', 'sales', 'security'])
+
+// The initial is always drawn, and the picture over it. It is what shows while a lazy picture is on
+// its way, and what is left if one fails. Array.from so a slug starting with an emoji or an
+// accented letter gives a whole character rather than half of one.
+function portraitHtml(agent) {
+  const initial = Array.from(String(agent.slug ?? ''))[0] ?? '?'
+  const picture = PORTRAITS.has(agent.slug)
+    ? `<img class="portrait-img" src="/art/agent-${agent.slug}.webp" alt="" width="480" height="480" loading="lazy" decoding="async" />`
+    : ''
+  return `<div class="portrait" style="--agent:${agentColor(agent.slug) ?? AGENT_PALETTE[0].hex}">
+      <span class="portrait-tile" aria-hidden="true">${escapeHtml(initial.toUpperCase())}</span>${picture}
+      <span class="status-pill"><span class="dot"></span><span class="state">${escapeHtml(STATE_LABEL[agent.state] ?? agent.state)}</span></span>
+    </div>`
+}
+
+// A picture that fails - renamed, or lost to a bad connection - is taken away, and the initial under
+// it shows instead of a broken-image box. On the document in the capture phase, because an image's
+// error event does not bubble, and the cards are redrawn on every reading of the repo.
+function dropBrokenPortrait(event) {
+  const image = event.target
+  if (image?.classList?.contains('portrait-img')) image.remove()
+}
+document.addEventListener('error', dropBrokenPortrait, true)
+
+const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve']
+
+// The workshop, with how many agents there are and how many are in each state. A state nobody is in
+// is left out rather than printed as a 0, and no agent is named - this is the team, the cards below
+// are the agents.
+function teamBannerHtml(agents) {
+  const count = agents.length
+  const headline = count === 1
+    ? 'One agent. <span class="soft">One desk.</span>'
+    : `${NUMBER_WORDS[count] ?? count} agents. <span class="soft">One desk each.</span>`
+  const states = [
+    ['working', () => 'working'], ['quiet', () => 'gone quiet'],
+    ['attention', (number) => (number === 1 ? 'needs a look' : 'need a look')],
+    ['never-run', () => 'never run'], ['not-in-use', () => 'switched off']
+  ]
+  const counts = states
+    .map(([state, words]) => [agents.filter((agent) => agent.state === state).length, words])
+    .filter(([number]) => number)
+    .map(([number, words]) => `${number} ${words(number)}`)
+  return `<section class="banner team-banner">
+    <img src="/art/team-workshop.webp" alt="" width="1600" height="686" loading="lazy" decoding="async" />
+    <div class="banner-text">
+      <div class="banner-words">
+        <p class="eyebrow">Your team</p>
+        <h2 class="headline">${headline}</h2>
+        ${counts.length ? `<p class="banner-strap">${counts.join(' &middot; ')}</p>` : ''}
+      </div>
+    </div>
+  </section>`
+}
+
 function renderTeam() {
   if (!data.agents.length) {
     // "asks about your business" was the only line on this board that assumed the reader owns the
@@ -1762,15 +1869,17 @@ function renderTeam() {
         <span class="small muted">${escapeHtml(ago(run.started_at))}${run.session_url ? ` &middot; <a class="watch" href="${escapeHtml(run.session_url)}" rel="noreferrer noopener">watch</a>` : ''}</span>
       </div></div>`
     ).join('')
-    return `<details class="agent agent-accent ${agent.state}"${accentStyle(agent.slug)}>
+    // The portrait and the words are both inside the summary, so a tap anywhere on the card opens it.
+    return `<details class="agent-card agent-accent ${agent.state}"${accentStyle(agent.slug)}>
       <summary>
+        ${portraitHtml(agent)}
+        <div class="agent-body">
         <div class="row between">
-          <span class="row"><span class="dot"></span><span class="swatch" style="background:${agentColor(agent.slug)}"></span><span class="title">${escapeHtml(agent.slug)}</span></span>
-          <span class="state">${escapeHtml(STATE_LABEL[agent.state] ?? agent.state)}</span>
+          <span class="row"><span class="swatch" style="background:${agentColor(agent.slug)}"></span><span class="title">${escapeHtml(agent.slug)}</span></span>
+          <span class="chip">${escapeHtml(agent.model)}</span>
         </div>
         <p class="desc">${escapeHtml(agent.description)}</p>
         <div class="row">
-          <span class="chip">${escapeHtml(agent.model)}</span>
           <span class="chip">${agent.runsThisWeek} this week</span>
           <span class="small muted">last run ${escapeHtml(ago(agent.lastRun))}</span>
         </div>
@@ -1806,11 +1915,14 @@ function renderTeam() {
               // business making another one worse.
               '<span class="chev" aria-hidden="true">&rsaquo;</span>'
         }</span>
+        </div>
       </summary>
       <div class="agent-runs">${runRows || '<div class="empty">No runs logged yet.</div>'}</div>
     </details>`
   }).join('')
-  el('team').innerHTML = `${createFormHtml('agent')}<div class="panel">${cards}</div>`
+  // The add form is the last tile of the grid, as in the mock-up: an agent that is not here yet.
+  // With no agents it stays at the top of the screen, above the sentence saying how to get some.
+  el('team').innerHTML = `${teamBannerHtml(data.agents)}<div class="team-grid">${cards}${createFormHtml('agent')}</div>`
   bindCreateForm('agent', el('team'))
 }
 

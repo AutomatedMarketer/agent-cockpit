@@ -1,8 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { shapeHero } from '../api/state.js'
+import { AGENT_PALETTE, agentColorIndex } from '../api/lib.js'
 import { cssRules } from './helpers/css-rules.mjs'
 
 /* Every other test in this repo checks the API, or greps the page source for a string. None of
@@ -47,11 +48,16 @@ function render(payload, options = {}) {
     return nodes.get(id)
   }
 
+  // The page's own document-wide listeners, RECORDED like an element's, with the options they were
+  // added with: an image's error event does not bubble, so whether a listener is in the capture
+  // phase is the difference between catching a broken portrait and never hearing of it.
+  const documentListeners = []
+  nodes.documentListeners = documentListeners
   const document = {
     getElementById: (id) => node(id),
     querySelectorAll: () => [],
     querySelector: () => null,
-    addEventListener() {},
+    addEventListener(type, handler, options) { documentListeners.push({ type, handler, options }) },
     createElement: () => node('scratch'),
     body: node('body'),
     documentElement: node('html')
@@ -950,8 +956,9 @@ test('an agent that has never run says so instead of inviting a tap into nothing
   assert.match(nodes, /Nothing logged yet/, 'a never-run agent said nothing about being empty')
   // ...and it must not carry the arrow either, or it is still inviting a tap into an empty drawer.
   // Slicing between the two agent names isolates the first card. It works because a slug's first
-  // appearance in this markup is its own <span class="title"> - the class list and accentStyle()
-  // emit only a hex colour, never the slug - so there is nothing earlier to match on.
+  // appearance in this markup is inside its own card - its portrait's file name, or its <span
+  // class="title"> when it has no portrait. The class list and accentStyle() emit only a hex colour,
+  // and the banner above the cards names no agent, so there is nothing earlier to match on.
   const neverRunCard = nodes.slice(nodes.indexOf('research'), nodes.indexOf('email'))
   assert.ok(!neverRunCard.includes('chev'), 'an agent with no runs still invited a tap')
   assert.match(nodes, /1 run logged/, 'a single run was described as "1 runs"')
@@ -3053,4 +3060,130 @@ test('only the Today banner picture loads at once, and the head asks for it earl
 
   const head = html.slice(0, html.indexOf('</head>'))
   assert.match(head, /<link rel="preload" as="image" href="\/art\/today-harbour\.webp"/, 'the banner picture waits for the script to ask for it')
+})
+
+/* ---------- Team: a portrait for each agent, under the workshop ---------------------------------
+   v2's Team is a grid of cards, each with the agent's portrait on top and its state on a pill over
+   the picture, under a banner of the workshop. Only the eight template agents have a picture. Any
+   other slug is the owner's own agent, and it gets its initial on its own palette colour - never a
+   guessed file name, because a slug is repo data and a guessed address is a request for whatever
+   that data says. */
+
+const teamCards = (drawn) => Object.fromEntries(
+  [...drawn.matchAll(/<details class="agent-card[\s\S]*?<\/details>/g)]
+    .map((found) => [/<span class="title">([^<]*)</.exec(found[0])?.[1], found[0]]))
+const teamBannerOf = (drawn) =>
+  /<section class="banner team-banner"[\s\S]*?<\/section>/.exec(drawn)?.[0] ?? assert.fail('Team has no banner')
+const SHIPPED_PORTRAITS = readdirSync(fileURLToPath(new URL('../public/art/', import.meta.url)))
+  .map((file) => /^agent-(.+)\.webp$/.exec(file)?.[1]).filter(Boolean).sort()
+
+test('the agents with a portrait are exactly the agent pictures that ship', () => {
+  // A name in the list with no file behind it is a broken image on every repo that has that agent;
+  // a file with no name in the list is a picture nobody ever sees.
+  assert.equal(SHIPPED_PORTRAITS.length, 8, 'the art folder no longer holds the eight template portraits')
+  const { PORTRAITS } = render(base, { expose: ['PORTRAITS'] }).exposed
+  assert.deepEqual([...PORTRAITS].sort(), SHIPPED_PORTRAITS)
+})
+
+test('an agent with a portrait gets it, lazily, and any other agent gets its initial on its own colour', () => {
+  const drawn = render({ ...base, agents: [agent({ slug: 'research' }), agent({ slug: 'bookkeeper' })] }).get('team').innerHTML
+  const cards = teamCards(drawn)
+
+  const pictured = cards.research ?? assert.fail('the research card is missing')
+  const image = /<img\b[^>]*>/.exec(pictured)?.[0] ?? assert.fail('a template agent got no portrait')
+  assert.match(image, /\bsrc="\/art\/agent-research\.webp"/)
+  // Eight portraits on a screen most visits never open. They wait until the screen is shown.
+  assert.match(image, /\bloading="lazy"/, 'the portraits load with Today, on a screen nobody has opened')
+  assert.match(image, /\bdecoding="async"/)
+  assert.match(image, /\bwidth="480"/)
+  assert.match(image, /\bheight="480"/, 'a portrait has no size, so the grid jumps as each one lands')
+  assert.match(image, /\balt=""/, 'the portrait is announced as a picture, before the name printed under it')
+
+  const own = cards.bookkeeper ?? assert.fail('the card for an agent with no portrait is missing')
+  assert.ok(!/<img\b/.test(own), 'an agent with no portrait was given a picture address anyway')
+  const hex = AGENT_PALETTE[agentColorIndex('bookkeeper')].hex
+  assert.match(own, new RegExp(`class="portrait" style="--agent:${hex}"`),
+    'the tile is not in the agent\'s own palette colour, the one its board cards and owner chips carry')
+  assert.match(own, /class="portrait-tile" aria-hidden="true">B</, 'the tile does not carry the agent\'s initial')
+})
+
+test('a slug from the repo never becomes a picture address', () => {
+  // Slugs are file names in somebody's repo. Only the eight fixed names may build a src; anything
+  // else - markup, a path, a near miss - gets a tile, and is escaped wherever it is printed.
+  const hostile = ['"><img src=x onerror=alert(1)>', '../../api/state', 'research.webp?x=', 'Research', 'research ']
+  const allowed = new Set([...SHIPPED_PORTRAITS.map((slug) => `/art/agent-${slug}.webp`), '/art/team-workshop.webp'])
+  for (const slug of hostile) {
+    const drawn = render({ ...base, agents: [agent({ slug })] }).get('team').innerHTML
+    const sources = [...drawn.matchAll(/\bsrc="([^"]*)"/g)].map((found) => found[1])
+    const strays = sources.filter((source) => !allowed.has(source))
+    assert.deepEqual(strays, [], `the slug ${JSON.stringify(slug)} reached a picture address`)
+    assert.ok(!drawn.includes('<img src=x'), 'a slug was drawn as markup')
+  }
+})
+
+test('a portrait that fails to load leaves the agent\'s initial in its place', () => {
+  const nodes = render({ ...base, agents: [agent({ slug: 'research' })] })
+  // The tile is drawn under the picture, so taking the picture away is all a failure has to do.
+  const card = teamCards(nodes.get('team').innerHTML).research ?? assert.fail('the research card is missing')
+  const tileAt = card.indexOf('class="portrait-tile" aria-hidden="true">R<')
+  assert.ok(tileAt >= 0, 'a portrait has no initial under it to fall back to')
+  assert.ok(tileAt < card.indexOf('<img'), 'the initial is drawn over the picture rather than under it')
+
+  // An image's error event does not bubble, so only a listener in the capture phase ever hears it.
+  const listeners = nodes.documentListeners.filter((entry) => entry.type === 'error')
+  const capturing = listeners.filter((entry) => entry.options === true || entry.options?.capture === true)
+  assert.equal(capturing.length, 1, 'nothing listens for a failed picture in the capture phase')
+  const imageOf = (name) => ({
+    removed: false,
+    classList: { contains: (token) => token === name },
+    remove() { this.removed = true }
+  })
+  const portrait = imageOf('portrait-img')
+  capturing[0].handler({ target: portrait })
+  assert.equal(portrait.removed, true, 'a failed portrait stays on the card as a broken picture')
+  const other = imageOf('banner-img')
+  capturing[0].handler({ target: other })
+  assert.equal(other.removed, false, 'a failure anywhere on the page removes pictures that are not portraits')
+})
+
+test('the Team banner counts the agents by state, skips the states nobody is in, and names no agent', () => {
+  const agents = [
+    agent({ slug: 'research', state: 'working' }), agent({ slug: 'email', state: 'working' }),
+    agent({ slug: 'editor', state: 'working' }), agent({ slug: 'sales', state: 'quiet' }),
+    agent({ slug: 'content', state: 'not-in-use' }), agent({ slug: 'security', state: 'not-in-use' })
+  ]
+  const drawn = render({ ...base, agents }).get('team').innerHTML
+  const banner = teamBannerOf(drawn)
+  assert.ok(drawn.indexOf(banner) < drawn.indexOf('<details'), 'the banner is not above the cards')
+  assert.match(textOf(banner), /Six agents\. One desk each\./)
+  assert.match(textOf(banner), /3 working · 1 gone quiet · 2 switched off/)
+  assert.ok(!/\b0\b/.test(textOf(banner)), `a state nobody is in was counted as a zero: ${textOf(banner)}`)
+  for (const { slug } of agents) assert.ok(!banner.includes(slug), `the banner names ${slug}`)
+  const picture = /<img\b[^>]*>/.exec(banner)?.[0] ?? assert.fail('the banner has no picture')
+  assert.match(picture, /src="\/art\/team-workshop\.webp"/)
+  assert.match(picture, /loading="lazy"/)
+
+  const one = teamBannerOf(render({ ...base, agents: [agent({ state: 'never-run' })] }).get('team').innerHTML)
+  assert.match(textOf(one), /One agent\. One desk\./, 'one agent was counted as a plural')
+  assert.match(textOf(one), /1 never run/)
+})
+
+test('the cards are one column on a phone and a grid on a laptop, and opening one leaves its row alone', () => {
+  const drawn = render({ ...base, agents: [agent({ slug: 'research' }), agent({ slug: 'email' })] }).get('team').innerHTML
+  const grid = drawn.indexOf('<div class="team-grid">')
+  assert.ok(grid >= 0, 'the cards are not in the grid')
+  assert.ok(grid < drawn.indexOf('<details class="agent-card'), 'a card is drawn outside the grid')
+  assert.ok(grid < drawn.indexOf('id="agent-open"'), 'the Add agent tile is not in the grid with the cards')
+
+  const declared = Object.assign({}, ...exactRules('.team-grid').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.equal(declared.display, 'grid')
+  const track = /^repeat\(auto-fill,\s*minmax\(([\d.]+)rem,\s*1fr\)\)$/.exec(declared['grid-template-columns'] ?? '')
+  assert.ok(track, `the grid does not fill the row with cards of a minimum width: ${declared['grid-template-columns']}`)
+  const gap = Number(/^([\d.]+)rem$/.exec(declared.gap ?? '')?.[1] ?? 0) * 16
+  const columns = (width) => Math.max(1, Math.floor((width + gap) / (Number(track[1]) * 16 + gap)))
+  // 390 wide less the page's 1rem either side; 1440 less the 15rem sidebar and 1.75rem either side.
+  assert.equal(columns(390 - 32), 1, 'a phone gets the cards side by side, each too narrow to read')
+  assert.ok(columns(1440 - 240 - 56) >= 3, 'a laptop gets a column of cards as tall as a phone\'s')
+  // A grid row stretches to its tallest item, so an opened card would pull every card beside it long.
+  assert.equal(declared['align-items'], 'start', 'opening one card stretches the cards beside it')
 })
