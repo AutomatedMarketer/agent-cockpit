@@ -20,7 +20,7 @@
 // - Every failure leaves here as one plain sentence. The SDK's own messages are for developers,
 //   and some of them could carry a credential.
 
-import { isValidSlug, parseSlot } from './lib.js'
+import { isValidSlug, parseSlot, readCapped } from './lib.js'
 
 const ROOT = 'agent-cockpit'
 export const SETTINGS_PATH = `${ROOT}/settings.json`
@@ -129,34 +129,21 @@ function picturePath(slot, version, type) {
   return `${ROOT}/art/${slot}/${version}.${extension}`
 }
 
-// Reads a response body up to a limit, and stops reading the moment it is passed - a body is
-// never buffered whole just to find out it was too big.
-async function readCapped(stream, limit) {
-  const reader = stream.getReader()
-  const chunks = []
-  let size = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    size += value.byteLength
-    if (size > limit) {
-      await reader.cancel().catch(() => {})
-      return null
-    }
-    chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength))
-  }
-  return Buffer.concat(chunks)
-}
-
 // --- failures as sentences -------------------------------------------------------------
 
 // Matched by the SDK's own classes where it has one. A public store has no class of its own, so
-// it is recognised by the word in the service's message - and that sentence is the one that
-// matters most, because Vercel asks Public or Private once and it cannot be changed afterwards.
+// it is recognised by its words - and that sentence matters most, because Vercel asks Public or
+// Private once and it cannot be changed afterwards. It also tells the owner to make a new store,
+// the wrong fix for anything else, so it is kept narrow: an error the SDK raised (a BlobError)
+// that says "public store" or "store is public". The service's exact wording for a private call
+// on a public store could not be checked against SDK 2.8.0 (no class or code for it), so this is
+// the narrowest match that still catches either way of putting it.
+const PUBLIC_STORE = /\bpublic store\b|\bstore is public\b/i
+
 export function storeFailure(error, sdk = {}) {
   const is = (name) => typeof sdk[name] === 'function' && error instanceof sdk[name]
   const text = error instanceof Error ? error.message : ''
-  if (/\bpublic\b/i.test(text)) {
+  if (is('BlobError') && PUBLIC_STORE.test(text)) {
     return {
       status: 503,
       error: 'This picture store is public and the board only uses private ones, so create a private one, connect it to this project and redeploy.'
@@ -264,8 +251,11 @@ export function dailyCaps(env = process.env) {
 
 export const usageDay = (date) => date.toISOString().slice(0, 10)
 
+// The day only moves forward. A request whose clock still says yesterday can reach the store
+// after another has started today's count; its "day" is then behind the file's, and it is held to
+// the file's count rather than handed a fresh one. (ISO dates compare as strings.)
 export function allowanceLeft(settings, caps, day) {
-  const used = settings.usage.day === day ? settings.usage : { writes: 0, generated: 0 }
+  const used = settings.usage.day >= day ? settings.usage : { writes: 0, generated: 0 }
   return {
     writes: Math.max(0, caps.writes - used.writes),
     generated: Math.max(0, caps.generated - used.generated)
@@ -275,7 +265,7 @@ export function allowanceLeft(settings, caps, day) {
 // Called inside a saveSettings change, so the count and the change land in the same write - or,
 // at the cap, the throw stops the write and nothing is saved at all.
 export function spendAllowance(settings, kind, caps, day) {
-  if (settings.usage.day !== day) settings.usage = { day, writes: 0, generated: 0 }
+  if (settings.usage.day < day) settings.usage = { day, writes: 0, generated: 0 }
   if (settings.usage[kind] >= caps[kind]) throw new PictureStoreError(429, CAP_SENTENCES[kind])
   settings.usage[kind] += 1
 }

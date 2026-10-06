@@ -173,6 +173,25 @@ export function sniffImage(data) {
   return null
 }
 
+// Reads a response body up to a limit, and stops reading the moment it is passed - a body is
+// never buffered whole just to find out it was too big.
+export async function readCapped(stream, limit) {
+  const reader = stream.getReader()
+  const chunks = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel().catch(() => {})
+      return null
+    }
+    chunks.push(Buffer.from(value.buffer, value.byteOffset, value.byteLength))
+  }
+  return Buffer.concat(chunks)
+}
+
 // How many pixels a picture says it is, from its header: { width, height }, or null when the
 // header does not say plainly. A picture is small as a file and can still be enormous once a
 // browser decodes it - a 10 KB webp may declare 16383 x 16383, about a gigabyte of pixels - and

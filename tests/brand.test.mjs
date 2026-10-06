@@ -343,6 +343,20 @@ test('the day the cap counts is the UTC day: it starts again at midnight UTC', a
   assert.equal(nextDay.body.left.writes, 0)
 })
 
+test('a change that started just before midnight cannot start the new day\'s count again', async () => {
+  // A request whose clock read 23:59:59 can reach the store after another request has already
+  // started the new day's count. Resetting the count to "its" day would hand the new day's
+  // allowance back: the day only ever moves forward.
+  const { post, store, fake } = board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: '2' }, now: () => new Date('2026-10-06T23:59:59Z') })
+  await store.saveSettings((draft) => { draft.usage = { day: '2026-10-07', writes: 2, generated: 0 } })
+  const late = await post({ change: 'assistant', value: 'Ada' })
+  assert.equal(late.statusCode, 429, 'a request from yesterday reset today\'s count')
+  assert.deepEqual((await readSettings(fake)).usage, { day: '2026-10-07', writes: 2, generated: 0 })
+  const shown = await call(makeHandler({ store, env: { ...STORE_ENV, WRITE_DAILY_CAP: '2' }, now: () => new Date('2026-10-06T23:59:59Z') }),
+    { method: 'GET', headers: asTheBoard() })
+  assert.equal(shown.body.left.writes, 0, 'yesterday\'s screen is told today\'s changes are all there')
+})
+
 /* ---------- the rest of the contract ---------- */
 
 test('only GET and POST are answered', async () => {

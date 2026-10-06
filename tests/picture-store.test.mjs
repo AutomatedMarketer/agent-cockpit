@@ -444,6 +444,25 @@ test('a public store is named as the problem, with what to do instead', () => {
   }
 })
 
+test('only a store that is public is called public, not every error with the word in it', () => {
+  // The public-store sentence tells the owner to make a new store, which cannot be undone and is
+  // the wrong fix for anything else. It used to fire for any message containing "public". The
+  // words the service uses for a public store could not be checked against SDK 2.8.0 (it has no
+  // class for it), so the match is the two phrases a public store would be described by, on an
+  // error the SDK itself raised.
+  const { sdk } = fakeBlob()
+  for (const failure of [
+    new TypeError('Cannot read properties of undefined (reading \'public\')'),
+    new Error('The public key did not match'),
+    new Error('This store is public'), // the right words, but not from the SDK
+    new sdk.BlobError('Invalid public token'),
+    new sdk.BlobError('Failed to fetch blob: 403 Forbidden (public)')
+  ]) {
+    const { error } = storeFailure(failure, sdk)
+    assert.doesNotMatch(error, /create a private one/i, `${failure.message} was taken for a public store`)
+  }
+})
+
 test('a credential inside an SDK error never reaches the sentence', () => {
   const { sdk } = fakeBlob()
   const secret = 'vercel_blob_rw_ThisMustNeverLeaveTheServer'

@@ -77,9 +77,10 @@ test('making a picture gets 60 seconds, and gives up on OpenAI before the platfo
   assert.ok(existsSync(fileURLToPath(new URL('api/generate.js', ROOT))), 'vercel.json configures a function that does not exist')
 
   const source = readFileSync(new URL('api/generate.js', ROOT), 'utf8')
-  const found = /const TIMEOUT_MS = ([\d_]+)/.exec(source)
-  assert.ok(found, 'api/generate.js no longer states its OpenAI timeout as TIMEOUT_MS')
-  assert.match(source, /AbortSignal\.timeout\(TIMEOUT_MS\)/, 'the stated timeout is not the one used')
+  // The budget is for the whole request; OpenAI gets what is left of it (tests/generate.test.mjs
+  // proves that by effect), so the budget is what must sit inside maxDuration.
+  const found = /const HANDLER_BUDGET_MS = ([\d_]+)/.exec(source)
+  assert.ok(found, 'api/generate.js no longer states its time budget as HANDLER_BUDGET_MS')
   const timeout = Number(found[1].replaceAll('_', ''))
   assert.ok(timeout < maxDuration * 1000, `a ${timeout} ms timeout never fires inside a ${maxDuration} s function`)
   assert.ok(timeout >= (maxDuration - 10) * 1000, 'the timeout gives OpenAI much less time than the function has')

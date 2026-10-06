@@ -90,6 +90,9 @@ all from the board itself, on a phone or a laptop, and it shows at once.
 | **The Today and Team banners** (the small **Personalise** button) | The banner picture: choose one, make one, or go back to the default |
 | **Make it yours** (in the Team banner) | Your assistant's name, and the art style every picture made from words follows. The default style is shown, with **Back to the default** |
 
+**Your assistant's name is kept, but nothing uses it yet.** It is saved now so the voice assistant
+can answer to it when that arrives; until then it changes nothing on the board.
+
 **Names never break anything.** A name changes what you *see*. Jobs, task cards and routines still
 find the agent by its slug (`research`, `content`), which stays on the card, smaller, under the name.
 
@@ -256,7 +259,7 @@ Locally:
 npm test
 ```
 
-844 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+848 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -280,6 +283,9 @@ used only when you connect a picture store.
 | The board looks empty but the repo is fine | Check the branch. `GITHUB_BRANCH` defaults to `main` |
 | **Make it yours** says personalising is off, after you made a store | You did not redeploy. A new deployment is the only one that sees the store |
 | "This picture store is public…" | The store was made **Public**, and that cannot be changed. Create a new **Private** store, connect it to this project, disconnect the public one, redeploy |
+| "The board's settings file in the picture store is damaged or too big…" | The file holding the names, the style and which pictures are in use cannot be read, so the board left it alone rather than write over it. To start again from the defaults: Vercel → **Storage** → your store → delete `agent-cockpit/settings.json`. The pictures stay in the store but are no longer shown; put them back from the board |
+| "This board keeps names for up to 64 agents…" (or pictures) | Clear a name you no longer use (save it empty), or put an unused agent's picture back to the default, then try again |
+| **Make it** is greyed out: "No changes are left today…" | A made picture is kept by an upload, which is a change, and today's are used up. It comes back at midnight UTC. Nothing was sent to OpenAI |
 | "…all the changes it allows today" or "…all the pictures from words it allows today" | The daily cap is reached, and it starts again at midnight UTC. Raising it is not the fix: the caps keep the picture store under [Vercel's free limit](#the-picture-stores-free-limit-and-why-the-caps-are-where-they-are), and going over that locks the store for 30 days |
 | "OpenAI would not make that picture…" | OpenAI's safety rules refused the description. Describe it differently. Nothing was stored |
 | **Make it** is missing, with a sentence about `OPENAI_API_KEY` | Set `OPENAI_API_KEY` in Vercel and redeploy. Choosing your own picture works without it |

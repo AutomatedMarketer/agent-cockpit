@@ -14,7 +14,16 @@
 // The key goes to OpenAI in one header and nowhere else. Nothing OpenAI sends back is passed on
 // as text - every failure is one of our own sentences - and nothing here writes to the logs.
 
-import { writeGate, readJsonBody, parseSlot, slotKind, cleanDescription, sniffImage, DEFAULT_ART_STYLE } from './lib.js'
+import {
+  writeGate,
+  readJsonBody,
+  parseSlot,
+  slotKind,
+  cleanDescription,
+  sniffImage,
+  readCapped,
+  DEFAULT_ART_STYLE
+} from './lib.js'
 import {
   pictureStore,
   NOT_CONNECTED,
@@ -28,12 +37,26 @@ import {
 
 const ENDPOINT = 'https://api.openai.com/v1/images/generations'
 const DEFAULT_MODEL = 'gpt-image-1-mini'
-// Under vercel.json's maxDuration of 60 s, so a slow answer ends as our sentence, not the
-// platform's timeout page.
-const TIMEOUT_MS = 55_000
+// The whole request - the store save, OpenAI, reading its answer - must end under vercel.json's
+// maxDuration of 60 s, so a slow answer ends as our sentence, not the platform's timeout page.
+// OpenAI gets whatever is left of this when it is called, not a fixed amount on top of the save.
+const HANDLER_BUDGET_MS = 55_000
 // Vercel caps a function's response at 4.5 MB.
 const MAX_PICTURE_BYTES = 4 * 1024 * 1024
 const MAX_BASE64_LENGTH = Math.ceil(MAX_PICTURE_BYTES / 3) * 4
+// OpenAI's answer is read no further than the largest picture it may carry plus room for the rest
+// of its JSON, so an answer that is too big, or never ends, is never held whole.
+const MAX_ANSWER_BYTES = MAX_BASE64_LENGTH + 64 * 1024
+const MAX_REFUSAL_BYTES = 64 * 1024
+
+// Reads an answer as JSON, no further than `limit`. Null when it is too big; throws when it is
+// not JSON, or when the time ran out while reading.
+async function cappedJson(upstream, limit) {
+  if (!upstream.body) return undefined
+  const text = await readCapped(upstream.body, limit)
+  return text === null ? null : JSON.parse(text.toString('utf8'))
+}
+const timedOut = (error) => error?.name === 'TimeoutError' || error?.name === 'AbortError'
 
 const NO_CHANGE_LEFT =
   'No changes are left today to keep a new picture with, so nothing was made and nothing was ' +
@@ -71,7 +94,7 @@ export function imagePrompt(style, description, kind) {
 async function refusalFor(upstream) {
   let detail = {}
   try {
-    detail = (await upstream.json())?.error ?? {}
+    detail = (await cappedJson(upstream, MAX_REFUSAL_BYTES))?.error ?? {}
   } catch {
     detail = {}
   }
@@ -88,9 +111,11 @@ async function refusalFor(upstream) {
 async function pictureFrom(upstream) {
   let encoded
   try {
-    encoded = (await upstream.json())?.data?.[0]?.b64_json
-  } catch {
-    return { status: 502, error: SAY.notPicture }
+    const answer = await cappedJson(upstream, MAX_ANSWER_BYTES)
+    if (answer === null) return { status: 502, error: SAY.tooBig }
+    encoded = answer?.data?.[0]?.b64_json
+  } catch (error) {
+    return timedOut(error) ? { status: 504, error: SAY.slow } : { status: 502, error: SAY.notPicture }
   }
   if (typeof encoded !== 'string' || !encoded) return { status: 502, error: SAY.notPicture }
   if (encoded.length > MAX_BASE64_LENGTH + 4) return { status: 502, error: SAY.tooBig }
@@ -105,6 +130,7 @@ async function pictureFrom(upstream) {
 // request (null when no store is connected).
 export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}) {
   return async function handler(request, response) {
+    const started = now().getTime()
     const environment = env ?? process.env
     if (String(request?.method ?? 'GET').toUpperCase() !== 'POST') {
       response.setHeader('Allow', 'POST')
@@ -161,6 +187,12 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
       return
     }
 
+    // The save above may have been slow; OpenAI gets only what is left of the budget.
+    const left = HANDLER_BUDGET_MS - (now().getTime() - started)
+    if (left <= 0) {
+      response.status(504).json({ error: SAY.slow })
+      return
+    }
     let upstream
     try {
       upstream = await fetch(ENDPOINT, {
@@ -175,11 +207,11 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
           output_compression: 80,
           n: 1
         }),
-        signal: AbortSignal.timeout(TIMEOUT_MS)
+        signal: AbortSignal.timeout(left)
       })
     } catch (error) {
       // The error's own message is not looked at: it can carry whatever the request carried.
-      const slow = error?.name === 'TimeoutError' || error?.name === 'AbortError'
+      const slow = timedOut(error)
       response.status(slow ? 504 : 502).json({ error: slow ? SAY.slow : SAY.failed })
       return
     }

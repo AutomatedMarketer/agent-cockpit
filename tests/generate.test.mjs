@@ -287,6 +287,43 @@ test('OpenAI taking too long is a sentence, not a hung request', async (t) => {
   assert.match(response.body.error, /too long/)
 })
 
+test('OpenAI gets only the time the request has left, so the whole request ends inside 60 seconds', { timeout: 5_000 }, async (t) => {
+  // vercel.json gives this function 60 s. A fixed 55 s for OpenAI, started after a slow store
+  // save, would run past that and end on the platform's timeout page instead of our sentence.
+  // Here the store "took" 54.95 s, so OpenAI gets the 50 ms that are left.
+  const start = Date.parse('2026-10-06T12:00:00Z')
+  let first = true
+  const now = () => {
+    const at = first ? start : start + 54_950
+    first = false
+    return new Date(at)
+  }
+  stubOpenAI(t, (url, options) => new Promise((resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(options.signal.reason))
+  }))
+  const response = await board({ now }).generate(PORTRAIT)
+  assert.equal(response.statusCode, 504)
+  assert.match(response.body.error, /too long/)
+})
+
+test('an answer from OpenAI is read only as far as the largest picture it may carry', async (t) => {
+  // An upstream answer read with .json() is buffered whole first. One that never ends, or ends
+  // at 50 MB, would hold the function's memory for nothing: reading stops just past the limit.
+  let pulled = 0
+  stubOpenAI(t, () => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode('{"data":[{"b64_json":"')) },
+    pull(controller) {
+      if (pulled >= 50 * 1024 * 1024) return controller.close()
+      pulled += 64 * 1024
+      controller.enqueue(new Uint8Array(64 * 1024).fill(0x41))
+    }
+  }), { status: 200 }))
+  const response = await board().generate(PORTRAIT)
+  assert.equal(response.statusCode, 502)
+  assert.match(response.body.error, /too big/)
+  assert.ok(pulled < 8 * 1024 * 1024, `${Math.round(pulled / 1024 / 1024)} MB of the answer was read`)
+})
+
 /* ---------- the key never leaves the server ---------- */
 
 test('the OpenAI key is never in any answer or any log, whatever OpenAI sends back', async (t) => {
