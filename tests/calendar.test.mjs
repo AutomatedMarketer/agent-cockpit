@@ -1,14 +1,14 @@
 // The week calendar on the front screen: which days it spans, and which pills earn a tick.
 //
-// weekDates, dateKey and ranOnDays live in api/lib.js and are mirrored verbatim inside
-// public/index.html's inline script (the page has no module loading) — the last test here
+// weekDates, dateKey, ranOnDays and activityByDay live in api/lib.js and are mirrored verbatim
+// inside public/index.html's inline script (the page has no module loading) — the last test here
 // is the contract that keeps the mirror honest.
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { weekDates, dateKey, ranOnDays } from '../api/lib.js'
+import { weekDates, dateKey, ranOnDays, activityByDay } from '../api/lib.js'
 
 const page = fileURLToPath(new URL('../public/index.html', import.meta.url))
 
@@ -86,6 +86,46 @@ test('no slug, no runs, and no list are all empty rather than errors', () => {
   assert.equal(ranOnDays([runOn('x', new Date())], undefined).size, 0)
 })
 
+/* ---------- activityByDay ---------- */
+
+// The two number cards on Today draw a fortnight from this. A day is the reader's day: a run at
+// 23:30 belongs to that evening, and one at 00:30 to the morning after midnight, wherever the
+// clock is. Keyed by UTC, one of the two would land on the wrong bar in every timezone but UTC.
+test('activity is counted over fourteen local days, oldest first, with distinct agents per day', () => {
+  const now = new Date(2026, 5, 14, 9, 0) // Sunday 14 June 2026, morning
+  const at = (day, hour, minute = 0) => new Date(2026, 5, day, hour, minute).toISOString()
+  const runs = [
+    { agent: 'research', started_at: at(14, 6, 30) },
+    { agent: 'research', started_at: at(14, 7) },
+    { agent: 'email', started_at: at(14, 8) },
+    { agent: 'research', started_at: at(10, 23, 30) },
+    { agent: 'email', started_at: at(1, 0, 30) },
+    { started_at: at(5, 12) }, // no agent: still a run, never an agent
+    { agent: 'research', started_at: at(0, 23, 30) }, // 31 May: before the window
+    { agent: 'research', started_at: 'not a date' }
+  ]
+  const days = activityByDay(runs, now)
+  assert.equal(days.length, 14)
+  assert.equal(days[0].date, '2026-06-01', 'the fortnight does not start thirteen days before today')
+  assert.equal(days[13].date, '2026-06-14', 'the last bar is not today')
+
+  const on = (date) => days.find((day) => day.date === date)
+  assert.deepEqual(on('2026-06-14'), { date: '2026-06-14', runs: 3, agents: 2 })
+  assert.deepEqual(on('2026-06-10'), { date: '2026-06-10', runs: 1, agents: 1 }, 'a run at 23:30 left its own evening')
+  assert.deepEqual(on('2026-06-11'), { date: '2026-06-11', runs: 0, agents: 0 })
+  assert.deepEqual(on('2026-06-01'), { date: '2026-06-01', runs: 1, agents: 1 }, 'a run at 00:30 fell out of its morning')
+  assert.deepEqual(on('2026-06-05'), { date: '2026-06-05', runs: 1, agents: 0 }, 'a run with no agent was dropped or given one')
+  assert.equal(days.reduce((sum, day) => sum + day.runs, 0), 6, 'a run outside the window, or unreadable, was counted')
+})
+
+test('activity spans any number of days, across a month boundary, and survives no list at all', () => {
+  const days = activityByDay([], new Date(2026, 6, 2, 12), 7)
+  assert.deepEqual(days.map((day) => day.date), [
+    '2026-06-26', '2026-06-27', '2026-06-28', '2026-06-29', '2026-06-30', '2026-07-01', '2026-07-02'
+  ])
+  assert.ok(activityByDay(undefined, new Date()).every((day) => day.runs === 0 && day.agents === 0))
+})
+
 /* ---------- the page ---------- */
 
 test('the calendar renders on the front screen, reading real runs', async () => {
@@ -137,4 +177,6 @@ test('the mirrored helpers in the page match api/lib.js exactly', async () => {
     .replace(/export const /g, 'const ')
   const fromPage = slice(html, 'function weekDates', 'function scheduleStripHtml')
   assert.equal(fromPage, fromLib, 'the page copy has drifted from api/lib.js')
+  // The Today sparklines count with this one, so it has to be inside the compared stretch.
+  assert.match(fromPage, /function activityByDay\(/, 'activityByDay is not in the mirrored stretch, so nothing holds the two copies together')
 })

@@ -16,6 +16,9 @@
 <link rel="manifest" href="/manifest.webmanifest" />
 <meta name="apple-mobile-web-app-title" content="Agent OS" />
 <meta name="mobile-web-app-capable" content="yes" />
+<!-- The picture at the top of Today. The screen is drawn by the script once the repo has been read,
+     so without this the browser would not ask for it until then. -->
+<link rel="preload" as="image" href="/art/today-harbour.webp" fetchpriority="high" />
 <style>
   /* Every colour on this page is one of these tokens, and a rule never writes a colour of its own.
      The board was dark-only with its colours typed into the rules, so a light theme was a hunt for
@@ -704,6 +707,107 @@
   .hero { text-align: center; padding: 1.6rem 1rem; }
   .hero-value { font-size: clamp(2.6rem, 9vw, 4.2rem); font-weight: 700; line-height: 1.05; }
   .hero-unit { font-size: 1rem; opacity: .85; margin-top: .2rem; }
+
+  /* Today's banner: the harbour, with the day, the greeting, the line about the team and the setup
+     ring laid over its lower edge. The words sit on a wash of --scrim so they read over the bright
+     water as well as the dark hull; the picture and its words are the same in both themes. */
+  .banner {
+    position: relative; overflow: hidden; display: flex; align-items: flex-end;
+    min-height: 13rem; border-radius: 18px; border: 1px solid var(--line);
+    background: var(--panel-2); box-shadow: var(--shadow);
+  }
+  .banner img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 62%; }
+  .banner::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 20%, var(--scrim)); }
+  .banner-text {
+    position: relative; z-index: 1; display: flex; flex-wrap: wrap; align-items: flex-end; gap: .9rem 1rem;
+    width: 100%; padding: 1.1rem; color: var(--on-art);
+  }
+  .banner-words { flex: 1 1 18rem; min-width: 0; }
+  .eyebrow {
+    margin: 0; font-size: .625rem; font-weight: 600; letter-spacing: .2em; text-transform: uppercase;
+    color: color-mix(in srgb, var(--on-art) 78%, transparent);
+  }
+  /* An h2 for the outline, so a screen reader can jump to it - drawn as the biggest words on the
+     board rather than as the small capitals every other h2 here is. */
+  .banner .greeting {
+    margin: .35rem 0 0; font-size: clamp(1.6rem, 5.2vw, 2.6rem); font-weight: 600; line-height: 1.08;
+    letter-spacing: -.04em; text-transform: none; color: var(--on-art);
+  }
+  .greeting .soft { color: color-mix(in srgb, var(--on-art) 60%, transparent); }
+  .banner-strap { margin: .45rem 0 0; font-size: .8125rem; color: color-mix(in srgb, var(--on-art) 82%, transparent); }
+  .score {
+    display: inline-flex; align-items: center; gap: .6rem; padding: .4rem .9rem .4rem .4rem;
+    border-radius: 999px; font-size: .75rem; color: var(--on-art);
+    background: color-mix(in srgb, var(--scrim) 70%, transparent);
+    border: 1px solid color-mix(in srgb, var(--on-art) 16%, transparent); backdrop-filter: blur(8px);
+  }
+  .ring { width: 1.9rem; height: 1.9rem; flex: none; }
+  .ring-track, .ring-done { fill: none; stroke-width: 4; }
+  .ring-track { stroke: color-mix(in srgb, var(--on-art) 20%, transparent); }
+  .ring-done { stroke: var(--kpi-work); stroke-linecap: round; }
+
+  /* The three number cards. auto-fit, so they stack on a phone, sit side by side when there is
+     room, and the sidebar's width needs no query of its own. Each card's colour is one --kpi token,
+     tinting the corner, the glow, the dot, the number and the line - and nothing else. */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .75rem; margin: .9rem 0 1rem; }
+  .kpi {
+    --kpi: var(--kpi-work);
+    position: relative; overflow: hidden; margin: 0; padding: 1rem 1.1rem 1.1rem; border-radius: 16px;
+    background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--kpi) 18%, transparent), transparent 60%), var(--panel);
+    border: 1px solid var(--line); box-shadow: var(--shadow);
+  }
+  .kpi::before {
+    content: ""; position: absolute; width: 10rem; height: 10rem; right: -3rem; top: -3.75rem; border-radius: 50%;
+    background: var(--kpi); filter: blur(60px); opacity: .22; pointer-events: none;
+  }
+  /* Room under the words for the line, only on a card that has one. */
+  .kpi:has(> .spark) { padding-bottom: 4.6rem; }
+  .kpi-work { --kpi: var(--kpi-work); }
+  .kpi-agents { --kpi: var(--kpi-agents); }
+  .kpi-ledger { --kpi: var(--kpi-ledger); }
+  .kpi > p, .kpi > div { position: relative; }
+  .kpi-label {
+    display: flex; align-items: center; gap: .5rem; margin: 0;
+    font-size: .625rem; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; color: var(--muted);
+  }
+  .kpi-label i { width: .45rem; height: .45rem; border-radius: 50%; background: var(--kpi); box-shadow: 0 0 .5rem var(--kpi); }
+  /* The hero's own markup sits in the third card unchanged, so it takes the same size as the other
+     two numbers. clamp: "2,131 GBP" has to fit a third of a 1024 screen. */
+  .kpi-value, .kpi .hero-value {
+    margin: .6rem 0 0; font-size: clamp(2rem, 3.4vw, 3.2rem); font-weight: 700; line-height: 1;
+    letter-spacing: -.05em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; color: var(--ink);
+  }
+  .kpi-value small { font-size: .42em; letter-spacing: -.01em; }
+  .kpi .hero-unit { font-size: .8125rem; margin-top: .35rem; }
+  .kpi-foot { margin: .4rem 0 0; font-size: .75rem; color: var(--muted); }
+  .kpi-source { margin: .1rem 0 0; font-size: .6875rem; color: var(--muted); }
+  .kpi-words { margin: .6rem 0 0; font-size: .9375rem; font-weight: 600; }
+  .kpi-words .small { font-weight: 400; }
+  .kpi-note { margin: .5rem 0 0; font-size: .75rem; color: var(--muted); }
+  .spark { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 3.75rem; color: var(--kpi); }
+  .spark-line { fill: none; stroke: currentColor; stroke-width: 2.2; vector-effect: non-scaling-stroke; }
+  /* The wash under the line is filled from its own gradient, which fades the same colour out. */
+  .spark-fill { stroke: none; }
+
+  /* The number fades from the ink into the card's colour, where the browser can paint text with a
+     background; anywhere it cannot, the plain ink above stands. */
+  @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+    .kpi-value, .kpi .hero-value {
+      background: linear-gradient(180deg, var(--ink), color-mix(in srgb, var(--kpi) 70%, var(--ink)));
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+    }
+  }
+
+  /* More room for the banner on a wide screen. Below the rules it overrides, as every override in
+     this sheet has to be. */
+  @media (min-width: 48rem) {
+    .banner { min-height: 15rem; border-radius: 22px; }
+    .banner-text { padding: 1.6rem 1.9rem; }
+    /* Beside the setup pill a laptop has about 830px for the greeting; at 2.6rem the last word of
+       "Here is where things stand." fell onto a line of its own. */
+    .banner .greeting { font-size: clamp(1.6rem, 2.5vw, 2.25rem); }
+    .kpis { gap: 1rem; margin: 1.1rem 0 1.25rem; }
+  }
 </style>
 </head>
 <body>
@@ -1285,26 +1389,201 @@ function boardHtml(board) {
    computed it. So when the number cannot be produced this says so, plainly, instead of rendering
    a zero - a zero here is a claim about their week, made in the largest type on the screen. */
 
-function heroHtml(hero) {
-  if (!hero) return ''
-  if (!hero.defined) {
-    // `hero.why` arrives as a finished sentence, ending with its own full stop. It used to be a
-    // lowercase fragment dropped after "No hero number yet.", which started that sentence with a
-    // lowercase letter in every state. Capitalising it HERE was the first fix and it was worse:
-    // one of those reasons begins with the filename `tiles.yml`, so the panel started printing
-    // `Tiles.yml`, a file that does not exist, on the screen students are told to bookmark. A view
-    // layer cannot tell an English word from a filename. The sentences are written correctly at
-    // source instead - see shapeHero in api/state.js.
-    return `<div class="panel empty"><b>No hero number yet.</b> <span class="small">${escapeHtml(hero.why ?? '')} Nothing is shown rather than a zero, because a zero here would be a claim about your week.</span></div>`
-  }
+// The two halves are shared by the Ledger panel and Today's third number card, so the one number
+// on this board that is the owner's own is written, and refused, the same way in both places.
+function heroMissingHtml(hero) {
+  // `hero.why` arrives as a finished sentence, ending with its own full stop. It used to be a
+  // lowercase fragment dropped after "No hero number yet.", which started that sentence with a
+  // lowercase letter in every state. Capitalising it HERE was the first fix and it was worse:
+  // one of those reasons begins with the filename `tiles.yml`, so the panel started printing
+  // `Tiles.yml`, a file that does not exist, on the screen students are told to bookmark. A view
+  // layer cannot tell an English word from a filename. The sentences are written correctly at
+  // source instead - see shapeHero in api/state.js.
+  return `<b>No hero number yet.</b> <span class="small">${escapeHtml(hero.why ?? '')} Nothing is shown rather than a zero, because a zero here would be a claim about your week.</span>`
+}
+
+function heroValueHtml(hero) {
   // Money carries the ledger's own currency code after the number, or nothing at all when the
   // ledger names none. Never a symbol: this line printed "$" for every student in every country.
   const value = hero.money
     ? formatMoney(hero.value, hero.currency)
     : (Math.round(hero.value * 10) / 10).toLocaleString('en-US')
-  return `<div class="panel hero"><div class="hero-value">${escapeHtml(value)}</div>
+  return `<div class="hero-value">${escapeHtml(value)}</div>
     <div class="hero-unit">${escapeHtml(hero.unit ?? '')}</div>
-    <div class="small muted">${escapeHtml(hero.caption ?? '')}</div></div>`
+    <div class="small muted">${escapeHtml(hero.caption ?? '')}</div>`
+}
+
+function heroHtml(hero) {
+  if (!hero) return ''
+  if (!hero.defined) return `<div class="panel empty">${heroMissingHtml(hero)}</div>`
+  return `<div class="panel hero">${heroValueHtml(hero)}</div>`
+}
+
+/* ---------- Today: the banner and the three numbers ----------
+   The top of Today is a picture with a greeting, the line about the team, and how far setup has
+   got; then three numbers. The rule for all of it is the board's rule: nothing is printed that the
+   repo cannot source. A card with nothing to count says so in words, never a 0. A line is drawn
+   only under a count that has a history, from the activity list the server sends for exactly this
+   - the run feed stops at fifty, which an hourly job fills in two days, so a fortnight drawn from
+   it would show twelve empty days that were not. */
+
+// Which part of the day an hour is in. Nobody is wished good morning at two at night.
+function greetingFor(hour) {
+  if (hour >= 5 && hour < 12) return 'Good morning'
+  if (hour >= 12 && hour < 18) return 'Good afternoon'
+  return 'Good evening'
+}
+
+const plural = (count, one, many = one + 's') => `${count} ${count === 1 ? one : many}`
+
+// The line about the team. On every other screen it sits under the top bar; on Today it is inside
+// the banner instead, so showScreen hides the one under the bar there rather than print it twice.
+function strapText() {
+  const working = data.agents.filter((agent) => agent.state === 'working').length
+  // An agent switched off on purpose is not a shortfall, so it leaves the denominator too.
+  // "2 of 8 working" read as four missing agents when two of them were never wanted.
+  const inUse = data.agents.filter((agent) => agent.state !== 'not-in-use').length
+  // "1 runs in the last day" was on the front page. The count is usually plural, so the bug
+  // only shows on the quietest days — which are exactly the days somebody is looking closely.
+  return `${working} of ${inUse} agents working · ` +
+    `${plural(data.workflows.length, 'workflow')} · ` +
+    `${plural(data.overnight.length, 'run')} in the last day.`
+}
+
+// "Setup 4 of 6 · next: Oversight", with a ring filled by the same share. The next step is the
+// first one not passed, wherever the passes are: a later rung lit does not make an earlier one
+// done. No steps at all, no ring - an empty ring would read as nought out of something.
+const RING_R = 14
+function setupRingHtml(setup) {
+  if (!Array.isArray(setup) || !setup.length) return ''
+  const passed = setup.filter((rung) => rung.pass).length
+  const next = setup.find((rung) => !rung.pass)
+  const around = 2 * Math.PI * RING_R
+  const done = (passed / setup.length) * around
+  const words = `Setup <b>${passed} of ${setup.length}</b>` +
+    (next ? ` &middot; next: ${escapeHtml(next.label)}` : '')
+  return `<div class="score" title="Your setup steps, each one a real test of your repo">
+    <svg class="ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="ring-track" cx="18" cy="18" r="${RING_R}"/><circle class="ring-done" cx="18" cy="18" r="${RING_R}" stroke-dasharray="${done.toFixed(1)} ${around.toFixed(1)}" transform="rotate(-90 18 18)"/></svg>
+    <span>${words}</span></div>`
+}
+
+// The picture is the one image on the board fetched at once rather than when it scrolls into view:
+// it is the first thing Today shows, the head preloads it, and its size is written down so
+// nothing jumps when it lands.
+function bannerHtml(now = new Date()) {
+  const name = typeof data.owner?.name === 'string' ? data.owner.name.trim() : ''
+  const first = name.split(/\s+/)[0] ?? ''
+  const greeting = `${greetingFor(now.getHours())}${first ? `, ${escapeHtml(first)}` : ''}.`
+  const day = `${now.toLocaleDateString(undefined, { weekday: 'long' })} &middot; ${now.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}`
+  return `<section class="banner">
+    <img src="/art/today-harbour.webp" alt="" width="1600" height="686" fetchpriority="high" decoding="async" />
+    <div class="banner-text">
+      <div class="banner-words">
+        <p class="eyebrow">${day}</p>
+        <h2 class="greeting">${greeting} <span class="soft">Here is where things stand.</span></h2>
+        <p class="banner-strap">${escapeHtml(strapText())}</p>
+      </div>
+      ${setupRingHtml(data.setup)}
+    </div>
+  </section>`
+}
+
+// A smooth line through the values with the area under it washed in the card's colour, drawn
+// across a 400x80 box the card stretches to its own width. One point per value, so fourteen days
+// is an M and thirteen curves. All zeros is a flat line on the floor - a true picture of nothing.
+const SPARK_W = 400
+const SPARK_H = 80
+function sparkSvg(values, id) {
+  const top = Math.max(...values, 0)
+  const step = values.length > 1 ? SPARK_W / (values.length - 1) : 0
+  const points = values.map((value, index) => [
+    Math.round(index * step * 10) / 10,
+    Math.round((SPARK_H - 8 - (top ? value / top : 0) * (SPARK_H - 24)) * 10) / 10
+  ])
+  let line = `M${points[0][0]},${points[0][1]}`
+  for (let index = 1; index < points.length; index += 1) {
+    const [x0, y0] = points[index - 1]
+    const [x1, y1] = points[index]
+    const middle = Math.round(((x0 + x1) / 2) * 10) / 10
+    line += ` C${middle},${y0} ${middle},${y1} ${x1},${y1}`
+  }
+  return `<svg class="spark" viewBox="0 0 ${SPARK_W} ${SPARK_H}" preserveAspectRatio="none" aria-hidden="true">
+    <defs><linearGradient id="${id}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".35"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
+    <path class="spark-fill" d="${line} L${SPARK_W},${SPARK_H} L0,${SPARK_H} Z" fill="url(#${id})"/>
+    <path class="spark-line" d="${line}"/></svg>`
+}
+
+function kpiCardHtml(kind, label, body, spark = '') {
+  return `<article class="kpi kpi-${kind}"><p class="kpi-label"><i aria-hidden="true"></i>${label}</p>${body}${spark}</article>`
+}
+
+const CUT_SHORT = '<p class="kpi-note">More runs than the board reads at once, so no line is drawn rather than one that runs out partway.</p>'
+
+function workCardHtml(days, activity) {
+  if (!data.totalRuns) {
+    return kpiCardHtml('work', 'Work done', `<p class="kpi-words">No runs logged yet.</p>
+      <p class="kpi-foot">The first job your team runs shows up here.</p>`)
+  }
+  if (!days) {
+    return kpiCardHtml('work', 'Work done', `<p class="kpi-words">Runs are logged, but this reading carries no history to count them from.</p>`)
+  }
+  const week = days.slice(-7).reduce((sum, day) => sum + day.runs, 0)
+  // Cut short by the server's cap, the list still holds the NEWEST runs. If the oldest it kept is
+  // from before this week began, the whole week is in it and the count is exact; if not, some of
+  // the week was cut and the count is only a floor, and says so with its +.
+  const weekStart = new Date()
+  weekStart.setHours(0, 0, 0, 0)
+  weekStart.setDate(weekStart.getDate() - 6)
+  const oldest = Date.parse(activity.runs.at(-1)?.started_at)
+  const whole = activity.complete || (Number.isFinite(oldest) && oldest < weekStart.getTime())
+  return kpiCardHtml('work', 'Work done', `<p class="kpi-value">${week}${whole ? '' : '+'}</p>
+    <p class="kpi-foot">${week === 1 ? 'run' : 'runs'} in the last 7 days</p>
+    <p class="kpi-source">Counted from runs/ in your repo</p>${activity.complete ? '' : CUT_SHORT}`,
+  activity.complete ? sparkSvg(days.map((day) => day.runs), 'spark-work') : '')
+}
+
+function agentsCardHtml(days, activity) {
+  if (!data.agents.length) {
+    return kpiCardHtml('agents', 'Agents working', `<p class="kpi-words">No agents yet.</p>
+      <p class="kpi-foot">Run <code>/onboard</code> and it writes the first ones.</p>`)
+  }
+  const inUse = data.agents.filter((agent) => agent.state !== 'not-in-use')
+  if (!inUse.length) {
+    return kpiCardHtml('agents', 'Agents working', `<p class="kpi-words">Every agent is switched off.</p>
+      <p class="kpi-foot">That was a choice in your repo, so nothing here counts it as a fault.</p>`)
+  }
+  // A team nobody has run yet is the template's day-one reading. "0 of 8" there, in the largest
+  // type on the screen, reads as eight things broken rather than eight things not started.
+  if (!data.totalRuns) {
+    const words = inUse.length === 1 ? 'Your one agent has not run yet.' : `None of your ${inUse.length} agents has run yet.`
+    return kpiCardHtml('agents', 'Agents working', `<p class="kpi-words">${words}</p>
+      <p class="kpi-foot">Each one shows as working here once it has run.</p>`)
+  }
+  const count = (state) => inUse.filter((agent) => agent.state === state).length
+  const others = [[count('quiet'), 'gone quiet'], [count('never-run'), 'never run'], [count('attention'), 'need a look']]
+    .filter(([number]) => number).map(([number, words]) => `${number} ${words}`)
+  // The line is how many different agents ran each day - only when there is a history to count,
+  // and only a whole one.
+  const spark = data.totalRuns && days && activity.complete ? sparkSvg(days.map((day) => day.agents), 'spark-agents') : ''
+  return kpiCardHtml('agents', 'Agents working', `<p class="kpi-value">${count('working')}<small> of ${inUse.length}</small></p>
+    <p class="kpi-foot">${others.length ? others.join(' &middot; ') : 'in use, none gone quiet'}</p>
+    <p class="kpi-source">Each agent's state, from its own runs</p>`, spark)
+}
+
+// The owner's own number. It has no history - tiles.yml names one figure, not a series - so this
+// card never gets a line, whatever the other two draw.
+function heroCardHtml(hero) {
+  if (!hero) {
+    return kpiCardHtml('ledger', 'Your number', `<p class="kpi-words">No number chosen yet &mdash; <code>/onboard</code> asks which.</p>`)
+  }
+  if (!hero.defined) return kpiCardHtml('ledger', 'Your number', `<p class="kpi-words">${heroMissingHtml(hero)}</p>`)
+  return kpiCardHtml('ledger', 'Your number', heroValueHtml(hero))
+}
+
+function kpiCardsHtml() {
+  const activity = data.activity
+  const days = activity && Array.isArray(activity.runs) ? activityByDay(activity.runs, new Date()) : null
+  return `<div class="kpis">${workCardHtml(days, activity)}${agentsCardHtml(days, activity)}${heroCardHtml(data.hero)}</div>`
 }
 
 /* ---------- Ledger ---------- */
@@ -1444,7 +1723,8 @@ function renderToday() {
   // The snapshot banner belongs here too. Today is the first screen anybody opens, and it was the
   // one place a month-old snapshot was presented with no age at all.
   el('today').innerHTML =
-    heroHtml(data.hero) +
+    bannerHtml() +
+    kpiCardsHtml() +
     snapshotBannerHtml(data.routines) +
     ladderHtml(data.setup) +
     fireButtonsHtml(data.workflows) +
@@ -1582,6 +1862,29 @@ function ranOnDays(runs, slug) {
     days.add(dateKey(new Date(at)))
   }
   return days
+}
+
+// Runs, and how many different agents ran them, on each of the last `days` local days, oldest
+// first and ending today - what the two lines on Today's number cards are drawn from. Local for
+// the calendar's reason: a run at 23:30 belongs to that evening, and keyed by UTC it lands on
+// tomorrow's bar for anybody west of Greenwich. A day with nothing on it is a zero, not a gap.
+function activityByDay(runs, now = new Date(), days = 14) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const tally = new Map()
+  for (let back = days - 1; back >= 0; back -= 1) {
+    const date = new Date(today)
+    date.setDate(today.getDate() - back)
+    tally.set(dateKey(date), { runs: 0, agents: new Set() })
+  }
+  for (const run of runs ?? []) {
+    const at = Date.parse(run?.started_at)
+    if (!Number.isFinite(at)) continue
+    const day = tally.get(dateKey(new Date(at)))
+    if (!day) continue
+    day.runs += 1
+    if (typeof run.agent === 'string' && run.agent) day.agents.add(run.agent)
+  }
+  return [...tally].map(([date, day]) => ({ date, runs: day.runs, agents: day.agents.size }))
 }
 function scheduleStripHtml(workflows, options = {}) {
   const scheduled = workflows.filter((workflow) => workflow.schedule && ringsNow(workflow))
@@ -2678,6 +2981,8 @@ function showScreen(name) {
   document.querySelectorAll('nav a').forEach((link) =>
     link.classList.toggle('active', link.dataset.screen === screen))
   el('screen-title').textContent = TITLES[screen]
+  // Today's banner carries this line itself, so the copy under the top bar would say it twice.
+  el('strap').hidden = screen === 'today'
   window.scrollTo(0, 0)
 }
 
@@ -2758,17 +3063,7 @@ function render() {
   repoBase = data.repo.url
   repoBranch = data.repo.branch || 'main'
   el('repo-link').innerHTML = `<a href="${escapeHtml(data.repo.url)}" rel="noreferrer noopener">${escapeHtml(data.repo.owner)}/${escapeHtml(data.repo.repo)}</a>`
-  const working = data.agents.filter((agent) => agent.state === 'working').length
-  // An agent switched off on purpose is not a shortfall, so it leaves the denominator too.
-  // "2 of 8 working" read as four missing agents when two of them were never wanted.
-  const inUse = data.agents.filter((agent) => agent.state !== 'not-in-use').length
-  // "1 runs in the last day" was on the front page. The count is usually plural, so the bug
-  // only shows on the quietest days — which are exactly the days somebody is looking closely.
-  const plural = (count, one, many = one + 's') => `${count} ${count === 1 ? one : many}`
-  el('strap').textContent =
-    `${working} of ${inUse} agents working · ` +
-    `${plural(data.workflows.length, 'workflow')} · ` +
-    `${plural(data.overnight.length, 'run')} in the last day.`
+  el('strap').textContent = strapText()
   renderToday()
   renderLedger()
   renderTeam()

@@ -504,6 +504,29 @@ export function ranOnDays(runs, slug) {
   return days
 }
 
+// Runs, and how many different agents ran them, on each of the last `days` local days, oldest
+// first and ending today - what the two lines on Today's number cards are drawn from. Local for
+// the calendar's reason: a run at 23:30 belongs to that evening, and keyed by UTC it lands on
+// tomorrow's bar for anybody west of Greenwich. A day with nothing on it is a zero, not a gap.
+export function activityByDay(runs, now = new Date(), days = 14) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const tally = new Map()
+  for (let back = days - 1; back >= 0; back -= 1) {
+    const date = new Date(today)
+    date.setDate(today.getDate() - back)
+    tally.set(dateKey(date), { runs: 0, agents: new Set() })
+  }
+  for (const run of runs ?? []) {
+    const at = Date.parse(run?.started_at)
+    if (!Number.isFinite(at)) continue
+    const day = tally.get(dateKey(new Date(at)))
+    if (!day) continue
+    day.runs += 1
+    if (typeof run.agent === 'string' && run.agent) day.agents.add(run.agent)
+  }
+  return [...tally].map(([date, day]) => ({ date, runs: day.runs, agents: day.agents.size }))
+}
+
 export function splitTaskText(text) {
   const trimmed = String(text ?? '').trim()
   if (!trimmed) return null

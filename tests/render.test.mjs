@@ -91,6 +91,11 @@ function render(payload, options = {}) {
   // the SOURCE instead and missed a false sentence that only appears when a folder and a query are
   // both set. Review found it. These are the same variables the page assigns; nothing is faked.
   const state = options.state ?? {}
+  // `options.expose` names page functions to hand back as `nodes.exposed`, so a pure one - which
+  // greeting an hour gets - can be called with inputs the clock would take a day to produce. Only
+  // plain identifiers: the names are written into the evaluated source.
+  const exposeNames = options.expose ?? []
+  for (const name of exposeNames) assert.match(name, /^[A-Za-z_$][\w$]*$/, `${name} is not a function name`)
   const run = new Function(
     ...Object.keys(context),
     `${script}
@@ -98,9 +103,9 @@ function render(payload, options = {}) {
      ; const given = arguments[arguments.length - 1]
      ; if (given.memoryQuery !== undefined) memoryQuery = given.memoryQuery
      ; if (given.memorySource !== undefined) memorySource = given.memorySource
-     ; render(); return null;`
+     ; render(); return { ${exposeNames.join(', ')} };`
   )
-  run(...Object.values(context), payload, state)
+  nodes.exposed = run(...Object.values(context), payload, state)
   return nodes
 }
 
@@ -122,6 +127,10 @@ const base = {
   ledger: null,
   proposals: null,
   hero: null,
+  // What api/state.js sends for a repo with no name in about-me and no runs: no owner, and a
+  // fortnight of activity that is complete because there was nothing to cap.
+  owner: null,
+  activity: { since: new Date(Date.now() - 15 * 86400_000).toISOString(), runs: [], complete: true },
   // Word for word what shapeSnapshot returns for an absent snapshot. It read 'no snapshot has been
   // taken yet' here long after the API stopped saying that, so these tests were drawing a screen
   // no student could ever see.
@@ -2834,4 +2843,214 @@ test('every control a thumb presses is at least 44px tall on a phone', () => {
     if (tallest < 2.75) short.push(`${selector} is ${tallest ? `${tallest}rem` : 'given no height'}`)
   }
   assert.deepEqual(short, [], `controls a thumb has to aim for:\n${short.join('\n')}`)
+})
+
+/* ---------- Today: the banner and the three numbers ---------------------------------------------
+   v2 opens Today on a picture with a greeting, the line about the team, and how far setup has got,
+   then three number cards. Every number on them has to be one the repo can source: a card with
+   nothing to count says so in words, a history the server had to cut short draws no line, and the
+   one number with no history at all - the owner's own - never gets a line drawn under it. */
+
+const kpiCards = (drawn) => Object.fromEntries(
+  [...drawn.matchAll(/<article class="kpi kpi-([a-z]+)"[\s\S]*?<\/article>/g)].map((found) => [found[1], found[0]]))
+const textOf = (markup) => markup
+  .replace(/<svg[\s\S]*?<\/svg>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/&middot;/g, '·').replace(/&mdash;/g, '—')
+  .replace(/\s+/g, ' ').trim()
+const bannerOf = (drawn) => /<section class="banner"[\s\S]*?<\/section>/.exec(drawn)?.[0] ?? assert.fail('Today has no banner')
+
+// `perDay[13]` runs today, `perDay[0]` thirteen days ago, newest first like the payload. Each day's
+// runs start at 10:00 local and take turns between the agents, so the distinct count is
+// min(runs, agents).
+const fortnight = (perDay, agents = ['research', 'email', 'sales']) => {
+  const runs = []
+  const today = new Date()
+  perDay.forEach((count, index) => {
+    for (let run = 0; run < count; run += 1) {
+      const at = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (13 - index), 10, run)
+      runs.push({ started_at: at.toISOString(), agent: agents[run % agents.length] })
+    }
+  })
+  return runs.reverse()
+}
+const activityOf = (runs, complete = true) => ({ since: new Date(Date.now() - 15 * 86400_000).toISOString(), runs, complete })
+
+// The y of every point a sparkline passes through, in order: the M point, then each C's end point.
+const sparkYs = (card) => {
+  const path = /class="spark-line" d="([^"]+)"/.exec(card)?.[1] ?? assert.fail('the card draws no line')
+  const start = /^M\s*([\d.]+),([\d.]+)/.exec(path)
+  const ends = [...path.matchAll(/C\s*[\d.]+,[\d.]+\s+[\d.]+,[\d.]+\s+([\d.]+),([\d.]+)/g)]
+  return [Number(start[2]), ...ends.map((found) => Number(found[2]))]
+}
+
+test('the greeting follows the hour', () => {
+  const { greetingFor } = render(base, { expose: ['greetingFor'] }).exposed
+  const expected = [[5, 'Good morning'], [11, 'Good morning'], [12, 'Good afternoon'], [17, 'Good afternoon'],
+    [18, 'Good evening'], [23, 'Good evening'], [0, 'Good evening'], [4, 'Good evening']]
+  for (const [hour, words] of expected) assert.equal(greetingFor(hour), words, `at ${hour}:00`)
+})
+
+test('the greeting uses the first name only, and greets nobody by a name it does not have', () => {
+  const named = bannerOf(render({ ...base, owner: { name: 'Jordan Avery' } }).get('today').innerHTML)
+  assert.match(named, /Good (morning|afternoon|evening), Jordan\./)
+  assert.ok(!named.includes('Avery'), 'the greeting used the whole name')
+  // The second line makes no claim about the team. The mock-up said "Your team is at work." over a
+  // team that might have done nothing for a week.
+  assert.match(named, /Here is where things stand\./)
+
+  const nameless = bannerOf(render(base).get('today').innerHTML)
+  assert.match(nameless, /Good (morning|afternoon|evening)\./)
+  assert.ok(!/Good (morning|afternoon|evening),/.test(nameless), 'somebody with no name in about-me was greeted by one')
+
+  const hostile = bannerOf(render({ ...base, owner: { name: '<img src=x onerror=1>' } }).get('today').innerHTML)
+  assert.ok(!hostile.includes('<img src=x'), 'the name from about-me was drawn as markup')
+})
+
+test('the setup ring counts what passed and names the first step not done', () => {
+  const rung = (label, pass) => ({ rung: label.toLowerCase(), label, pass, detail: 'd' })
+  const labels = ['Brief', 'Access', 'Training', 'Workflows', 'Oversight', 'Improvement']
+  const setupWith = (passed) => labels.map((label, index) => rung(label, index < passed))
+  const ring = (passed) => bannerOf(render({ ...base, setup: setupWith(passed) }).get('today').innerHTML)
+  const arc = (banner) => {
+    const found = /class="ring-done"[^>]*stroke-dasharray="([\d.]+) ([\d.]+)"/.exec(banner) ?? assert.fail('the ring draws no arc')
+    return Number(found[1]) / Number(found[2])
+  }
+
+  const four = ring(4)
+  assert.match(textOf(four), /Setup 4 of 6 · next: Oversight/)
+  assert.ok(Math.abs(arc(four) - 4 / 6) < 0.01, `four of six drew ${arc(four).toFixed(3)} of the ring`)
+  assert.ok(Math.abs(arc(ring(1)) - 1 / 6) < 0.01, 'the arc does not follow the count')
+
+  const all = ring(6)
+  assert.match(textOf(all), /Setup 6 of 6/)
+  assert.ok(!/next:/.test(all), 'a finished setup still names a next step')
+
+  // A pass further down the ladder does not make an earlier step done.
+  const gap = bannerOf(render({ ...base, setup: labels.map((label) => rung(label, label !== 'Access')) }).get('today').innerHTML)
+  assert.match(textOf(gap), /5 of 6 · next: Access/)
+
+  assert.ok(!/class="ring/.test(bannerOf(render(base).get('today').innerHTML)), 'a ring was drawn with no setup steps to count')
+})
+
+test('Work done counts the last seven local days from the activity list, and draws all fourteen', () => {
+  const perDay = [1, 0, 2, 1, 0, 0, 3, 1, 2, 0, 1, 4, 0, 2] // the last seven add up to 10
+  const runs = fortnight(perDay)
+  // data.runs is capped at fifty and stays empty here: a card that counted from it would say 0.
+  const drawn = render({ ...base, runs: [], totalRuns: runs.length + 7, activity: activityOf(runs) }).get('today').innerHTML
+  const work = kpiCards(drawn).work ?? assert.fail('there is no Work done card')
+  assert.match(work, /class="kpi-value">10</, 'Work done is not the number of runs in the last seven days')
+
+  const ys = sparkYs(work)
+  assert.equal(ys.length, 14, 'the line does not have one point per day')
+  // Higher up the card is a smaller y. The busiest day is the top of the line, the empty days the floor.
+  assert.equal(Math.min(...ys), ys[11], 'the busiest day is not the highest point')
+  for (const index of [1, 4, 5, 9, 12]) assert.equal(ys[index], Math.max(...ys), `an empty day (${index}) is off the floor`)
+  assert.ok(ys[6] < ys[0], 'three runs drew no higher than one')
+})
+
+test('Agents working counts the agents in use, and its line is how many different agents ran each day', () => {
+  // Two days ago one agent ran five times; yesterday two agents ran once each; today three did.
+  // Counted by agent the line rises; counted by run it would fall first.
+  const runs = [
+    ...fortnight([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3]),
+    ...fortnight([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0], ['research'])
+  ]
+  const agents = [
+    agent({ slug: 'research', state: 'working' }), agent({ slug: 'email', state: 'working' }),
+    agent({ slug: 'sales', state: 'quiet' }), agent({ slug: 'editor', state: 'not-in-use' })
+  ]
+  const card = kpiCards(render({ ...base, agents, totalRuns: runs.length, activity: activityOf(runs) }).get('today').innerHTML).agents
+  assert.ok(card, 'there is no Agents working card')
+  assert.match(textOf(card), /^Agents working 2 of 3\b/, 'the switched-off agent is counted as one not working')
+  assert.match(textOf(card), /1 gone quiet/)
+  const ys = sparkYs(card)
+  assert.equal(ys.length, 14)
+  assert.ok(ys[13] < ys[12] && ys[12] < ys[11], 'the line does not count distinct agents per day')
+})
+
+test('with nothing to count, the cards say so in words and never print a 0', () => {
+  const cards = kpiCards(render(base).get('today').innerHTML)
+  assert.deepEqual(Object.keys(cards), ['work', 'agents', 'ledger'], 'the three cards are missing or out of order')
+  assert.match(textOf(cards.work), /No runs logged yet/)
+  assert.match(textOf(cards.ledger), /No number chosen yet — \/onboard asks which\./)
+  for (const [name, card] of Object.entries(cards)) {
+    assert.ok(!/(^|\D)0(\D|$)/.test(textOf(card)), `the ${name} card printed a zero with nothing behind it: ${textOf(card)}`)
+    assert.ok(!card.includes('<svg class="spark'), `the ${name} card drew a line through no data`)
+  }
+
+  // A freshly staffed team: eight agents, none has ever run. "0 of 8" in the largest type on the
+  // screen is the day-one reading the template ships with, and it reads as eight things broken.
+  const staffed = kpiCards(render({ ...base, agents: ['research', 'email', 'sales'].map((slug) => agent({ slug })) }).get('today').innerHTML).agents
+  assert.ok(!/(^|\D)0(\D|$)/.test(textOf(staffed)), `a team that has never run was given a zero: ${textOf(staffed)}`)
+  assert.match(textOf(staffed), /None of your 3 agents has run yet/)
+
+  // Runs logged, none in the last fortnight: that IS a count, and it is zero. Never-ran and gone
+  // quiet are different answers, which is what totalRuns is for.
+  const quiet = kpiCards(render({ ...base, totalRuns: 12 }).get('today').innerHTML).work
+  assert.match(quiet, /class="kpi-value">0</, 'a team that has run before but not lately is shown as never having run')
+  assert.ok(!/No runs logged yet/.test(quiet))
+})
+
+test('a history the server had to cut short draws no line, and says why', () => {
+  const runs = fortnight([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3])
+  const cut = kpiCards(render({ ...base, totalRuns: 4000, agents: [agent({ state: 'working' })], activity: activityOf(runs, false) }).get('today').innerHTML)
+  for (const name of ['work', 'agents']) {
+    assert.ok(!cut[name].includes('<svg class="spark'), `the ${name} card drew a line that runs out partway`)
+  }
+  assert.match(textOf(cut.work), /no line/i, 'the missing line is not explained')
+  // The newest runs are all there but the cut fell inside the week, so this is a floor, not a count.
+  assert.match(cut.work, /class="kpi-value">6\+</, 'a cut-short week is shown as an exact count')
+
+  // Cut, but the oldest run kept is from before the week began: the week itself is whole.
+  const covered = fortnight([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3])
+  const whole = kpiCards(render({ ...base, totalRuns: 4000, activity: activityOf(covered, false) }).get('today').innerHTML).work
+  assert.match(whole, /class="kpi-value">6</)
+})
+
+test('the owner\'s number never gets a line under it - there is no history behind it', () => {
+  const runs = fortnight([1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2])
+  const hero = { metric: 'cost-a-week', defined: true, value: 2131, unit: 'a week', money: true, currency: 'GBP', caption: 'at the rate you set' }
+  const cards = kpiCards(render({ ...base, hero, totalRuns: runs.length, agents: [agent({ state: 'working' })], activity: activityOf(runs) }).get('today').innerHTML)
+  assert.match(cards.ledger, /class="hero-value">2,131 GBP</, 'the number card lost the hero markup')
+  assert.ok(!/<svg/.test(cards.ledger), 'the owner\'s number has a line drawn under it')
+  assert.ok(cards.work.includes('<svg class="spark'), 'the fixture stopped drawing lines at all, so the check above proves nothing')
+
+  const unchosen = kpiCards(render({ ...base, hero: shapeHero({ hero: '<!-- fill: hero-metric -->' }, null) }).get('today').innerHTML).ledger
+  assert.match(unchosen, /No hero number yet/)
+})
+
+test('Today opens on the banner and the numbers, then setup, the run buttons and the board', () => {
+  const drawn = render({ ...base, workflows: [workflow({ fire: true })] }).get('today').innerHTML
+  const marks = ['<section class="banner"', '<div class="kpis"', 'Which of these actually ring is unknown', '<h2>Setup',
+    '<h2 id="run-jobs">', '<h2>Board', '<h2>Due next', '<h2>Gone quiet', '<h2>Usage']
+  const at = marks.map((mark) => drawn.indexOf(mark))
+  marks.forEach((mark, index) => assert.ok(at[index] >= 0, `Today has no ${mark}`))
+  assert.deepEqual([...at].sort((a, b) => a - b), at, `Today is out of order: ${marks.join(' > ')}`)
+})
+
+test('the line about the team shows once on Today, in the banner, and on every other screen above it', () => {
+  const nodes = render({ ...base, agents: [agent({ state: 'working' })] })
+  assert.equal(nodes.get('strap').hidden, true, 'Today shows the strap twice, above the banner and inside it')
+  assert.ok(bannerOf(nodes.get('today').innerHTML).includes(nodes.get('strap').textContent),
+    'the banner does not carry the strap, so Today lost it altogether')
+  for (const screen of SCREENS.filter((name) => name !== 'today')) {
+    assert.equal(render(base, { hash: `#${screen}` }).get('strap').hidden, false, `${screen} lost the strap`)
+  }
+})
+
+test('only the Today banner picture loads at once, and the head asks for it early', () => {
+  // Every other picture waits until it is about to be seen. A phone opening Today should not pay
+  // for the sidebar art it never draws, or for Team's portraits.
+  const pictures = [...html.matchAll(/<img\b[^>]*>/g)].map((found) => found[0])
+  const eager = pictures.filter((tag) => !/\bloading="lazy"/.test(tag))
+  assert.equal(eager.length, 1, `expected one picture to load at once, found:\n${eager.join('\n')}`)
+  assert.match(eager[0], /src="\/art\/today-harbour\.webp"/)
+  assert.match(eager[0], /width="1600"/)
+  assert.match(eager[0], /height="686"/, 'the banner picture has no size, so the page jumps when it lands')
+  const from = html.indexOf('function bannerHtml')
+  assert.ok(from >= 0, 'there is no bannerHtml')
+  const bannerSource = html.slice(from, html.indexOf('\n}', from))
+  assert.ok(bannerSource.includes(eager[0]), 'the one eager picture is not the Today banner')
+
+  const head = html.slice(0, html.indexOf('</head>'))
+  assert.match(head, /<link rel="preload" as="image" href="\/art\/today-harbour\.webp"/, 'the banner picture waits for the script to ask for it')
 })
