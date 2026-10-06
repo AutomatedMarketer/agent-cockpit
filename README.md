@@ -33,6 +33,50 @@ window, not the engine.
 
 ---
 
+## The look
+
+The board opens **dark**, and there is a **light theme** too. The switch is in the top bar. It
+remembers your choice **on that device only**. If you have never touched it, the board follows your
+phone's or computer's own light/dark setting.
+
+| Part | What to know |
+|---|---|
+| **Typeface** | Inter, served from this site (`public/fonts/`, with its OFL licence in `public/fonts/OFL.txt`). It is not loaded from Google, because the page's security header only allows its own files |
+| **Pictures** | Today's harbour, Team's workshop and the eight agent portraits are original art made for this board |
+| **Your own agents** | An agent you add later gets a coloured tile with its initial until it has a picture |
+
+**To give an agent a portrait, do both of these:**
+
+1. Put a 480x480 `.webp` named `agent-<name>.webp` in `public/art/`
+2. Add its name to the `PORTRAITS` list in `public/index.html`
+
+The list is what decides. A file in `public/art/` that is not in the list is never shown.
+
+**Kept light on purpose.** The tests refuse anything over these sizes, so a careless export cannot
+slow the board down on a phone:
+
+| File | Limit |
+|---|---|
+| A banner (Today, Team) | 100 KB |
+| An agent portrait | 45 KB |
+| All the pictures together | 450 KB |
+| The typeface | 64 KB |
+
+Only Today's banner loads straight away. Every other picture loads when you scroll to it or open
+its screen.
+
+**The three numbers on Today**, and where each comes from:
+
+| Number | Where it comes from |
+|---|---|
+| **Work done** | Runs counted from `runs/` in your repo, over the last 7 days |
+| **Agents working** | How many agents are working now, from each agent's own runs |
+| **Your number** | The figure you chose in `tiles.yml` (`/onboard` asks which) |
+
+A number with nothing behind it shows a sentence saying why, never a zero.
+
+---
+
 ## The two things this board refuses to do
 
 These are the reason anything else on it is worth believing.
