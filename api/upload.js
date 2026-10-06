@@ -5,8 +5,16 @@
 // order of checks below is the contract, and each one refuses before anything is written.
 //
 //   write gate -> a store is connected -> the slot -> real picture bytes -> under the size
-//   budget -> allowance left today -> store the picture -> point settings.json at it -> remove
-//   the picture it replaced (best effort)
+//   budget -> count the change AND point settings.json at the new version, in one save ->
+//   store the picture -> remove the picture it replaced (best effort)
+//
+// Counting comes first, in the same save as the pointer, because that save is the only place the
+// count is safe from a second upload arriving at the same moment (it is written with ifMatch).
+// Checked on a copy instead, two hundred uploads at once all passed the check and all stored a
+// picture - an advanced operation each, 2,000 a month on Hobby. Now a picture is stored only for a
+// change that was counted. If storing it fails, the pointer goes back to the old picture (best
+// effort) and the change stays counted: giving it back would be one more write, and a store that
+// keeps failing could then be tried for ever without the count moving.
 //
 // What the picture IS comes from its bytes. The path's extension, the stored content type and
 // the pointer are all taken from sniffImage, never from a header or a query the sender typed.
@@ -50,6 +58,20 @@ async function readBytes(request, limit) {
     return Buffer.concat(chunks)
   }
   return Buffer.alloc(0)
+}
+
+// After the picture could not be stored: the slot back on the picture it showed before, which
+// was never removed. Only if the slot still points at the version that failed - if another change
+// has moved it on since, that one stands. Best effort: if this fails too, the slot points at a
+// picture that is not there, /api/art answers 404 and the board shows its built-in picture.
+async function pointBack(pictures, slot, failed, previous) {
+  const unchanged = new Error('the slot has moved on')
+  await pictures.saveSettings((draft) => {
+    // Throwing stops the save, so a slot that has moved on costs no write at all.
+    if (draft.pictures[slot]?.v !== failed) throw unchanged
+    if (previous) draft.pictures[slot] = previous
+    else delete draft.pictures[slot]
+  }).catch(() => {})
 }
 
 // `store` is injected by the tests; left undefined, it is built from the environment on each
@@ -102,26 +124,18 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, versi
     const moment = now()
     const day = usageDay(moment)
     try {
-      // A dry run of today's allowance before the picture is stored: storing it is the costly
-      // half of an upload, so a board at its cap must not spend it only to be refused after.
-      const { settings: current } = await pictures.readSettings()
-      spendAllowance(structuredClone(current), 'writes', caps, day)
-
       const v = version()
-      await pictures.putPicture(slot, v, bytes, type)
-
       let replaced = null
-      let saved
+      const saved = await pictures.saveSettings((draft) => {
+        spendAllowance(draft, 'writes', caps, day)
+        replaced = draft.pictures[slot] ?? null
+        draft.pictures[slot] = { v, type, bytes: bytes.length, at: moment.toISOString() }
+      })
+
       try {
-        saved = await pictures.saveSettings((draft) => {
-          spendAllowance(draft, 'writes', caps, day)
-          replaced = draft.pictures[slot] ?? null
-          draft.pictures[slot] = { v, type, bytes: bytes.length, at: moment.toISOString() }
-        })
+        await pictures.putPicture(slot, v, bytes, type)
       } catch (error) {
-        // Nothing points at the new picture, so it would only take up room. The old one is
-        // still the one in use, untouched.
-        await pictures.dropPicture(slot, v, type).catch(() => {})
+        await pointBack(pictures, slot, v, replaced)
         throw error
       }
       // Only now that nothing points at it. A failed delete leaves a file nobody points at.

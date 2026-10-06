@@ -8,9 +8,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { makeHandler } from '../api/upload.js'
-import { NOT_CONNECTED, SETTINGS_PATH } from '../api/_picture-store.js'
+import { NOT_CONNECTED, SETTINGS_PATH, pictureStore } from '../api/_picture-store.js'
 import { PICTURE_BUDGET } from '../api/lib.js'
-import { BlobServiceNotAvailable } from './helpers/fake-blob.mjs'
+import { BlobServiceNotAvailable, fakeBlob } from './helpers/fake-blob.mjs'
 import {
   STORE_ENV,
   NOON,
@@ -160,7 +160,7 @@ test('at the daily cap an upload is refused before the picture is stored', async
   assert.equal(settingsOf(fake).pictures.today, undefined)
 })
 
-test('if settings.json cannot be saved, the new picture is removed and the old one stays in use', async () => {
+test('if settings.json cannot be saved, no picture is stored and the old one stays in use', async () => {
   const { upload, fake } = board()
   const old = (await upload('team', webp())).body.picture
   const realPut = fake.sdk.put
@@ -168,12 +168,68 @@ test('if settings.json cannot be saved, the new picture is removed and the old o
     if (pathname === SETTINGS_PATH) throw new BlobServiceNotAvailable()
     return realPut(pathname, ...rest)
   }
+  const picturesBefore = picturePuts(fake).length
   const response = await upload('team', webp())
   assert.equal(response.statusCode, 503)
   assert.match(response.body.error, /not answering/)
+  assert.equal(picturePuts(fake).length, picturesBefore, 'a picture was stored before the change was counted')
   const kept = [...fake.files.keys()].filter((path) => path.startsWith('agent-cockpit/art/team/'))
-  assert.deepEqual(kept, [`agent-cockpit/art/team/${old.v}.webp`], 'a picture nothing points at was left, or the old one was lost')
+  assert.deepEqual(kept, [`agent-cockpit/art/team/${old.v}.webp`], 'the old picture was lost')
   assert.equal(settingsOf(fake).pictures.team.v, old.v)
+})
+
+test('if the picture cannot be stored, the slot points at the old picture again, and the change stays counted', async () => {
+  // The change is counted and the slot pointed at the new version BEFORE the picture is stored,
+  // so no picture is ever stored uncounted. If storing it then fails, the pointer goes back to the
+  // old picture. The change is not given back: giving it back would be one more write, and a
+  // store that keeps failing could then be tried forever without the count ever moving.
+  const { upload, fake } = board()
+  const old = (await upload('team', webp())).body.picture
+  const realPut = fake.sdk.put
+  fake.sdk.put = async (pathname, ...rest) => {
+    if (pathname.includes('/art/')) throw new BlobServiceNotAvailable()
+    return realPut(pathname, ...rest)
+  }
+  const response = await upload('team', webp())
+  assert.equal(response.statusCode, 503)
+  assert.match(response.body.error, /not answering/)
+  const settings = settingsOf(fake)
+  assert.equal(settings.pictures.team.v, old.v, 'the slot points at a picture that was never stored')
+  assert.ok(fake.files.has(`agent-cockpit/art/team/${old.v}.webp`), 'the old picture was removed')
+  assert.equal(settings.usage.writes, 2, 'the failed attempt was not counted')
+})
+
+test('two hundred uploads at once store no more pictures than the day allows', async () => {
+  // From the security review: the allowance used to be checked on a copy, then the picture
+  // stored, then the change counted - so uploads arriving together all passed the check and
+  // all stored a picture (200 pictures against a cap of 25). Each picture is an advanced
+  // operation, 2,000 a month on Hobby, and going over locks the store for 30 days.
+  //
+  // Four stores over one fake, as four function instances over one Blob store would be, each
+  // call held up a little at random so the requests interleave the way real ones do.
+  const fake = fakeBlob()
+  const sdk = { ...fake.sdk }
+  for (const method of ['get', 'put', 'del']) {
+    sdk[method] = async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, Math.random() * 3))
+      return fake.sdk[method](...args)
+    }
+  }
+  const env = { ...STORE_ENV, WRITE_DAILY_CAP: '25' }
+  const handlers = Array.from({ length: 4 }, () => makeHandler({ store: pictureStore(env, async () => sdk), env, now: NOON }))
+  const N = 200
+  const results = await Promise.all(Array.from({ length: N }, (_, index) =>
+    call(handlers[index % 4], { method: 'POST', headers: asTheBoard(BYTES), query: { slot: 'today' }, body: webp(2000) })))
+
+  const stored = results.filter((result) => result.statusCode === 200).length
+  const pictures = picturePuts(fake).length
+  assert.ok(pictures <= 25, `${pictures} pictures were stored against a cap of 25`)
+  assert.equal(pictures, stored, 'a picture was stored for an upload that was refused')
+  assert.equal(settingsOf(fake).usage.writes, stored, 'what was counted is not what was stored')
+  assert.ok(results.every((result) => [200, 409, 429].includes(result.statusCode)), 'an upload failed some other way')
+  // Each request may try its settings write three times when it collides; never more, and no
+  // picture on top of that unless it was counted.
+  assert.ok(fake.calls.put.length <= 3 * N + 25, `${fake.calls.put.length} writes for ${N} uploads`)
 })
 
 /* ---------- the body, however it arrives ---------- */
