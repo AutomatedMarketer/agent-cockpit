@@ -5,7 +5,7 @@ repo and tells you what your agents did, what they are about to do, and — the 
 skip — **which of your jobs actually run at all.**
 
 You deploy it. You own it. Nothing here runs on anybody else's infrastructure, and it never writes
-to your repo.
+to your repo. Its only write power is over its own picture store.
 
 ---
 
@@ -45,7 +45,9 @@ phone's or computer's own light/dark setting.
 | **Pictures** | Today's harbour, Team's workshop and the eight agent portraits are original art made for this board |
 | **Your own agents** | An agent you add later gets a coloured tile with its initial until it has a picture |
 
-**To give an agent a portrait, do both of these:**
+**The built-in art** is what every copy of this board starts with. To change the pictures and names
+on *your* board without touching code, see [Make it yours](#make-it-yours) below. To add a portrait
+to the built-in art itself, do both of these:
 
 1. Put a 480x480 `.webp` named `agent-<name>.webp` in `public/art/`
 2. Add its name to the `PORTRAITS` list in `public/index.html`
@@ -74,6 +76,64 @@ its screen.
 | **Your number** | The figure you chose in `tiles.yml` (`/onboard` asks which) |
 
 A number with nothing behind it shows a sentence saying why, never a zero.
+
+---
+
+## Make it yours
+
+Rename your agents, put in your own pictures, and choose the art style new pictures are made in -
+all from the board itself, on a phone or a laptop, and it shows at once.
+
+| Where | What you can change |
+|---|---|
+| **Each Team card** (tap it open, then **Personalise**) | The name on the card, **Choose a picture**, **Describe it** then **Make it**, and **Back to the default** |
+| **The Today and Team banners** (the small **Personalise** button) | The banner picture: choose one, make one, or go back to the default |
+| **Make it yours** (in the Team banner) | Your assistant's name, and the art style every picture made from words follows. The default style is shown, with **Back to the default** |
+
+**Names never break anything.** A name changes what you *see*. Jobs, task cards and routines still
+find the agent by its slug (`research`, `content`), which stays on the card, smaller, under the name.
+
+**Your photo is shrunk on your device first.** It is cut from the middle to the right shape (square
+for a card, wide for a banner) and made small - 45 KB for a card, 100 KB for a banner - before it is
+sent. On a phone, **Choose a picture** offers your camera and your photo library.
+
+**Where it is kept.** In a picture store of the board's own, never in your team repo. That store is
+the one thing the board can write to.
+
+### Switch it on
+
+Until you do, the board looks exactly as before, and **Make it yours** says how to switch it on.
+
+1. In Vercel, open **this board's project** → **Storage** → **Create Storage** → **Blob** → **Continue**
+2. Choose access **Private**. *You cannot change this later*, and the board only works with a private store
+3. Give it a name → **Create**, with **Production** and **Preview** both ticked
+4. If the store is not connected to this project yet: the store's **Projects** tab → **Connect to Project**
+5. **Redeploy.** Vercel adds the store's settings (`BLOB_...`) for you, but only a new deployment sees them
+
+The Personalise buttons appear once the redeploy is live.
+
+### Pictures from words (optional)
+
+**Make it** asks OpenAI's image model for a picture, in your art style. Set `OPENAI_API_KEY` - the same
+key the voice assistant uses - and redeploy. Without it, everything else still works and the board says
+why **Make it** is missing.
+
+- **Cost:** about 1 to 2 cents a picture with the default model (`gpt-image-1-mini`, medium quality),
+  per [OpenAI's price page](https://developers.openai.com/api/docs/guides/image-generation). It is
+  charged to your OpenAI account
+- **Daily caps:** at most 10 pictures from words and 25 changes of any kind a day (names, uploads,
+  resets). The counts start again at **midnight UTC**. Raise or lower them with `GENERATE_DAILY_CAP`
+  and `WRITE_DAILY_CAP`; `0` switches that kind of change off
+- **What leaves the board:** only the description you typed and your art style, sent to OpenAI
+
+### Who can change things
+
+Anyone with the view key can personalise the board - the store holds only pictures and names, and the
+caps limit what a key can spend. To let people **look but not change**, set `EDIT_KEY` as well: the
+board asks for it the first time somebody changes something, and keeps it on that device.
+
+**`EDIT_KEY` is required on an open board** (`PUBLIC_DASHBOARD=true`). Without it, changes are off
+there, because anyone with the URL could otherwise spend your OpenAI money.
 
 ---
 
@@ -125,6 +185,12 @@ has no evidence for.
 | `FIRE_TRIGGERS` | JSON mapping job slug → its trigger URL. Needed for the Run buttons. **Include `task-intake`** — a routine, not a job — or Add task, New workflow, Arm and Approve all fail | For buttons |
 | `FIRE_KEY` | A password for firing jobs, sent as `x-fire-key` | For buttons |
 | `PUBLIC_FIRE` | `true` to drop `FIRE_KEY` for requests from your own page. **Read the warning below first** | No |
+| `BLOB_...` | Set **by Vercel** when you connect a private Blob store. You never type these. See [Make it yours](#make-it-yours) | To personalise |
+| `OPENAI_API_KEY` | Your OpenAI key, for **Make it** - the same one the voice assistant uses | For pictures from words |
+| `OPENAI_IMAGE_MODEL` | The image model. Leave unset for `gpt-image-1-mini` | No |
+| `EDIT_KEY` | A password for changing names and pictures, sent as `x-edit-key`. **Required if `PUBLIC_DASHBOARD=true`** | If public |
+| `WRITE_DAILY_CAP` | Changes a day (names, uploads, resets). Default `25` | No |
+| `GENERATE_DAILY_CAP` | Pictures from words a day. Default `10` | No |
 
 **Redeploy after changing any of these.** Vercel does not apply env vars to a running deployment.
 
@@ -180,14 +246,23 @@ used only when you connect a picture store.
 | Run buttons do nothing | `FIRE_TRIGGERS` is unset, or that job has no `fire: true` in its trigger block |
 | Add task, New workflow, Arm or Approve answer "No \"task-intake\" routine is registered" | Those four dispatch to one dedicated routine rather than to a job, so `task-intake` needs its own entry in `FIRE_TRIGGERS`. It is not a workflow slug and wiring every workflow does not supply it |
 | The board looks empty but the repo is fine | Check the branch. `GITHUB_BRANCH` defaults to `main` |
+| **Make it yours** says personalising is off, after you made a store | You did not redeploy. A new deployment is the only one that sees the store |
+| "This picture store is public…" | The store was made **Public**, and that cannot be changed. Create a new **Private** store, connect it to this project, disconnect the public one, redeploy |
+| "…all the changes it allows today" or "…all the pictures it allows today" | The daily cap is reached. It starts again at midnight UTC, or raise `WRITE_DAILY_CAP` / `GENERATE_DAILY_CAP` and redeploy |
+| "OpenAI would not make that picture…" | OpenAI's safety rules refused the description. Describe it differently. Nothing was stored |
+| **Make it** is missing, with a sentence about `OPENAI_API_KEY` | Set `OPENAI_API_KEY` in Vercel and redeploy. Choosing your own picture works without it |
+| An iPhone photo "could not be opened here" | It is a HEIC photo and this browser cannot read those. Save it as a JPEG first (or take a screenshot of it), then choose that |
+| The board keeps asking for the edit key | The key typed is not the `EDIT_KEY` set in Vercel. A wrong key is never kept |
 
 ---
 
 ## What it will never do
 
 - **Write to your repo.** Every button is a *dispatch*: an agent session makes the change and
-  commits it. A broken board cannot corrupt your team
-- **Send anything.** It has no email, no publishing, no outbound anything
+  commits it. A broken board cannot corrupt your team. Its only write power is over its own picture
+  store - names and pictures, nothing else
+- **Send anything.** It has no email, no publishing, no outbound anything. The one exception is
+  yours to switch on: with `OPENAI_API_KEY` set, **Make it** sends the description you typed to OpenAI
 - **Show you somebody else's data.** It reads one repo, the one you named
 - **Guess.** Where it does not know, it says it does not know
 
