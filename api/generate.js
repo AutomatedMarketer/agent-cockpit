@@ -31,7 +31,8 @@ import {
   dailyCaps,
   usageDay,
   spendOnPicture,
-  refuseIfSpent
+  refuseIfSpent,
+  PictureStoreError
 } from './_picture-store.js'
 
 const ENDPOINT = 'https://api.openai.com/v1/images/generations'
@@ -40,6 +41,10 @@ const DEFAULT_MODEL = 'gpt-image-1-mini'
 // maxDuration of 60 s, so a slow answer ends as our sentence, not the platform's timeout page.
 // OpenAI gets whatever is left of this when it is called, not a fixed amount on top of the save.
 const HANDLER_BUDGET_MS = 55_000
+// The least time worth asking OpenAI with. A picture is counted only if its save comes with this
+// much of the budget still left: one counted and then cut short by the clock is a day's
+// allowance spent on nothing. (A save can wait up to 10 s for its turn, and the store can be slow.)
+const LEAST_FOR_OPENAI_MS = 20_000
 // Vercel caps a function's response at 4.5 MB.
 const MAX_PICTURE_BYTES = 4 * 1024 * 1024
 const MAX_BASE64_LENGTH = Math.ceil(MAX_PICTURE_BYTES / 3) * 4
@@ -69,7 +74,8 @@ const SAY = {
   slow: 'OpenAI took too long to make the picture, so try again.',
   failed: 'OpenAI did not make the picture, so try again in a minute.',
   notPicture: 'OpenAI sent back something that is not a picture, so try again.',
-  tooBig: 'OpenAI sent back a picture too big to pass on, so try again.'
+  tooBig: 'OpenAI sent back a picture too big to pass on, so try again.',
+  storeSlow: 'The picture store was too slow to answer, so nothing was made and nothing was spent: try again in a minute.'
 }
 
 // What each kind of picture is asked to be: the shape the page will crop it to, and where the
@@ -173,7 +179,12 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
       const day = usageDay(moment)
       // Counted, with the change that will keep it held, in one save - so it is the count as it is
       // now - and first against the cached copy, so a refusal costs no read that skips the cache.
-      const charge = (settings) => spendOnPicture(settings, slot, caps, day, moment)
+      const charge = (settings) => {
+        if (HANDLER_BUDGET_MS - (now().getTime() - started) < LEAST_FOR_OPENAI_MS) {
+          throw new PictureStoreError(503, SAY.storeSlow)
+        }
+        spendOnPicture(settings, slot, caps, day, moment)
+      }
       await refuseIfSpent(pictures, charge)
       await pictures.saveSettings((draft) => {
         charge(draft)

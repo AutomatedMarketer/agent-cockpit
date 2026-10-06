@@ -348,8 +348,10 @@ const loadRealSdk = () => import('@vercel/blob')
 // collides. Saves from other instances still can, and ifMatch keeps both changes safe there.
 //
 // A store call can hang for minutes, so a save waits for the one before it for TURN_WAIT_MS at
-// most and then goes ahead anyway. Turns are kept per SDK loader: in production that is
-// loadRealSdk, one per instance; each test store passes its own, and so is its own instance.
+// most and then goes ahead anyway - TURN_WAIT_MS from when IT joined the line. (Counted from when
+// the save before it started, the waits stacked: a save behind three hung ones waited 30 s, half
+// a function's life.) Turns are kept per SDK loader: in production that is loadRealSdk, one per
+// instance; each test store passes its own, and so is its own instance.
 const TURN_WAIT_MS = 10_000
 const turns = new WeakMap()
 
@@ -365,9 +367,16 @@ const shown = new WeakMap()
 
 function takeTurn(key, work) {
   const before = turns.get(key) ?? Promise.resolve()
-  const mine = before.then(() => work())
-  const giveUp = () => new Promise((resolve) => setTimeout(resolve, TURN_WAIT_MS).unref?.())
-  turns.set(key, before.then(() => Promise.race([mine.then(() => {}, () => {}), giveUp()])))
+  let timer
+  const giveUp = new Promise((resolve) => {
+    timer = setTimeout(resolve, TURN_WAIT_MS)
+    timer.unref?.()
+  })
+  const mine = Promise.race([before, giveUp]).then(() => {
+    clearTimeout(timer)
+    return work()
+  })
+  turns.set(key, mine.then(() => {}, () => {}))
   return mine
 }
 

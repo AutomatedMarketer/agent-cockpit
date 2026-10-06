@@ -371,20 +371,40 @@ test('OpenAI taking too long is a sentence, not a hung request', async (t) => {
 test('OpenAI gets only the time the request has left, so the whole request ends inside 60 seconds', { timeout: 5_000 }, async (t) => {
   // vercel.json gives this function 60 s. A fixed 55 s for OpenAI, started after a slow store
   // save, would run past that and end on the platform's timeout page instead of our sentence.
-  // Here the store "took" 54.95 s, so OpenAI gets the 50 ms that are left.
+  // Here the save itself "took" 54.95 s - it began in time, so the picture was counted - and
+  // OpenAI gets the 50 ms that are left.
   const start = Date.parse('2026-10-06T12:00:00Z')
-  let first = true
-  const now = () => {
-    const at = first ? start : start + 54_950
-    first = false
-    return new Date(at)
-  }
+  let saved = false
+  const now = () => new Date(saved ? start + 54_950 : start)
   stubOpenAI(t, (url, options) => new Promise((resolve, reject) => {
     options.signal.addEventListener('abort', () => reject(options.signal.reason))
   }))
-  const response = await board({ now }).generate(PORTRAIT)
+  const { store } = connectedStore(ENV)
+  const slowStore = { ...store, saveSettings: async (mutate) => { const done = await store.saveSettings(mutate); saved = true; return done } }
+  const handler = makeHandler({ store: slowStore, env: ENV, now })
+  const response = await call(handler, { method: 'POST', headers: asTheBoard(JSON_TYPE), body: PORTRAIT })
   assert.equal(response.statusCode, 504)
   assert.match(response.body.error, /too long/)
+})
+
+test('if the store keeps it waiting too long, no picture is counted and OpenAI is never called', async (t) => {
+  // From the second review: a generate that got its turn late used to count its picture anyway
+  // and then run out of time with OpenAI (504) - the day's allowance spent on nothing. Its turn
+  // now has to come with at least 20 s of the request's time left, or it is not counted at all.
+  const calls = stubOpenAI(t, imageAnswer(webp()))
+  const start = Date.parse('2026-10-06T12:00:00Z')
+  let first = true
+  const now = () => {
+    const at = first ? start : start + 36_000 // 19 s of the 55 s budget left when its turn comes
+    first = false
+    return new Date(at)
+  }
+  const { generate, store } = board({ now })
+  const response = await generate(PORTRAIT)
+  assert.equal(response.statusCode, 503)
+  assert.match(response.body.error, /nothing was made/)
+  assert.equal(calls.length, 0, 'OpenAI was called with too little time left to answer')
+  assert.equal((await store.readSettings({ fresh: true })).settings.usage.generated, 0, 'a picture nobody could make was counted')
 })
 
 test('an answer from OpenAI is read only as far as the largest picture it may carry', async (t) => {

@@ -209,6 +209,25 @@ test('saves take turns, but one that hangs holds the others up for ten seconds a
   assert.equal(fake.files.has(SETTINGS_PATH), true)
 })
 
+test('a save behind three hung saves waits ten seconds from when it arrived, not thirty', async (t) => {
+  // From the second review (attack3, part C): each save waited ten seconds for the one before it
+  // to finish or give up, so the waits stacked - the fourth behind three hung saves waited 30 s,
+  // half a function's life. Each save's ten seconds now start when it joins the line.
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const fake = fakeBlob()
+  const sdk = { ...fake.sdk, put: (path, text, options) => (String(text).includes('hung') ? new Promise(() => {}) : fake.sdk.put(path, text, options)) }
+  const store = pictureStore(STORE, async () => sdk)
+  for (let i = 0; i < 3; i += 1) store.saveSettings((draft) => { draft.names[`hung${i}`] = 'hung' })
+  let fourth = false
+  const done = store.saveSettings((draft) => { draft.names.sales = 'Sam' }).then(() => { fourth = true })
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(fourth, false, 'the fourth save did not wait its turn at all')
+  t.mock.timers.tick(10_000)
+  for (let i = 0; i < 40 && !fourth; i += 1) await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(fourth, true, 'the fourth save waited longer than its own ten seconds')
+  await done
+})
+
 test('a refusal thrown by the change itself is passed through untouched, and nothing is written', async () => {
   // brand.js counts the daily cap inside the change; its "you have hit today's limit" must reach
   // the person as it was written, not be dressed up as a store failure.
