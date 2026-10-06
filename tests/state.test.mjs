@@ -2,7 +2,7 @@
 // a network, a token, or a live account.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import handler, { isTaskCard, shapeHero, markOwnerSwitchedOff, shapeSkills, shapeSetup } from '../api/state.js'
+import handler, { isTaskCard, shapeHero, markOwnerSwitchedOff, shapeSkills, shapeSetup, ownerNameFrom, shapeActivity } from '../api/state.js'
 
 // This suite covers the endpoint's data logic, not the view gate - that has its own
 // suite in gate.test.mjs. Opting out here keeps every case from carrying a key header.
@@ -783,4 +783,144 @@ test('mid-onboarding, no number of proved connections or machines lights Access'
 
   assert.equal(notYet.pass, false, 'proved connections lit Access for a student who has not finished /onboard')
   assert.match(notYet.detail, /Not finished in \/onboard yet/)
+})
+
+/* WHOSE BOARD THIS IS, AND NOTHING ELSE ABOUT THEM.
+
+   The v2 header greets the owner by name and draws their initials. The only place the repo holds a
+   name is the first line under "## Name and role" in shared/about-me.md - and that same section is
+   where people put everything else about themselves. Nuno's own file has his email address two
+   lines down from his name. The board is a web page, and with PUBLIC_DASHBOARD it is a public one.
+
+   So the server reads ONE short name out of that section and sends only that. Anything that does
+   not look like a name - an email, a phone number, a sentence, an unfilled marker - is no name at
+   all, and the header simply does not greet anybody. */
+
+const aboutMe = (nameAndRole, before = '') =>
+  `# About me\n\n${before}## Name and role\n${nameAndRole}\n\n## What my business does, in one sentence\nWe run social for gyms.\n`
+
+test('the owner name is read from Name and role, and only from there', () => {
+  assert.equal(
+    ownerNameFrom(aboutMe('Nuno Tavares. Coach, agency owner, developer, solopreneur, and consultant.\nBusinesses: Automated Marketer. Email: nuno@example.test')),
+    'Nuno Tavares'
+  )
+  // A section ABOVE it with a short line in it - which passes every name check - must not be taken.
+  assert.equal(ownerNameFrom(aboutMe('Jordan Avery.', '## Time zone and working hours\nLisbon\n\n')), 'Jordan Avery')
+  // An empty section does not borrow the next section's first line - and that line is a short one
+  // that passes every name check, or reading past the heading would go unnoticed.
+  assert.equal(
+    ownerNameFrom('# About me\n\n## Name and role\n\n## Time zone and working hours\nLisbon\n'),
+    null,
+    'it read past the end of Name and role and greeted them as "Lisbon"'
+  )
+  assert.equal(ownerNameFrom('# About me\n\n## Time zone\nLisbon\n'), null, 'no Name and role section, so no name')
+  assert.equal(ownerNameFrom(aboutMe('Jordan Avery.').replace(/\n/g, '\r\n')), 'Jordan Avery', 'a file saved on Windows')
+})
+
+test('the name stops where the name stops', () => {
+  assert.equal(ownerNameFrom(aboutMe('Jordan Avery (she/her), founder')), 'Jordan Avery')
+  assert.equal(ownerNameFrom(aboutMe('Priya Nair — content and design')), 'Priya Nair')
+  assert.equal(ownerNameFrom(aboutMe('Sam Whitfield - paid ads')), 'Sam Whitfield')
+  assert.equal(ownerNameFrom(aboutMe('Sam Whitfield; paid ads')), 'Sam Whitfield')
+  assert.equal(ownerNameFrom(aboutMe('Sam Whitfield | paid ads')), 'Sam Whitfield')
+  // A hyphen INSIDE a name is part of it. Only " - " with spaces is a separator.
+  assert.equal(ownerNameFrom(aboutMe('Jean-Luc Moreau')), 'Jean-Luc Moreau')
+  // A note to self above the name is skipped, not taken for the name or for a blank.
+  assert.equal(ownerNameFrom(aboutMe('<!-- the name you go by -->\nJordan Avery.')), 'Jordan Avery')
+})
+
+test('anything that is not plainly a name is no name at all', () => {
+  // The template as shipped.
+  assert.equal(ownerNameFrom(aboutMe('<!-- fill: full-name -->\n<!-- fill: role -->')), null)
+  // Half-filled: the role is in, the name is not. Skipping the marker would greet them as "Coach".
+  assert.equal(ownerNameFrom(aboutMe('<!-- fill: full-name -->\nCoach')), null, 'it took the role for the name')
+  assert.equal(ownerNameFrom(aboutMe('nuno@x.com')), null, 'an email address is not a name')
+  assert.equal(ownerNameFrom(aboutMe('Agent 47')), null, 'a digit means this is not a name')
+  assert.equal(ownerNameFrom(aboutMe('Jordan <b>Avery</b>')), null, 'markup is not a name')
+  assert.equal(ownerNameFrom(aboutMe('I run a small agency in Boise')), null, 'a sentence is not a name')
+  assert.equal(ownerNameFrom(aboutMe('Bartholomew Maximilian Fitzgerald-Worthington')), null, 'over 40 characters')
+  assert.equal(ownerNameFrom(null), null)
+  assert.equal(ownerNameFrom(undefined), null)
+})
+
+test('the payload never carries the about-me email', async () => {
+  // The register and the stack are dropped because they legitimately hold an `@` of their own (an
+  // account name, a plugin id). With them gone, the only `@` anywhere in the fixture is in about-me.
+  const { body } = await run({}, {
+    dropPaths: ['connections/register.yml', 'stack.yml'],
+    overrideFiles: {
+      'shared/about-me.md': aboutMe('Sam Rivers. Founder, reach me at sam.rivers@brightside.test\nPhone: 555 0100. Backup: sam@home.test')
+    }
+  })
+  assert.deepEqual(body.owner, { name: 'Sam Rivers' }, 'the name itself has to arrive, or this proves nothing')
+  const json = JSON.stringify(body)
+  assert.ok(!json.includes('@'), 'an email from about-me reached the browser')
+  assert.ok(!json.includes('555 0100'), 'a phone number from about-me reached the browser')
+})
+
+test('a template about-me sends no owner at all', async () => {
+  const { body } = await run()
+  assert.equal(body.owner, null)
+})
+
+/* HOW MUCH THE TEAM HAS DONE, LONG ENOUGH BACK TO DRAW.
+
+   The Today screen gets a fourteen-day sparkline of work done. `runs` in the payload is capped at
+   fifty - fine for a feed, and an undercount for a chart: a team that runs hourly fills fifty in two
+   days, and the line would show the other twelve as nothing happening.
+
+   So `activity` is its own field: just the two things a day-count needs, over fifteen days so that
+   fourteen LOCAL days are covered wherever the reader is (UTC+14 to UTC-12), and capped far higher
+   than the feed. When even that cap is hit it says so, and the page draws nothing rather than a
+   chart that silently runs out. */
+
+const DAY = 86400_000
+const NOW = Date.parse('2026-10-06T12:00:00Z')
+const at = (ms) => new Date(NOW - ms).toISOString()
+
+test('activity covers fifteen days and says when it is incomplete', () => {
+  const runs = [
+    { started_at: at(3600_000), agent: 'research', summary: 'not needed for a count', session_url: 'https://x' },
+    { started_at: at(15 * DAY - 1000), agent: 'email' },
+    { started_at: at(15 * DAY + 1000), agent: 'email' },
+    { started_at: 'last Tuesday', agent: 'email' }
+  ]
+  const activity = shapeActivity(runs, NOW)
+  assert.equal(activity.since, at(15 * DAY))
+  assert.deepEqual(activity.runs, [
+    { started_at: at(3600_000), agent: 'research' },
+    // Fifteen days less a second: inside. A fourteen-day window loses it, and with it the oldest
+    // local day for anybody east of Greenwich.
+    { started_at: at(15 * DAY - 1000), agent: 'email' }
+  ], 'fifteen days and a second is outside; an unreadable date is nowhere')
+  assert.equal(activity.complete, true)
+
+  const three = [
+    { started_at: at(3 * 3600_000), agent: 'a' },
+    { started_at: at(1 * 3600_000), agent: 'b' },
+    { started_at: at(2 * 3600_000), agent: 'c' }
+  ]
+  const capped = shapeActivity(three, NOW, 2)
+  assert.equal(capped.complete, false, 'a capped list must not pass for the whole fortnight')
+  assert.deepEqual(capped.runs.map((entry) => entry.agent), ['b', 'c'], 'the newest are the ones kept')
+  assert.equal(shapeActivity(three, NOW, 3).complete, true, 'exactly at the cap is everything')
+
+  assert.deepEqual(shapeActivity(undefined, NOW), { since: at(15 * DAY), runs: [], complete: true })
+})
+
+test("activity is in the payload and is not cut at the feed's fifty", async () => {
+  const many = Array.from({ length: 60 }, (_, index) => `runs/2026-10/bulk-${String(index).padStart(2, '0')}.json`)
+  const { body } = await run({}, {
+    extraTree: many.map((path) => ({ type: 'blob', path })),
+    overrideFiles: Object.fromEntries(many.map((path, index) => [
+      path,
+      JSON.stringify({ agent: 'email', started_at: isoAgo((index + 2) * 3600_000), status: 'ok' })
+    ]))
+  })
+  assert.equal(body.runs.length, 50, 'the feed is still capped, which is why activity exists')
+  // Sixty bulk runs plus the hour-old fixture run. The twenty-day-old one is outside the window.
+  assert.equal(body.activity.runs.length, 61)
+  assert.equal(body.activity.complete, true)
+  assert.deepEqual(body.activity.runs[0], { started_at: recent, agent: 'research' })
+  assert.ok(!body.activity.runs.some((entry) => entry.started_at === older))
 })

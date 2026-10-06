@@ -972,6 +972,83 @@ export function shapeGoneQuiet(agents, workflows) {
   return quiet
 }
 
+// ---------------------------------------------------------------------------------------------
+// Whose board this is.
+//
+// The header greets the owner by first name and draws their initials, and the only place the repo
+// holds a name is the first line under "## Name and role" in shared/about-me.md. That section is
+// also where people write everything else about themselves - Nuno's own has his email address two
+// lines below his name - and this payload goes to a browser, on a board that can be public.
+//
+// So the server takes ONE short name out of that section and nothing else, and anything that does
+// not plainly look like a name comes back as no name. A missing greeting costs nothing; an email
+// address printed in a header, or a stranger greeted as "Coach", is the kind of thing that gets a
+// dashboard closed and not reopened.
+const NAME_SECTION = /^##\s+name and role\s*$/i
+// Where a name ends and the rest of the sentence begins: "Nuno Tavares. Coach...", "Jordan Avery
+// (she/her)", "Priya Nair — design". A bare hyphen is NOT here - Jean-Luc is one name - only " - ".
+const NAME_ENDS = /[.,;(|—]| - /
+const MAX_NAME_WORDS = 4
+const MAX_NAME_LENGTH = 40
+
+export function ownerNameFrom(source) {
+  if (typeof source !== 'string') return null
+  const lines = source.split(/\r?\n/)
+  const start = lines.findIndex((line) => NAME_SECTION.test(line.trim()))
+  if (start === -1) return null
+
+  for (const raw of lines.slice(start + 1)) {
+    const line = raw.trim()
+    // The next heading is the end of the section. An empty Name and role does not borrow the
+    // first line of whatever comes after it.
+    if (/^#{1,6}\s/.test(line)) return null
+    if (!line) continue
+    // A fill marker where the name goes means the name has not been written. Skipping it like any
+    // other comment would walk on to the role line and greet them as "Coach".
+    if (/<!--\s*fill:/.test(line)) return null
+    // A note to self, which is not the name and not a reason to give up on the line after it.
+    if (/^<!--.*-->$/.test(line)) continue
+
+    const name = line.split(NAME_ENDS)[0].trim()
+    // Judged AFTER the cut, so an email later in the same sentence is cut away rather than
+    // costing the name - and an email that IS the first thing on the line still has its `@`.
+    if (!name || /[@<\d]/.test(name)) return null
+    if (name.split(/\s+/).length > MAX_NAME_WORDS || name.length > MAX_NAME_LENGTH) return null
+    return name
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------------------------
+// How much the team has done, far enough back to draw.
+//
+// `runs` in the payload stops at MAX_RUNS_RETURNED, which suits a feed and undercounts a chart: a
+// team that runs hourly fills fifty in two days, and a fourteen-day line drawn from them shows the
+// other twelve as nothing happening. So the Today sparkline gets its own list - only the two fields
+// a day-count needs - over FIFTEEN days, because fourteen local days end up to fourteen hours
+// either side of UTC and the board does not know where its reader is.
+//
+// It is capped too, much higher, because one payload cannot grow without limit. When the cap is
+// hit `complete` says so, and the page draws nothing rather than a line that quietly runs out.
+const ACTIVITY_DAYS = 15
+const MAX_ACTIVITY_RUNS = 1000
+
+export function shapeActivity(runs, now = Date.now(), cap = MAX_ACTIVITY_RUNS) {
+  const sinceMs = now - ACTIVITY_DAYS * 86400_000
+  const inWindow = (Array.isArray(runs) ? runs : [])
+    .map((run) => ({ run, ms: Date.parse(run?.started_at) }))
+    .filter(({ ms }) => Number.isFinite(ms) && ms >= sinceMs)
+    .sort((a, b) => b.ms - a.ms)
+  return {
+    since: new Date(sinceMs).toISOString(),
+    runs: inWindow.slice(0, cap).map(({ run }) => ({
+      started_at: run.started_at,
+      agent: typeof run.agent === 'string' ? run.agent : null
+    })),
+    complete: inWindow.length <= cap
+  }
+}
+
 // --- the handler --------------------------------------------------------------------------
 
 export default async function handler(request, response) {
@@ -1077,6 +1154,9 @@ export default async function handler(request, response) {
       present: body !== null,
       missing: fillMarkers(body)
     }))
+    // Only the name leaves this file. The body itself is never put in the payload - see
+    // ownerNameFrom for why that matters more here than anywhere else on the board.
+    const ownerName = ownerNameFrom(Object.fromEntries(brainFiles)['shared/about-me.md'])
 
     const known = {}
     if (agents.length) known.agents = agents.map((agent) => agent.slug)
@@ -1165,8 +1245,10 @@ export default async function handler(request, response) {
     response.status(200).json({
       repo: { owner, repo, branch, url: `https://github.com/${owner}/${repo}` },
       agents: agents.sort((a, b) => a.slug.localeCompare(b.slug)),
+      owner: ownerName ? { name: ownerName } : null,
       runs: runs.slice(0, MAX_RUNS_RETURNED),
       totalRuns: runs.length,
+      activity: shapeActivity(runs, now),
       unparseableRuns: unparseable,
       overnight: runsSince(runs, undefined, now).slice(0, MAX_RUNS_RETURNED),
       goneQuiet: shapeGoneQuiet(agents, workflows),
