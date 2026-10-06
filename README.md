@@ -121,10 +121,41 @@ why **Make it** is missing.
 - **Cost:** about 1 to 2 cents a picture with the default model (`gpt-image-1-mini`, medium quality),
   per [OpenAI's price page](https://developers.openai.com/api/docs/guides/image-generation). It is
   charged to your OpenAI account
-- **Daily caps:** at most 10 pictures from words and 25 changes of any kind a day (names, uploads,
-  resets). The counts start again at **midnight UTC**. Raise or lower them with `GENERATE_DAILY_CAP`
-  and `WRITE_DAILY_CAP`; `0` switches that kind of change off
+- **Daily caps:** at most 10 pictures from words and 20 changes of any kind a day (names, uploads,
+  resets). The counts start again at **midnight UTC**. You can lower them with `GENERATE_DAILY_CAP`
+  and `WRITE_DAILY_CAP` (`0` switches that kind of change off). You can only raise them a little:
+  they are held under the picture store's monthly limit, below
 - **What leaves the board:** only the description you typed and your art style, sent to OpenAI
+
+### The picture store's free limit, and why the caps are where they are
+
+The picture store is Vercel Blob. On Vercel's free **Hobby** plan it includes, each month
+([Vercel Blob pricing](https://vercel.com/docs/vercel-blob/usage-and-pricing), checked 6 October 2026):
+
+| | Hobby includes | What uses it on this board |
+|---|---|---|
+| **Advanced operations** | **2,000** a month | Every write: a name, the style, a picture. Browsing the store in Vercel's dashboard counts too |
+| **Simple operations** | **10,000** a month | A read the cache could not answer |
+
+**Go over either one and Vercel locks the store for 30 days.** Vercel's words: you "will not be able to
+access Vercel Blob" until 30 days have passed. Personalising then switches off and the board shows its
+built-in pictures and slugs. Nothing else breaks.
+
+So the board keeps to a budget of **55 writes a day** at most - 1,705 in the longest month - and leaves
+the rest of the 2,000 for retries and for you looking at the store in Vercel:
+
+- A change costs at most **2 writes** (an upload is the picture plus the settings file). A picture
+  from words costs **1** (the write that counts it); storing it is then a change
+- The rule is `2 × WRITE_DAILY_CAP + GENERATE_DAILY_CAP ≤ 55`. Ask for more and the board uses less:
+  changes first, up to 27 a day, and pictures from words get whatever is left
+- The defaults, 20 changes and 10 pictures from words, are 50 a day
+- The Blob library retries a failed write up to 10 times on its own, and a retry can count. Set
+  `VERCEL_BLOB_RETRIES=2` in Vercel to keep that small
+- **Showing the board reads the cached copy, which is free.** So a change made on one screen can take
+  up to a minute to show on another (the screen that made it shows it at once). The cached copy is
+  refreshed at most about once a minute while someone is looking, and each refresh is one simple
+  operation. An open board (`PUBLIC_DASHBOARD=true`) that strangers load nonstop, all month, could
+  still use the 10,000 that way - keep a board closed with `VIEW_KEY` if that worries you
 
 ### Who can change things
 
@@ -189,8 +220,9 @@ has no evidence for.
 | `OPENAI_API_KEY` | Your OpenAI key, for **Make it** - the same one the voice assistant uses | For pictures from words |
 | `OPENAI_IMAGE_MODEL` | The image model. Leave unset for `gpt-image-1-mini` | No |
 | `EDIT_KEY` | A password for changing names and pictures, sent as `x-edit-key`. **Required if `PUBLIC_DASHBOARD=true`** | If public |
-| `WRITE_DAILY_CAP` | Changes a day (names, uploads, resets). Default `25` | No |
-| `GENERATE_DAILY_CAP` | Pictures from words a day. Default `10` | No |
+| `WRITE_DAILY_CAP` | Changes a day (names, uploads, resets). Default `20`, at most `27`. Held under [the store's free limit](#the-picture-stores-free-limit-and-why-the-caps-are-where-they-are) | No |
+| `GENERATE_DAILY_CAP` | Pictures from words a day. Default `10`. Gets whatever the changes leave of the same limit | No |
+| `VERCEL_BLOB_RETRIES` | How often the Blob library retries a failed write. Its own default is `10`; set `2`, because a retry can count against the store's free limit | Recommended |
 
 **Redeploy after changing any of these.** Vercel does not apply env vars to a running deployment.
 
@@ -224,7 +256,7 @@ Locally:
 npm test
 ```
 
-831 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+833 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -248,7 +280,7 @@ used only when you connect a picture store.
 | The board looks empty but the repo is fine | Check the branch. `GITHUB_BRANCH` defaults to `main` |
 | **Make it yours** says personalising is off, after you made a store | You did not redeploy. A new deployment is the only one that sees the store |
 | "This picture store is public…" | The store was made **Public**, and that cannot be changed. Create a new **Private** store, connect it to this project, disconnect the public one, redeploy |
-| "…all the changes it allows today" or "…all the pictures it allows today" | The daily cap is reached. It starts again at midnight UTC, or raise `WRITE_DAILY_CAP` / `GENERATE_DAILY_CAP` and redeploy |
+| "…all the changes it allows today" or "…all the pictures from words it allows today" | The daily cap is reached, and it starts again at midnight UTC. Raising it is not the fix: the caps keep the picture store under [Vercel's free limit](#the-picture-stores-free-limit-and-why-the-caps-are-where-they-are), and going over that locks the store for 30 days |
 | "OpenAI would not make that picture…" | OpenAI's safety rules refused the description. Describe it differently. Nothing was stored |
 | **Make it** is missing, with a sentence about `OPENAI_API_KEY` | Set `OPENAI_API_KEY` in Vercel and redeploy. Choosing your own picture works without it |
 | An iPhone photo "could not be opened here" | It is a HEIC photo and this browser cannot read those. Save it as a JPEG first (or take a screenshot of it), then choose that |

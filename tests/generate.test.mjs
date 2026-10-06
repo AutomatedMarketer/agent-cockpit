@@ -178,7 +178,8 @@ test('at the daily cap it is refused before OpenAI is called', async (t) => {
   assert.equal((await generate(PORTRAIT)).statusCode, 200)
   const refused = await generate(PORTRAIT)
   assert.equal(refused.statusCode, 429)
-  assert.match(refused.body.error, /GENERATE_DAILY_CAP/)
+  assert.match(refused.body.error, /tomorrow/)
+  assert.doesNotMatch(refused.body.error, /raise|GENERATE_DAILY_CAP/i, 'the owner is told to raise the cap')
   assert.equal(calls.length, 1, 'the cap must stop the spend, not count it afterwards')
 })
 

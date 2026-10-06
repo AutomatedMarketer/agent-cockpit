@@ -87,7 +87,7 @@ test('a connected, empty store reads as the defaults, with the full day\'s allow
     defaultArtStyle: DEFAULT_ART_STYLE,
     names: {},
     pictures: {},
-    left: { writes: 25, generated: 10 }
+    left: { writes: 20, generated: 10 }
   })
   assert.equal(fake.calls.get.length, 1, 'a page load is one read of settings.json')
   assert.equal(fake.calls.put.length, 0, 'reading never writes')
@@ -137,7 +137,7 @@ test('the daily caps come from the environment, and a nonsense value keeps the d
   const set = await board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: '7', GENERATE_DAILY_CAP: '3' } }).get()
   assert.deepEqual(set.body.left, { writes: 7, generated: 3 })
   const nonsense = await board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: 'lots', GENERATE_DAILY_CAP: '-1' } }).get()
-  assert.deepEqual(nonsense.body.left, { writes: 25, generated: 10 })
+  assert.deepEqual(nonsense.body.left, { writes: 20, generated: 10 })
 })
 
 test('GET is behind the view key', async () => {
@@ -277,7 +277,11 @@ test('changes stop at the daily cap with a sentence, and nothing is written past
   const refused = await post({ change: 'name', slug: 'email', value: 'Three' })
   assert.equal(refused.statusCode, 429)
   assert.match(refused.body.error, /tomorrow/)
-  assert.match(refused.body.error, /WRITE_DAILY_CAP/, 'the owner is told which setting raises it')
+  // Raising the cap used to be the advice. Past the budget that is the advice that locks the store,
+  // so the sentence says why the limit is there instead.
+  assert.match(refused.body.error, /Vercel/, 'the sentence does not say whose allowance the limit protects')
+  assert.match(refused.body.error, /30 days/, 'the sentence does not say what passing it costs')
+  assert.doesNotMatch(refused.body.error, /raise|WRITE_DAILY_CAP/i, 'the owner is told to raise the cap')
   assert.equal(fake.calls.put.length, puts, 'a refused change wrote nothing')
   assert.equal((await readSettings(fake)).names.email, undefined)
 })

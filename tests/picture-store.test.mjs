@@ -10,6 +10,8 @@ import {
   pictureStore,
   storeFailure,
   emptySettings,
+  dailyCaps,
+  ADVANCED_OPS_PER_DAY,
   SETTINGS_PATH,
   NOT_CONNECTED
 } from '../api/_picture-store.js'
@@ -409,4 +411,28 @@ test('a store failure during a real operation arrives as that sentence', async (
     assert.ok(!/Vercel Blob/.test(error.message))
     return true
   })
+})
+
+/* ---------- the month's budget ---------- */
+
+test('however the daily caps are set, a day\'s worst case stays inside the budget', () => {
+  // Hobby includes 2,000 advanced operations a month and locks the store for 30 days past them
+  // (vercel.com/docs/vercel-blob/usage-and-pricing). A change costs at most two puts and a picture
+  // from words one, so 2 x changes + pictures must stay at or under 55 a day: 1,705 in a 31-day
+  // month, with the rest kept for retries and the owner browsing the store in Vercel.
+  assert.ok(ADVANCED_OPS_PER_DAY * 31 <= 1705, 'the daily budget leaves no margin under 2,000 a month')
+  assert.deepEqual(dailyCaps({}), { writes: 20, generated: 10 }, 'the defaults moved')
+  const asked = [undefined, '', 'lots', '-1', '0', '1', '2', '10', '20', '25', '27', '28', '50', '55', '56', '1000', '99999999']
+  for (const writes of asked) {
+    for (const generated of asked) {
+      const caps = dailyCaps({ WRITE_DAILY_CAP: writes, GENERATE_DAILY_CAP: generated })
+      const label = `WRITE_DAILY_CAP=${writes} GENERATE_DAILY_CAP=${generated}`
+      const day = 2 * caps.writes + caps.generated
+      assert.ok(day <= ADVANCED_OPS_PER_DAY, `${label} allows ${day} writes a day`)
+      if (/^\d+$/.test(writes ?? '')) assert.ok(caps.writes <= Number(writes), `${label} raised the changes past what was asked`)
+      if (/^\d+$/.test(generated ?? '')) assert.ok(caps.generated <= Number(generated), `${label} raised the pictures past what was asked`)
+    }
+  }
+  assert.deepEqual(dailyCaps({ WRITE_DAILY_CAP: '7', GENERATE_DAILY_CAP: '3' }), { writes: 7, generated: 3 }, 'a cap inside the budget was changed')
+  assert.deepEqual(dailyCaps({ WRITE_DAILY_CAP: '0', GENERATE_DAILY_CAP: '0' }), { writes: 0, generated: 0 }, '0 still switches a kind off')
 })

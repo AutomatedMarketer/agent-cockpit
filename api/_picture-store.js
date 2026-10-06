@@ -178,35 +178,67 @@ export function failureAnswer(error) {
   return { status: 500, error: 'Something went wrong on the board\'s side, so try again in a minute.' }
 }
 
-// --- the daily caps ----------------------------------------------------------------------
-// Every change costs one or two of the store's "advanced operations" (2,000 a month on Hobby,
-// and going over locks the store for 30 days), and every made picture costs the owner OpenAI
-// money. So both are capped per day, counted inside settings.json - the file every change
-// writes anyway, so counting costs no extra operation.
+// --- the daily caps, and the month's budget they come from ---------------------------------
+// Vercel Blob on Hobby includes 2,000 advanced operations a month (every put, copy and list) and
+// 10,000 simple ones (a read that misses the cache), and past either one "you will not be able to
+// access Vercel Blob" until 30 days have passed (vercel.com/docs/vercel-blob/usage-and-pricing,
+// checked 2026-10-06). del() is free. Every made picture also costs the owner OpenAI money. So
+// changes and pictures from words are capped per day, counted inside settings.json - the file
+// every change writes anyway, so counting costs no extra operation.
+//
+// THE BUDGET, in puts a day, at worst:
+//   a change (upload, rename, style, assistant, reset)   2 puts - an upload is settings.json plus
+//                                                          the picture; the others are 1, but the
+//                                                          cap cannot know which is coming
+//   a picture from words                                  1 put  - the save that counts it (storing
+//                                                          the picture is then an upload)
+//
+//   2 x WRITE_DAILY_CAP + GENERATE_DAILY_CAP <= ADVANCED_OPS_PER_DAY = 55
+//
+// 55 a day is 1,705 in a 31-day month, which keeps 295 of the 2,000 for what no cap can see: a
+// save that collides with one from another instance, the SDK retrying a failed put (up to
+// VERCEL_BLOB_RETRIES times, 10 unless set), a slot pointed back after a failed upload, and the
+// owner browsing the store in Vercel's dashboard, which Vercel counts too. The defaults, 20 and
+// 10, are 50 a day. Asked for more, the caps are clamped (dailyCaps, below), never trusted: so
+// raising a cap is never the advice, because past the budget it is the advice that locks the store.
 //
 // The day is the UTC day: the count starts again at midnight UTC. The server cannot know which
 // timezone the owner lives in, Vercel's servers run in UTC anyway, and one fixed boundary is one
 // the sentence below and the README can state plainly.
 
-const DEFAULT_CAPS = { writes: 25, generated: 10 }
+export const ADVANCED_OPS_PER_DAY = 55
+const PUTS_PER_CHANGE = 2
+const PUTS_PER_PICTURE_MADE = 1
+const DEFAULT_CAPS = { writes: 20, generated: 10 }
+
+const WHY_THE_LIMIT =
+  'the limit keeps the picture store inside Vercel\'s free monthly allowance, which locks the ' +
+  'store for 30 days if it is passed'
 
 const CAP_SENTENCES = {
   writes:
     'This board has made all the changes it allows today, so try again tomorrow (the count ' +
-    'starts again at midnight UTC), or raise WRITE_DAILY_CAP in Vercel and redeploy.',
+    `starts again at midnight UTC): ${WHY_THE_LIMIT}.`,
   generated:
-    'This board has made all the pictures it allows today, so try again tomorrow (the count ' +
-    'starts again at midnight UTC), or raise GENERATE_DAILY_CAP in Vercel and redeploy.'
+    'This board has made all the pictures from words it allows today, so try again tomorrow ' +
+    '(the count starts again at midnight UTC).'
 }
 
 // A whole number, zero or more; anything else keeps the default rather than guessing. Zero is a
-// real choice: it turns that kind of change off.
+// real choice: it turns that kind of change off. Then clamped to the budget above: changes first,
+// to as many as fit on their own (27), and pictures from words to whatever the changes leave -
+// a made picture is no use without a change to store it with.
 export function dailyCaps(env = process.env) {
   const read = (value, fallback) => (/^\d+$/.test(String(value ?? '').trim()) ? Number(value) : fallback)
-  return {
-    writes: read(env.WRITE_DAILY_CAP, DEFAULT_CAPS.writes),
-    generated: read(env.GENERATE_DAILY_CAP, DEFAULT_CAPS.generated)
-  }
+  const writes = Math.min(
+    read(env.WRITE_DAILY_CAP, DEFAULT_CAPS.writes),
+    Math.floor(ADVANCED_OPS_PER_DAY / PUTS_PER_CHANGE)
+  )
+  const generated = Math.min(
+    read(env.GENERATE_DAILY_CAP, DEFAULT_CAPS.generated),
+    Math.floor((ADVANCED_OPS_PER_DAY - writes * PUTS_PER_CHANGE) / PUTS_PER_PICTURE_MADE)
+  )
+  return { writes, generated }
 }
 
 export const usageDay = (date) => date.toISOString().slice(0, 10)

@@ -8,7 +8,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { makeHandler } from '../api/upload.js'
-import { NOT_CONNECTED, SETTINGS_PATH, pictureStore } from '../api/_picture-store.js'
+import { makeHandler as makeGenerate } from '../api/generate.js'
+import { makeHandler as makeBrand } from '../api/brand.js'
+import { NOT_CONNECTED, SETTINGS_PATH, ADVANCED_OPS_PER_DAY, pictureStore } from '../api/_picture-store.js'
 import { PICTURE_BUDGET } from '../api/lib.js'
 import { BlobServiceNotAvailable, fakeBlob } from './helpers/fake-blob.mjs'
 import {
@@ -48,7 +50,7 @@ test('a portrait is stored under a version the server made, and settings.json po
   assert.match(v, VERSION)
   assert.equal(type, 'image/webp')
   assert.equal(response.body.slot, 'agent-content')
-  assert.deepEqual(response.body.left, { writes: 24, generated: 10 })
+  assert.deepEqual(response.body.left, { writes: 19, generated: 10 })
 
   const path = `agent-cockpit/art/agent-content/${v}.webp`
   assert.deepEqual(fake.files.get(path).bytes, bytes, 'the bytes stored are the bytes sent')
@@ -155,7 +157,7 @@ test('at the daily cap an upload is refused before the picture is stored', async
   assert.equal((await upload('team', webp())).statusCode, 200)
   const refused = await upload('today', webp())
   assert.equal(refused.statusCode, 429)
-  assert.match(refused.body.error, /WRITE_DAILY_CAP/)
+  assert.match(refused.body.error, /tomorrow/)
   assert.equal(picturePuts(fake).length, 1, 'a refused upload still spent an advanced operation on the picture')
   assert.equal(settingsOf(fake).pictures.today, undefined)
 })
@@ -251,6 +253,27 @@ test('a burst of uploads to one instance spends no writes on settings saves that
   assert.equal(results.filter((result) => result.statusCode === 200).length, 25)
   assert.ok(results.every((result) => [200, 429].includes(result.statusCode)), 'an upload failed some other way')
   assert.equal(fake.calls.put.length, 50, 'writes were spent on saves that collided')
+})
+
+test('a whole day of everything, with the caps set as high as they go, asks the store for at most 55 writes', async (t) => {
+  // The budget is counted in puts, so it is proved in puts: pictures from words until refused,
+  // then uploads until refused, then renames until refused - every put the store was asked for.
+  const env = { ...STORE_ENV, OPENAI_API_KEY: 'sk-test', WRITE_DAILY_CAP: '1000', GENERATE_DAILY_CAP: '1000' }
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: [{ b64_json: webp(500).toString('base64') }] }), { status: 200 })
+  t.after(() => { globalThis.fetch = realFetch })
+  const { fake, store } = connectedStore(env)
+  const generate = makeGenerate({ store, env, now: NOON })
+  const upload = makeHandler({ store, env, now: NOON })
+  const brand = makeBrand({ store, env, now: NOON })
+  const json = asTheBoard({ 'content-type': 'application/json' })
+  const until = async (send) => {
+    for (let i = 0; i < 1000; i += 1) if ((await send(i)).statusCode !== 200) return
+  }
+  await until(() => call(generate, { method: 'POST', headers: json, body: { slot: 'today', description: 'a harbour' } }))
+  await until(() => call(upload, { method: 'POST', headers: asTheBoard(BYTES), query: { slot: 'today' }, body: webp(500) }))
+  await until((i) => call(brand, { method: 'POST', headers: json, body: { change: 'name', slug: 'content', value: `Penny ${i}` } }))
+  assert.ok(fake.calls.put.length <= ADVANCED_OPS_PER_DAY, `one day asked the store for ${fake.calls.put.length} writes`)
 })
 
 /* ---------- the body, however it arrives ---------- */
