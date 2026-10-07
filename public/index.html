@@ -1047,8 +1047,9 @@
   .meter-none { color: var(--muted); font-weight: 400; }
   .meter-label { font-size: .75rem; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
   .meter-reset { font-size: .6875rem; line-height: 1.3; color: var(--muted); }
-  /* "Fri 7:03 PM" is one thing: it moves to its own line whole rather than leaving "PM" alone. */
-  .meter-when { white-space: nowrap; }
+  /* "Fri 7:03 PM" is one thing, and always on its own line under "Resets". Left inline, it sat beside
+     "Resets" in a wide column and under it in a narrow one, so two cards read differently. */
+  .meter-when { display: block; white-space: nowrap; }
   .card > .plan-missing, .card > .plan-foot, .card > .plan-stale, .card > .plan-estimate { margin: 0; }
   .plan-missing { font-size: .875rem; }
   .plan-foot { font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }

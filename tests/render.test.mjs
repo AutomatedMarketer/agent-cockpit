@@ -5159,6 +5159,15 @@ test('every class Plan limits puts in the markup is one the stylesheet styles', 
   }
 })
 
+// Whether "Resets Fri 7:03 PM" fit on one line depended on how wide the ring's column happened to be,
+// so one card read "Resets Fri 7:03 PM" and the next "Resets" over "Sun 9:03 PM". The time always
+// takes its own line, whole, so every meter reads the same at every width.
+test('every meter puts its reset time on its own line, never split', () => {
+  const when = Object.assign({}, ...exactRules('.meter-when').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.equal(when.display, 'block', 'the reset time sits beside "Resets" when there is room and under it when not')
+  assert.equal(when['white-space'], 'nowrap', '"Fri 7:03 PM" can be split across lines')
+})
+
 test('the meters wrap on a phone rather than taking the page sideways', () => {
   const meters = Object.assign({}, ...exactRules('.meters').filter((rule) => !rule.inMedia).map(valuesIn))
   assert.match(meters['grid-template-columns'] ?? '', /auto-fill/, 'three rings in a row that cannot wrap push a phone sideways')
