@@ -183,6 +183,234 @@ export function shapeSnapshot(source, now = Date.now()) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Usage meters: how much of each plan is used, read from the files the collector commits.
+//
+// Like the routines snapshot, this is a reading with a moment attached, never a live number: the
+// board cannot reach anybody's Claude or Codex account, and must not try. A collector on the
+// owner's always-on computer writes .agent-team/status/usage/<computer>.json, and the rules below
+// are shapeSnapshot's - missing, corrupt, undated, future and stale each say so - with eight hours
+// for stale, because the collector runs every three and two missed runs is worth a sentence.
+//
+// The collector has its own fail-closed gate. This board does not lean on it. The file reaches here
+// through a repo anybody with push access can edit, and this payload goes to a browser on a board
+// that can be public, so every key, number and name is checked again here and the output is BUILT
+// from the keys the board knows rather than copied and pruned. An unknown key cannot leak, because
+// nothing ever reads it.
+//
+// KEEP IN SYNC with scripts/lib/status/schema.mjs in agent-team-template. Mirrored by hand, not
+// imported, for the same reason as the arming rules: there is no import path between a student's
+// repo and a deployed app. tests/fixtures/usage-parity.json is the shared contract, the same bytes
+// in both repos, and tests/usage.test.mjs holds these constants to it.
+export const USAGE_SCHEMA = 'agent-status/usage/v1'
+export const USAGE_FOLDER = '.agent-team/status/usage'
+export const USAGE_COMPUTER_SLUG = /^[a-z0-9-]{1,32}$/
+export const USAGE_STALE_AFTER_HOURS = 8
+export const USAGE_MAX_FILES = 5
+export const USAGE_MAX_STRING = 60
+export const USAGE_STATUSES = ['found', 'not found', 'unavailable']
+export const USAGE_SOURCES = ['unofficial-live', 'claude-code-saved', 'codex-session-log']
+export const USAGE_WINDOWS = {
+  five_hour: '5-hour',
+  weekly_all: 'Weekly',
+  weekly_model: 'Weekly, {model} only',
+  weekly: 'Weekly'
+}
+const USAGE_SERVICES = ['claude', 'codex']
+// More windows than any plan has ever had is a file that is not what it says it is.
+const USAGE_MAX_WINDOWS = 6
+const USAGE_ESTIMATE_DAYS = 7
+const USAGE_MAX_COUNT = 1e7
+const UNKNOWN_SHAPE = 'The reading is not in a shape this board knows.'
+
+export function isUsageFile(path) {
+  const prefix = `${USAGE_FOLDER}/`
+  if (typeof path !== 'string' || !path.startsWith(prefix) || !path.endsWith('.json')) return false
+  return USAGE_COMPUTER_SLUG.test(path.slice(prefix.length, -'.json'.length))
+}
+
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+
+// A name the board will print: a computer, a plan, a model, or the collector's one-line reason.
+// The same refusals as the collector's gate - an @, a slash either way, a JWT's opening, an API
+// key's prefix, a Bearer header - and two it cannot make on the collector's behalf, because the
+// board does not know the owner's username or hostname: a uuid, and any unbroken run long enough to
+// be a token. Anything that fails is NOT a name, and comes back as no name.
+const NAME_CHARACTERS = /^[\p{L}\p{N} .,'’()+&:_-]+$/u
+const NOT_A_NAME = /@|\/|\\|eyJ|sk-|bearer|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}|\S{24,}/i
+export function cleanUsageName(value) {
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  if (!text || text.length > USAGE_MAX_STRING) return null
+  if (!NAME_CHARACTERS.test(text) || NOT_A_NAME.test(text)) return null
+  return text
+}
+
+// A moment written the way the collector writes them, and only that way. Date.parse alone accepts
+// "7 Oct", which is not a time anybody can be held to.
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/
+const isoMs = (value) => (typeof value === 'string' && ISO_TIME.test(value) ? Date.parse(value) : NaN)
+
+const isPercent = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1000
+const isCount = (value) => Number.isInteger(value) && value >= 0 && value <= USAGE_MAX_COUNT
+
+function usagePlan(raw) {
+  if (isPlainObject(raw) && raw.status === 'found') {
+    const name = cleanUsageName(raw.name)
+    return name ? { status: 'found', name } : { status: 'unavailable', name: null }
+  }
+  if (!isPlainObject(raw) || raw.status === 'not found' || raw.status === undefined) return { status: 'not found', name: null }
+  return { status: 'unavailable', name: null }
+}
+
+// One shape for "no reading", so the page never has to guess whether windows exists.
+const noLimits = (status, why = null) => ({ status, source: null, readAt: null, why, windows: [] })
+
+// A reading is shown whole or not at all. One window the board cannot read means the file is not
+// what the board thinks it is, and showing the other two would present a partial answer as the
+// whole one - the collector refuses a partial reading for the same reason.
+function usageLimits(raw, now) {
+  if (!isPlainObject(raw) || raw.status === 'not found' || raw.status === undefined) return noLimits('not found')
+  if (raw.status === 'unavailable') return noLimits('unavailable', cleanUsageName(raw.why))
+  if (raw.status !== 'found') return noLimits('unavailable', UNKNOWN_SHAPE)
+  if (!USAGE_SOURCES.includes(raw.source)) return noLimits('unavailable', UNKNOWN_SHAPE)
+  const given = raw.windows
+  if (!Array.isArray(given) || !given.length || given.length > USAGE_MAX_WINDOWS) return noLimits('unavailable', UNKNOWN_SHAPE)
+
+  const windows = []
+  for (const window of given) {
+    if (!isPlainObject(window) || !Object.hasOwn(USAGE_WINDOWS, window.kind)) return noLimits('unavailable', UNKNOWN_SHAPE)
+    const resetMs = isoMs(window.resetsAt)
+    if (!isPercent(window.usedPercent) || !Number.isFinite(resetMs)) return noLimits('unavailable', UNKNOWN_SHAPE)
+    // A model name that is not plainly a name costs the name, not the reading around it.
+    const model = window.kind === 'weekly_model' ? cleanUsageName(window.model) : null
+    const label = window.kind === 'weekly_model'
+      ? USAGE_WINDOWS.weekly_model.replace('{model}', model ?? 'one model')
+      : USAGE_WINDOWS[window.kind]
+    // Past its reset, the percentage describes a window that has closed. Today's figure is unknown
+    // until the next reading, and saying 49% of a week that already ended is the worse answer.
+    const resetSinceReading = resetMs <= now
+    windows.push({
+      kind: window.kind,
+      label,
+      usedPercent: resetSinceReading ? null : window.usedPercent,
+      resetsAt: new Date(resetMs).toISOString(),
+      resetSinceReading
+    })
+  }
+  const readMs = isoMs(raw.readAt)
+  return {
+    status: 'found',
+    source: raw.source,
+    readAt: Number.isFinite(readMs) ? new Date(readMs).toISOString() : null,
+    why: null,
+    windows
+  }
+}
+
+// Claude Code's own logs, counted on the owner's computer. Only ever an estimate, and only ever a
+// count - never a percentage, because the logs say what was done, not what the plan allows. The
+// week is the seven days up to the reading; the collector keeps fifteen so a timezone cannot cut
+// one short, and the older ones are not this week's.
+function usageActivity(raw, takenMs) {
+  if (!isPlainObject(raw) || raw.status === 'not found' || raw.status === undefined) return { status: 'not found' }
+  if (raw.status !== 'found' || raw.estimate !== true || !Array.isArray(raw.days) || raw.days.length > 31) {
+    return { status: 'unavailable' }
+  }
+  const since = new Date(takenMs - USAGE_ESTIMATE_DAYS * 86400_000).toISOString().slice(0, 10)
+  let replies = 0
+  let sessions = 0
+  let days = 0
+  for (const day of raw.days) {
+    if (!isPlainObject(day) || typeof day.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day.day)) return { status: 'unavailable' }
+    if (!isCount(day.replies) || !isCount(day.sessions)) return { status: 'unavailable' }
+    if (day.day <= since) continue
+    replies += day.replies
+    sessions += day.sessions
+    days += 1
+  }
+  return { status: 'found', estimate: true, days, replies, sessions }
+}
+
+// One file, judged on its own. Every `why` is a finished sentence, for the reason shapeSnapshot
+// gives: it is printed straight after a bold sentence.
+function readUsageFile(body, now) {
+  let parsed
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return { usable: false, why: 'A usage file could not be read.' }
+  }
+  if (!isPlainObject(parsed)) return { usable: false, why: 'A usage file could not be read.' }
+  if (parsed.schema !== USAGE_SCHEMA) {
+    return { usable: false, why: 'A usage file was written in a format this board does not know.' }
+  }
+  const takenMs = isoMs(parsed.takenAt)
+  if (!Number.isFinite(takenMs)) return { usable: false, why: 'A usage file does not say when it was taken.' }
+  const ageHours = (now - takenMs) / 3600_000
+  // A stamp in the future is wrong, not fresh - see shapeSnapshot.
+  if (ageHours < 0) return { usable: false, why: 'A usage file is stamped in the future, so its age cannot be trusted.' }
+
+  const reading = {
+    usable: true,
+    takenMs,
+    takenAt: new Date(takenMs).toISOString(),
+    ageHours,
+    stale: ageHours > USAGE_STALE_AFTER_HOURS,
+    computer: cleanUsageName(parsed.computer)
+  }
+  for (const service of USAGE_SERVICES) {
+    const raw = isPlainObject(parsed[service]) ? parsed[service] : {}
+    reading[service] = {
+      plan: usagePlan(raw.plan),
+      limits: usageLimits(raw.limits, now),
+      ...(service === 'claude' ? { activity: usageActivity(raw.activity, takenMs) } : {})
+    }
+  }
+  return reading
+}
+
+// The freshest FOUND reading wins, and names the computer it came from. A newer file that could not
+// read the meter does not hide an older one that could - the older one shows, with its age. With no
+// reading anywhere, the freshest file says why.
+function pickService(readings, service) {
+  const newestFirst = [...readings].sort((a, b) => b.takenMs - a.takenMs)
+  const chosen = newestFirst.find((reading) => reading[service].limits.status === 'found') ?? newestFirst[0]
+  return {
+    computer: chosen.computer,
+    takenAt: chosen.takenAt,
+    ageHours: chosen.ageHours,
+    stale: chosen.stale,
+    ...chosen[service]
+  }
+}
+
+// `found` is how many usage files the tree holds. Only the first five, in name order, are read: a
+// file per computer, and nobody has more than five always-on computers - the rest are counted so the
+// page can say some were left out rather than dropping them without a word.
+export function shapeUsage(files, now = Date.now(), found = null) {
+  const given = Array.isArray(files) ? files : []
+  const total = Math.max(found ?? 0, given.length)
+  const toRead = [...given].sort((a, b) => String(a[0]).localeCompare(String(b[0]))).slice(0, USAGE_MAX_FILES)
+  const shaped = toRead.map(([, body]) => readUsageFile(body, now))
+  const readings = shaped.filter((reading) => reading.usable)
+  const base = { read: toRead.length, skipped: total - toRead.length, unreadable: shaped.length - readings.length }
+
+  if (!toRead.length) {
+    return { status: 'none', why: 'No usage reading has been taken yet.', ...base, claude: null, codex: null }
+  }
+  if (!readings.length) {
+    return { status: 'unusable', why: shaped[0].why, ...base, claude: null, codex: null }
+  }
+  return {
+    status: 'ok',
+    why: null,
+    ...base,
+    claude: pickService(readings, 'claude'),
+    codex: pickService(readings, 'codex')
+  }
+}
+
 export function routineFor(workflow, routines) {
   const wanted = routineNameKey(workflow?.name) || routineNameKey(workflow?.slug)
   if (!wanted) return null
@@ -1101,8 +1329,11 @@ export default async function handler(request, response) {
     const hasRoutineSnapshot = paths.includes(ROUTINE_SNAPSHOT)
     const ONBOARDING_STATE = '.agent-team/onboarding-state.md'
     const hasOnboarding = paths.includes(ONBOARDING_STATE)
+    // One file per computer. Only the first five are fetched - shapeUsage counts the rest, so the
+    // page can say some were left out.
+    const usagePaths = paths.filter((path) => isUsageFile(path)).sort()
 
-    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource] =
+    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
@@ -1118,7 +1349,8 @@ export default async function handler(request, response) {
         hasStack ? rawFile(settings, 'stack.yml') : null,
         hasLedger ? rawFile(settings, 'ledger.yml') : null,
         hasProposals ? rawFile(settings, 'proposals.yml') : null,
-        hasRoutineSnapshot ? rawFile(settings, ROUTINE_SNAPSHOT) : null
+        hasRoutineSnapshot ? rawFile(settings, ROUTINE_SNAPSHOT) : null,
+        Promise.all(usagePaths.slice(0, USAGE_MAX_FILES).map(async (path) => [path, await rawFile(settings, path)]))
       ])
 
     const unparseable = []
@@ -1240,6 +1472,9 @@ export default async function handler(request, response) {
 
     const ledger = shapeLedger(ledgerSource)
     const proposals = shapeProposals(proposalsSource)
+    // A file the tree listed and the fetch could not return is not a reading; it is skipped here
+    // rather than parsed as the text "null".
+    const usage = shapeUsage(usageFiles.filter(([, body]) => typeof body === 'string'), now, usagePaths.length)
     const hero = shapeHero(tiles, ledger)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, connections, verdicts: verdictPaths.length, onboarding, now })
 
@@ -1269,6 +1504,7 @@ export default async function handler(request, response) {
       ledger,
       proposals,
       hero,
+      usage,
       routines: {
         takenAt: snapshot.takenAt,
         usable: snapshot.usable,

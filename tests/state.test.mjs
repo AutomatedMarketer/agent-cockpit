@@ -953,3 +953,83 @@ test("each agent carries its own newest runs, even when the feed's fifty are all
   assert.equal(email.recentRuns.length, 5)
   assert.deepEqual(email.recentRuns, body.runs.slice(0, 5), 'the busiest agent\'s newest five differ from the feed\'s')
 })
+
+/* ---------- usage readings reach the payload, and nothing planted in them does ----------------
+   The collector commits .agent-team/status/usage/<computer>.json into the team repo. That file is
+   one push away from anybody with access to the repo, and this payload goes to a browser on a board
+   that can be public. So the board re-checks it itself, and this is the end-to-end proof: a token,
+   an email, a uuid and a home path planted in every field of the file, through the real handler. */
+
+const usageNow = () => new Date().toISOString()
+const usageReading = (planted = null) => ({
+  schema: 'agent-status/usage/v1',
+  takenAt: usageNow(),
+  computer: planted ?? 'Mac Mini',
+  ...(planted ? { [planted]: planted, note: planted } : {}),
+  claude: {
+    plan: { status: 'found', name: planted ?? 'Max 20x', ...(planted ? { email: planted } : {}) },
+    limits: {
+      status: 'found',
+      source: 'unofficial-live',
+      readAt: usageNow(),
+      ...(planted ? { token: planted } : {}),
+      windows: [
+        { kind: 'five_hour', usedPercent: 18, resetsAt: new Date(Date.now() + 3600_000).toISOString() },
+        { kind: 'weekly_model', model: planted ?? 'Fable', usedPercent: 2, resetsAt: new Date(Date.now() + 86400_000).toISOString() }
+      ]
+    },
+    activity: { status: 'unavailable', why: planted ?? 'No logs.' }
+  },
+  codex: { plan: { status: 'not found' }, limits: { status: 'unavailable', why: planted ?? 'No log.' } }
+})
+
+test('a usage reading in the repo reaches the payload, re-checked', async () => {
+  const path = '.agent-team/status/usage/mac-mini.json'
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path }],
+    overrideFiles: { [path]: JSON.stringify(usageReading()) }
+  })
+  assert.equal(body.usage.status, 'ok')
+  assert.equal(body.usage.claude.computer, 'Mac Mini')
+  assert.deepEqual(body.usage.claude.limits.windows.map((window) => window.usedPercent), [18, 2])
+  assert.equal(body.usage.codex.limits.status, 'unavailable')
+})
+
+test('a repo with no usage reading says so in the payload', async () => {
+  const { body } = await run()
+  assert.equal(body.usage.status, 'none')
+  assert.equal(body.usage.claude, null)
+})
+
+test('/api/state never carries a token, email or path planted in a usage file', async () => {
+  const planted = [
+    ['sk', 'ant', 'oat01', 'Zm9vYmFyYmF6cXV4'.repeat(3)].join('-'),
+    'ey' + 'J' + 'hbGciOiJIUzI1NiJ9.' + 'eyJlbWFpbCI6ImZha2UifQ',
+    'fake.person' + '@' + 'example.com',
+    ['5f0c2b1e', '9a7d', '4c3b', '8e21', '0d6f4a9b7c55'].join('-'),
+    'Bear' + 'er ' + 'abc123def456',
+    '/Users/' + 'fakeperson' + '/secret-client'
+  ]
+  for (const value of planted) {
+    const path = '.agent-team/status/usage/mac-mini.json'
+    const { body, statusCode } = await run({}, {
+      extraTree: [{ type: 'blob', path }],
+      overrideFiles: { [path]: JSON.stringify(usageReading(value)) }
+    })
+    assert.equal(statusCode, 200)
+    assert.ok(!JSON.stringify(body).includes(value), `"${value.slice(0, 12)}..." reached /api/state`)
+    // Still read, not thrown away whole: the numbers around the planted values survive.
+    assert.deepEqual(body.usage.claude.limits.windows.map((window) => window.usedPercent), [18, 2])
+  }
+})
+
+test('only five usage files are fetched, whatever the tree holds', async () => {
+  const slugs = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+  const paths = slugs.map((slug) => `.agent-team/status/usage/${slug}.json`)
+  const { body } = await run({}, {
+    extraTree: [...paths, '.agent-team/status/usage/Not A Slug.json'].map((path) => ({ type: 'blob', path })),
+    overrideFiles: Object.fromEntries(paths.map((path) => [path, JSON.stringify(usageReading())]))
+  })
+  assert.equal(body.usage.read, 5)
+  assert.equal(body.usage.skipped, 3, 'the files past five were dropped without a word')
+})
