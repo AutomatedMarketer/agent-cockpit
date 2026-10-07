@@ -411,6 +411,88 @@ export function shapeUsage(files, now = Date.now(), found = null) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// What the owner pays: `subscriptions:` in stack.yml, written by /onboard or by hand, as
+// `{ name, service, price, currency, per }`.
+//
+// One total per currency, never converted - there is no exchange rate the board could honestly
+// use, and a wrong one would be printed as fact. A yearly price counts as a twelfth a month, and the
+// page says so. A line with no usable price is listed and LEFT OUT of the total: counting it as
+// nothing would make the total a claim that it is free. Money is added in cents, so 8.25 and 10.10
+// make 18.35 and not 18.349999999999998.
+//
+// The names are printed on a board that can be public, so they pass the same test as the usage
+// names. A line whose name fails is dropped whole, price and all, and counted - a total made of
+// lines nobody can see is not a total anybody can check.
+const PRICE = /^\d+(?:\.\d{1,2})?$/
+const CURRENCY_CODE = /^[A-Z]{3}$/
+const SERVICE = /^[a-z0-9-]{1,32}$/
+const MAX_PRICE_CENTS = 1e9
+// Which usage meter reads the plan behind a subscription. Codex runs on a ChatGPT plan, so any of
+// the three words names the same account.
+const METER_FOR_SERVICE = { claude: 'claude', anthropic: 'claude', codex: 'codex', chatgpt: 'codex', openai: 'codex' }
+
+function priceCents(value) {
+  const text = typeof value === 'number' && Number.isFinite(value) ? String(value) : typeof value === 'string' ? value.trim() : ''
+  if (!PRICE.test(text)) return null
+  const cents = Math.round(Number(text) * 100)
+  return cents <= MAX_PRICE_CENTS ? cents : null
+}
+
+// The family word is the first word of the plan the collector read - "Max" of "Max 20x", "Pro" of
+// "Pro". A subscription called "Claude Max" is the same family as "Max 5x" or "Max 20x", and the
+// board cannot tell those apart from a name, so it does not try. "Claude Pro" against "Max 20x" is a
+// real disagreement between what the owner wrote and what the account says, and that is flagged.
+const wordsOf = (text) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+
+function planReadFor(service, usage) {
+  const meter = METER_FOR_SERVICE[service]
+  const plan = meter ? usage?.[meter]?.plan : null
+  if (plan?.status !== 'found' || typeof plan.name !== 'string') return null
+  // The collector's word for a tier it could not name. That is not a plan, so nothing to compare.
+  return /^not recognised$/i.test(plan.name) ? null : plan.name
+}
+
+export function shapeSubscriptions(doc, usage = null) {
+  const rows = Array.isArray(doc?.subscriptions) ? doc.subscriptions : []
+  const items = []
+  const totals = new Map()
+  let unreadable = 0
+  for (const row of rows) {
+    const name = isPlainObject(row) ? cleanUsageName(row.name) : null
+    if (!name) {
+      unreadable += 1
+      continue
+    }
+    const serviceText = typeof row.service === 'string' ? row.service.trim().toLowerCase() : ''
+    const service = SERVICE.test(serviceText) ? serviceText : null
+    const cents = priceCents(row.price)
+    const currency = typeof row.currency === 'string' && CURRENCY_CODE.test(row.currency.trim()) ? row.currency.trim() : null
+    const per = row.per === 'month' || row.per === 'year' ? row.per : null
+    const monthlyCents = cents !== null && currency && per ? (per === 'year' ? Math.round(cents / 12) : cents) : null
+    if (monthlyCents !== null) totals.set(currency, (totals.get(currency) ?? 0) + monthlyCents)
+    const planRead = service ? planReadFor(service, usage) : null
+    items.push({
+      name,
+      service,
+      price: cents === null ? null : cents / 100,
+      currency,
+      per,
+      monthly: monthlyCents === null ? null : monthlyCents / 100,
+      planRead,
+      mismatch: planRead !== null && !wordsOf(name).includes(wordsOf(planRead)[0])
+    })
+  }
+  return {
+    items,
+    totals: [...totals.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([currency, cents]) => ({ currency, monthly: cents / 100 })),
+    unpriced: items.filter((item) => item.monthly === null).length,
+    unreadable
+  }
+}
+
 export function routineFor(workflow, routines) {
   const wanted = routineNameKey(workflow?.name) || routineNameKey(workflow?.slug)
   if (!wanted) return null
@@ -1426,7 +1508,9 @@ export default async function handler(request, response) {
 
     const tiles = tilesSource ? parseSimpleYaml(tilesSource) : null
     const skills = shapeSkills(skillFiles, workflows)
-    const stack = shapeStack(stackSource ? parseSimpleYaml(stackSource) : null, paths)
+    // Parsed once: the starter stack and what the owner pays live in the same file.
+    const stackDoc = stackSource ? parseSimpleYaml(stackSource) : null
+    const stack = shapeStack(stackDoc, paths)
     const memory = shapeMemory(paths, sizes)
     const onboarding = parseOnboardingState(onboardingSource)
     const routinesKnown = snapshot.usable && !snapshot.stale
@@ -1475,6 +1559,7 @@ export default async function handler(request, response) {
     // A file the tree listed and the fetch could not return is not a reading; it is skipped here
     // rather than parsed as the text "null".
     const usage = shapeUsage(usageFiles.filter(([, body]) => typeof body === 'string'), now, usagePaths.length)
+    const subscriptions = shapeSubscriptions(stackDoc, usage)
     const hero = shapeHero(tiles, ledger)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, connections, verdicts: verdictPaths.length, onboarding, now })
 
@@ -1505,6 +1590,7 @@ export default async function handler(request, response) {
       proposals,
       hero,
       usage,
+      subscriptions,
       routines: {
         takenAt: snapshot.takenAt,
         usable: snapshot.usable,

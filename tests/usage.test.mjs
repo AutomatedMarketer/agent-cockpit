@@ -11,6 +11,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
   shapeUsage,
+  shapeSubscriptions,
   isUsageFile,
   USAGE_SCHEMA,
   USAGE_FOLDER,
@@ -356,4 +357,113 @@ test('only the keys the board knows come out', () => {
   for (const unwanted of ['hostname', 'username', 'raw', 'anything', 'timezone', 'byModel', 'tokens', 'schema']) {
     assert.ok(!keys.has(unwanted), `${unwanted} came through`)
   }
+})
+
+/* ---------- subscriptions: what the owner says they pay -----------------------------------------
+   Prices come from stack.yml under `subscriptions:`, written by /onboard or by hand. The board
+   never converts between currencies - there is no rate it could honestly use - so it keeps one
+   total per currency. A yearly price is shown as a month and says so. A line with no price is
+   listed and left out of the total, rather than counted as free. */
+
+const subs = (...rows) => ({ subscriptions: rows })
+function usageWithPlans(claude, codex) {
+  const body = reading()
+  body.claude.plan = { status: 'found', name: claude }
+  body.codex.plan = { status: 'found', name: codex }
+  return shapeUsage([file('mac-mini', body)], NOW)
+}
+
+test('no subscriptions recorded is an empty list, not a zero total', () => {
+  for (const doc of [null, {}, { subscriptions: [] }, { subscriptions: {} }, { stack: [] }]) {
+    const shaped = shapeSubscriptions(doc, null)
+    assert.deepEqual(shaped.items, [])
+    assert.deepEqual(shaped.totals, [], 'an empty list came with a total')
+  }
+})
+
+test('monthly prices are added up per currency, never converted', () => {
+  const shaped = shapeSubscriptions(subs(
+    { name: 'Claude Max', service: 'claude', price: 200, currency: 'USD', per: 'month' },
+    { name: 'ChatGPT Pro', service: 'codex', price: 200, currency: 'USD', per: 'month' },
+    { name: 'Perplexity', service: 'perplexity', price: '19.99', currency: 'GBP', per: 'month' }
+  ), null)
+  assert.deepEqual(shaped.totals, [{ currency: 'GBP', monthly: 19.99 }, { currency: 'USD', monthly: 400 }])
+  assert.deepEqual(shaped.items.map((item) => [item.name, item.price, item.currency, item.per, item.monthly]), [
+    ['Claude Max', 200, 'USD', 'month', 200],
+    ['ChatGPT Pro', 200, 'USD', 'month', 200],
+    ['Perplexity', 19.99, 'GBP', 'month', 19.99]
+  ])
+})
+
+test('a yearly price counts as a twelfth a month, to the cent', () => {
+  const shaped = shapeSubscriptions(subs(
+    { name: 'Domain', service: 'other', price: 99, currency: 'USD', per: 'year' },
+    { name: 'Tool', service: 'other', price: '10.10', currency: 'USD', per: 'month' }
+  ), null)
+  const domain = shaped.items[0]
+  assert.equal(domain.per, 'year')
+  assert.equal(domain.price, 99)
+  assert.equal(domain.monthly, 8.25)
+  // In cents, so 8.25 + 10.10 is 18.35 and not 18.349999999999998.
+  assert.deepEqual(shaped.totals, [{ currency: 'USD', monthly: 18.35 }])
+})
+
+test('a line with no usable price is listed, and left out of the total', () => {
+  const shaped = shapeSubscriptions(subs(
+    { name: 'Claude Max', service: 'claude', price: 200, currency: 'USD', per: 'month' },
+    { name: 'No price', service: 'other' },
+    { name: 'Three decimals', price: '1.999', currency: 'USD', per: 'month' },
+    { name: 'Negative', price: -5, currency: 'USD', per: 'month' },
+    { name: 'No currency', price: 10, per: 'month' },
+    { name: 'Lowercase currency', price: 10, currency: 'usd', per: 'month' },
+    { name: 'Weekly', price: 10, currency: 'USD', per: 'week' },
+    { name: 'A fill marker', price: '<!-- fill: price -->', currency: 'USD', per: 'month' }
+  ), null)
+  assert.equal(shaped.items.length, 8, 'a line without a price vanished')
+  assert.deepEqual(shaped.totals, [{ currency: 'USD', monthly: 200 }])
+  assert.equal(shaped.unpriced, 7)
+  for (const item of shaped.items.slice(1)) assert.equal(item.monthly, null, `${item.name} was counted`)
+})
+
+test('a subscription name that is not plainly a name is not printed', () => {
+  const shaped = shapeSubscriptions(subs(
+    { name: FAKE.email, price: 10, currency: 'USD', per: 'month' },
+    { name: `Claude ${FAKE.token}`, price: 10, currency: 'USD', per: 'month' },
+    { name: 'Claude Max', service: FAKE.home, price: 200, currency: 'USD', per: 'month' }
+  ), null)
+  const out = JSON.stringify(shaped)
+  for (const planted of PLANTED) assert.ok(!out.includes(planted), `"${planted.slice(0, 12)}..." reached the payload`)
+  assert.deepEqual(shaped.items.map((item) => item.name), ['Claude Max'])
+  assert.equal(shaped.items[0].service, null)
+  assert.equal(shaped.unreadable, 2, 'the dropped lines were dropped without a word')
+  // Dropped lines carry no price into the total either - a total of lines nobody can see is not one.
+  assert.deepEqual(shaped.totals, [{ currency: 'USD', monthly: 200 }])
+})
+
+test('a subscription the usage reading disagrees with is flagged with the plan it read', () => {
+  const usage = usageWithPlans('Max 20x', 'Plus')
+  const shaped = shapeSubscriptions(subs(
+    { name: 'Claude Pro', service: 'claude', price: 20, currency: 'USD', per: 'month' },
+    { name: 'ChatGPT Pro', service: 'chatgpt', price: 200, currency: 'USD', per: 'month' },
+    { name: 'Perplexity Pro', service: 'perplexity', price: 20, currency: 'USD', per: 'month' }
+  ), usage)
+  assert.deepEqual(shaped.items.map((item) => item.planRead), ['Max 20x', 'Plus', null])
+  assert.deepEqual(shaped.items.map((item) => item.mismatch), [true, true, false])
+})
+
+test('the same plan family is a match, whatever the size after it', () => {
+  const usage = usageWithPlans('Max 20x', 'Pro')
+  const shaped = shapeSubscriptions(subs(
+    { name: 'Claude Max', service: 'claude', price: 200, currency: 'USD', per: 'month' },
+    { name: 'ChatGPT Pro', service: 'openai', price: 200, currency: 'USD', per: 'month' }
+  ), usage)
+  assert.deepEqual(shaped.items.map((item) => item.mismatch), [false, false])
+})
+
+test('no reading of the plan is no mismatch - the board does not guess', () => {
+  const shaped = shapeSubscriptions(subs({ name: 'Claude Pro', service: 'claude', price: 20, currency: 'USD', per: 'month' }), shapeUsage([], NOW))
+  assert.equal(shaped.items[0].mismatch, false)
+  assert.equal(shaped.items[0].planRead, null)
+  const unrecognised = shapeSubscriptions(subs({ name: 'Claude Pro', service: 'claude' }), usageWithPlans('not recognised', 'Pro'))
+  assert.equal(unrecognised.items[0].mismatch, false, 'a tier the collector could not name was called a mismatch')
 })

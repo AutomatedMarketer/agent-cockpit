@@ -1033,3 +1033,18 @@ test('only five usage files are fetched, whatever the tree holds', async () => {
   assert.equal(body.usage.read, 5)
   assert.equal(body.usage.skipped, 3, 'the files past five were dropped without a word')
 })
+
+test('subscriptions from stack.yml reach the payload, totalled per currency', async () => {
+  const stack = 'stack: []\nsubscriptions:\n  - name: Claude Max\n    service: claude\n    price: 200\n    currency: USD\n    per: month\n  - name: Domain\n    service: other\n    price: 24\n    currency: GBP\n    per: year\n'
+  const { body } = await run({}, { overrideFiles: { 'stack.yml': stack } })
+  assert.deepEqual(body.subscriptions.items.map((item) => item.name), ['Claude Max', 'Domain'])
+  assert.deepEqual(body.subscriptions.totals, [{ currency: 'GBP', monthly: 2 }, { currency: 'USD', monthly: 200 }])
+  // The starter stack in the same file is untouched by it.
+  assert.deepEqual(body.stack, [])
+})
+
+test('a stack.yml with no subscriptions gives an empty list', async () => {
+  const { body } = await run()
+  assert.deepEqual(body.subscriptions.items, [])
+  assert.deepEqual(body.subscriptions.totals, [])
+})
