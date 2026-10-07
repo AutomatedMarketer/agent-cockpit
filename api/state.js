@@ -334,19 +334,50 @@ function usageLimits(raw, now, takenMs) {
 // count - never a percentage, because the logs say what was done, not what the plan allows. The
 // week is the seven days up to the reading; the collector keeps a few more so a timezone cannot cut
 // one short, and the older ones are not this week's. More days than the contract allows is refused.
+//
+// The collector writes each day as the owner's LOCAL date, so the week is counted in that calendar
+// too. Counting it in UTC put a reading taken near midnight a day off: in Tokyo at 5 in the morning
+// the UTC date is still yesterday, and the week reached back one day too far.
+const DAY_STRING = /^\d{4}-\d{2}-\d{2}$/
+const TIMEZONE_NAME = /^(?:UTC|[A-Za-z]+(?:\/[A-Za-z0-9_+-]+){1,2})$/
+const shiftDay = (day, by) => new Date(Date.parse(`${day}T00:00:00Z`) + by * 86400_000).toISOString().slice(0, 10)
+
+// The reading's own date where the owner is: from the timezone the collector wrote, when it is one
+// this runtime knows. It is only used here, never passed on to the page.
+function localDayAt(ms, timezone) {
+  if (typeof timezone !== 'string' || timezone.length > USAGE_MAX_STRING || !TIMEZONE_NAME.test(timezone)) return null
+  try {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' })
+      .formatToParts(new Date(ms)).map((part) => [part.type, part.value]))
+    const day = `${parts.year}-${parts.month}-${parts.day}`
+    return DAY_STRING.test(day) ? day : null
+  } catch {
+    return null
+  }
+}
+
 function usageActivity(raw, takenMs) {
   if (!isPlainObject(raw) || raw.status === 'not found' || raw.status === undefined) return { status: 'not found' }
   if (raw.status !== 'found' || raw.estimate !== true || !Array.isArray(raw.days) || raw.days.length > USAGE_MAX_ACTIVITY_DAYS) {
     return { status: 'unavailable' }
   }
-  const since = new Date(takenMs - USAGE_ESTIMATE_DAYS * 86400_000).toISOString().slice(0, 10)
+  for (const day of raw.days) {
+    if (!isPlainObject(day) || typeof day.day !== 'string' || !DAY_STRING.test(day.day)) return { status: 'unavailable' }
+    if (!isCount(day.replies) || !isCount(day.sessions)) return { status: 'unavailable' }
+  }
+  // Without a timezone it can use, the newest day in the file is the reading's today - but only a day
+  // somewhere on Earth could have reached by then, which is within a day of the UTC date. Otherwise
+  // the UTC date stands in.
+  const utcDay = new Date(takenMs).toISOString().slice(0, 10)
+  const newest = raw.days.map((day) => day.day).filter((day) => day >= shiftDay(utcDay, -1) && day <= shiftDay(utcDay, 1)).sort().at(-1)
+  const today = localDayAt(takenMs, raw.timezone) ?? newest ?? utcDay
+  const since = shiftDay(today, -USAGE_ESTIMATE_DAYS)
   let replies = 0
   let sessions = 0
   let days = 0
   for (const day of raw.days) {
-    if (!isPlainObject(day) || typeof day.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day.day)) return { status: 'unavailable' }
-    if (!isCount(day.replies) || !isCount(day.sessions)) return { status: 'unavailable' }
-    if (day.day <= since) continue
+    // Inside the week, and never a day after the reading's own today.
+    if (day.day <= since || day.day > today) continue
     replies += day.replies
     sessions += day.sessions
     days += 1

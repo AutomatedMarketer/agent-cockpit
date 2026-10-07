@@ -308,6 +308,42 @@ test('the estimate counts the last seven days of the reading and carries no perc
   assert.ok(!strings(activity).includes('America/New_York'), 'the timezone was passed on with nothing on the page to use it')
 })
 
+// The collector writes each day as the owner's LOCAL date. "The last 7 days" has to be counted in
+// that same calendar, or a reading taken near midnight is a day off. NOW is 22:00 UTC on 7 October;
+// a reading two hours earlier is 20:00 UTC on the 7th, which in Tokyo is 05:00 on the 8th.
+const estimateOf = (activity, takenAt = hoursBefore(2)) => {
+  const body = reading({ takenAt })
+  body.claude.activity = { status: 'found', estimate: true, ...activity }
+  return shapeUsage([file('mac-mini', body)], NOW).claude.activity
+}
+const day = (date, replies) => ({ day: date, sessions: 1, replies })
+
+test("the estimate's week is counted in the owner's own days, from the timezone the collector wrote", () => {
+  // Tokyo's today is the 8th: the week is the 2nd to the 8th. The 1st is outside it.
+  const tokyo = estimateOf({ timezone: 'Asia/Tokyo', days: [day('2026-10-08', 1), day('2026-10-02', 10), day('2026-10-01', 100)] })
+  assert.equal(tokyo.replies, 11, "the week was counted in UTC days, not the owner's")
+  assert.equal(tokyo.days, 2)
+  // Honolulu's today is the 7th (10:00 there): the week is the 1st to the 7th.
+  const honolulu = estimateOf({ timezone: 'Pacific/Honolulu', days: [day('2026-10-07', 1), day('2026-10-01', 10), day('2026-09-30', 100)] })
+  assert.equal(honolulu.replies, 11)
+})
+
+test("with no usable timezone, the newest day in the file is the reading's today", () => {
+  for (const timezone of [undefined, 'Mars/Olympus_Mons', '../../etc', 42]) {
+    const estimate = estimateOf({ timezone, days: [day('2026-10-08', 1), day('2026-10-02', 10), day('2026-10-01', 100)] })
+    assert.equal(estimate.replies, 11, `timezone ${String(timezone)}: the week was not counted from the file's own newest day`)
+  }
+  // A newest day no clock on Earth could have reached yet is not the reading's today: the UTC date
+  // of the reading stands in, and the impossible day is not counted.
+  const wild = estimateOf({ days: [day('2099-01-01', 1000), day('2026-10-07', 1), day('2026-10-01', 10), day('2026-09-30', 100)] })
+  assert.equal(wild.replies, 11)
+})
+
+test("a day after the reading's today is never counted", () => {
+  const estimate = estimateOf({ timezone: 'Pacific/Honolulu', days: [day('2026-10-08', 500), day('2026-10-07', 1)] })
+  assert.equal(estimate.replies, 1)
+})
+
 test('a reading older than eight hours is stale, and says how old', () => {
   const usage = shapeUsage([file('mac-mini', reading({ takenAt: hoursBefore(9) }))], NOW)
   assert.equal(usage.status, 'ok')
