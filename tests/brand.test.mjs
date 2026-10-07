@@ -249,6 +249,14 @@ test('the assistant\'s name and the art style are saved, and empty means the def
   assert.equal(shown.assistantName, '')
 })
 
+// Found clicking through the preview 2026-10-07: Save the style on an untouched box sent the
+// default back, and the panel then called it "Your own style" with the default printed twice.
+test('saving the default style word for word keeps it the default', async () => {
+  const { get, post } = board()
+  await post({ change: 'style', value: `  ${DEFAULT_ART_STYLE}  ` })
+  assert.equal((await get()).body.artStyle, '')
+})
+
 /* ---------- putting a picture back to the built-in one ---------- */
 
 async function withPicture() {

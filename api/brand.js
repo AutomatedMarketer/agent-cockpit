@@ -104,7 +104,8 @@ export function planChange(body) {
     case 'style': {
       const style = cleanedOrDefault(body.value, cleanStyle)
       if (style === null) return { error: 'The art style is up to 600 characters of plain text.' }
-      return { apply(settings) { settings.artStyle = style } }
+      // The box opens holding the default, so saving it untouched must not make it "your own".
+      return { apply(settings) { settings.artStyle = style === DEFAULT_ART_STYLE ? '' : style } }
     }
     case 'reset-picture': {
       const slot = parseSlot(body.slot)
