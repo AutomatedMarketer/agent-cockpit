@@ -1954,16 +1954,20 @@ function meterHtml(window) {
   const around = 2 * Math.PI * METER_R
   // Past the limit is a full ring - it cannot be drawn fuller - and the number says how far past.
   const used = (Math.min(percent, 100) / 100) * around
-  const reset = resetWords(window.resetsAt)
+  // A window Claude has not started yet comes with no reset time. The number is still a reading;
+  // only the reset is unknown, and the page says so rather than inventing a time.
+  const reset = window.resetsAt ? resetWords(window.resetsAt) : null
+  const resetSaid = reset ? `resets ${escapeHtml(reset)}` : 'reset time unknown'
+  const resetLine = reset ? `Resets <span class="meter-when">${escapeHtml(reset)}</span>` : 'Reset time unknown'
   // Nothing used is an empty track. A zero-length arc with round ends still paints a dot, which
   // reads as a sliver of use that is not there.
   const arc = percent > 0
     ? `<circle class="meter-used level-${meterLevel(percent)}" cx="22" cy="22" r="${METER_R}" stroke-dasharray="${used.toFixed(2)} ${around.toFixed(2)}" transform="rotate(-90 22 22)"/>`
     : ''
   return `<div class="meter"><div class="meter-dial">
-    <svg class="meter-ring" viewBox="0 0 44 44" role="img" aria-label="${label}: ${percent}% used, resets ${escapeHtml(reset)}">${track}${arc}</svg>
+    <svg class="meter-ring" viewBox="0 0 44 44" role="img" aria-label="${label}: ${percent}% used, ${resetSaid}">${track}${arc}</svg>
     <span class="meter-value" aria-hidden="true">${percent}%</span></div>
-    <p class="meter-label">${label}</p><p class="meter-reset">Resets <span class="meter-when">${escapeHtml(reset)}</span></p></div>`
+    <p class="meter-label">${label}</p><p class="meter-reset">${resetLine}</p></div>`
 }
 
 // Where the number came from, said in the card's head. Both Claude sources are addresses Anthropic

@@ -21,7 +21,11 @@ import {
   USAGE_MAX_STRING,
   USAGE_STATUSES,
   USAGE_SOURCES,
-  USAGE_WINDOWS
+  USAGE_WINDOWS,
+  USAGE_MAX_WINDOWS,
+  USAGE_WINDOW_REQUIRED,
+  USAGE_WINDOW_OPTIONAL,
+  USAGE_MAX_ACTIVITY_DAYS
 } from '../api/state.js'
 
 const NOW = Date.parse('2026-10-07T22:00:00Z')
@@ -112,6 +116,109 @@ test('usage parity: the board reads the contract the collector writes to', () =>
   assert.deepEqual(USAGE_STATUSES, usageFixture.statuses)
   assert.deepEqual(USAGE_SOURCES, usageFixture.sources)
   assert.deepEqual(USAGE_WINDOWS, usageFixture.windows)
+  assert.equal(USAGE_MAX_WINDOWS, usageFixture.maxWindows)
+  assert.deepEqual(USAGE_WINDOW_REQUIRED, usageFixture.windowRequired)
+  assert.deepEqual(USAGE_WINDOW_OPTIONAL, usageFixture.windowOptional)
+  assert.equal(USAGE_MAX_ACTIVITY_DAYS, usageFixture.maxActivityDays)
+})
+
+// A constant that matches the contract proves nothing if the code beside it checks something else.
+// So each number and list is also fed through shapeUsage, and what it actually accepts and refuses
+// is held to the fixture - read from the fixture here, never from the board's own constants.
+const limitsOf = (body) => shapeUsage([file('mac-mini', JSON.parse(JSON.stringify(body)))], NOW).claude.limits
+const withWindows = (windows) => {
+  const body = reading()
+  body.claude.limits.windows = windows
+  return body
+}
+const aWindow = (index) => ({ kind: 'weekly_model', model: `Model ${index}`, usedPercent: index, resetsAt: hoursAfter(48) })
+
+test('usage parity: shapeUsage takes as many windows as the contract allows, and no more', () => {
+  const most = usageFixture.maxWindows
+  const accepted = limitsOf(withWindows(Array.from({ length: most }, (_, index) => aWindow(index))))
+  assert.equal(accepted.status, 'found', `${most} windows were refused`)
+  assert.equal(accepted.windows.length, most)
+  const refused = limitsOf(withWindows(Array.from({ length: most + 1 }, (_, index) => aWindow(index))))
+  assert.equal(refused.status, 'unavailable', `${most + 1} windows were accepted`)
+  assert.deepEqual(refused.windows, [])
+})
+
+test('usage parity: a window missing a required key is refused, one missing an optional key is not', () => {
+  const full = { kind: 'weekly_model', model: 'Fable', usedPercent: 2, resetsAt: hoursAfter(48) }
+  assert.deepEqual(Object.keys(full).sort(), [...usageFixture.windowRequired, ...usageFixture.windowOptional].sort(),
+    'the contract names a window key this test does not exercise')
+  for (const key of usageFixture.windowRequired) {
+    const window = { ...full }
+    delete window[key]
+    assert.equal(limitsOf(withWindows([window])).status, 'unavailable', `a window with no ${key} was accepted`)
+  }
+  for (const key of usageFixture.windowOptional) {
+    const window = { ...full }
+    delete window[key]
+    const limits = limitsOf(withWindows([window]))
+    assert.equal(limits.status, 'found', `a window with no ${key} was refused`)
+    assert.equal(limits.windows[0].usedPercent, 2)
+  }
+})
+
+test('usage parity: stale starts where the contract says it does', () => {
+  const hours = usageFixture.staleAfterHours
+  const at = (age) => {
+    const body = reading({ takenAt: hoursBefore(age) })
+    body.claude.limits.readAt = hoursBefore(age)
+    return shapeUsage([file('mac-mini', body)], NOW).claude.stale
+  }
+  assert.equal(at(hours - 0.1), false)
+  assert.equal(at(hours + 0.1), true)
+})
+
+test('usage parity: shapeUsage reads as many files as the contract says, and counts the rest', () => {
+  const most = usageFixture.maxFilesRead
+  const files = Array.from({ length: most + 2 }, (_, index) => file(`computer-${index}`, reading()))
+  const usage = shapeUsage(files, NOW, files.length)
+  assert.equal(usage.read, most)
+  assert.equal(usage.skipped, 2)
+})
+
+test('usage parity: every source the contract names is accepted, and nothing else', () => {
+  for (const source of usageFixture.sources) {
+    const body = reading()
+    body.claude.limits.source = source
+    assert.equal(limitsOf(body).status, 'found', `${source} was refused`)
+  }
+  const body = reading()
+  body.claude.limits.source = 'something-else'
+  assert.equal(limitsOf(body).status, 'unavailable')
+})
+
+test('usage parity: every status the contract names comes back as itself, and nothing else does', () => {
+  const blocks = {
+    found: reading().claude.limits,
+    'not found': { status: 'not found' },
+    unavailable: { status: 'unavailable', why: 'Signed out.' }
+  }
+  assert.deepEqual(Object.keys(blocks).sort(), [...usageFixture.statuses].sort(), 'the contract names a status this test does not exercise')
+  for (const status of usageFixture.statuses) {
+    const body = reading()
+    body.claude.limits = blocks[status]
+    assert.equal(limitsOf(body).status, status)
+  }
+  const body = reading()
+  body.claude.limits = { ...blocks.found, status: 'fine' }
+  assert.equal(limitsOf(body).status, 'unavailable')
+})
+
+test('usage parity: the estimate takes as many days as the contract allows, and no more', () => {
+  const days = (count) => Array.from({ length: count }, (_, index) => ({
+    day: new Date(NOW - index * 86400_000).toISOString().slice(0, 10), sessions: 1, replies: 1
+  }))
+  const activityWith = (count) => {
+    const body = reading()
+    body.claude.activity.days = days(count)
+    return shapeUsage([file('mac-mini', body)], NOW).claude.activity.status
+  }
+  assert.equal(activityWith(usageFixture.maxActivityDays), 'found')
+  assert.equal(activityWith(usageFixture.maxActivityDays + 1), 'unavailable')
 })
 
 test('the two repos hold the same usage contract, byte for byte', (t) => {
@@ -197,6 +304,24 @@ test('a window whose reset has passed shows no percentage', () => {
   assert.equal(fiveHour.resetSinceReading, true)
   assert.equal(fiveHour.usedPercent, null, 'a percentage from before the reset is not today\'s')
   assert.equal(weekly.usedPercent, 49)
+})
+
+// Claude's address answers `resets_at: null` for a window that has not started - an idle 5-hour
+// one, typically - and the collector writes the window without a reset time. That is a real
+// reading, so it shows; it just cannot say when it resets.
+test('a window with no reset time keeps its percentage, and says the reset is unknown', () => {
+  for (const missing of [undefined, null]) {
+    const body = reading()
+    if (missing === undefined) delete body.claude.limits.windows[0].resetsAt
+    else body.claude.limits.windows[0].resetsAt = null
+    const { limits } = shapeUsage([file('mac-mini', body)], NOW).claude
+    assert.equal(limits.status, 'found', `a ${missing} reset time threw away the whole Claude meter`)
+    const [fiveHour, weekly] = limits.windows
+    assert.equal(fiveHour.usedPercent, 18)
+    assert.equal(fiveHour.resetsAt, null)
+    assert.equal(fiveHour.resetSinceReading, false)
+    assert.equal(weekly.usedPercent, 49)
+  }
 })
 
 test('not found and unavailable stay what they are, never a zero', () => {

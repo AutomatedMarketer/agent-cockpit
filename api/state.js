@@ -217,8 +217,13 @@ export const USAGE_WINDOWS = {
   weekly: 'Weekly'
 }
 const USAGE_SERVICES = ['claude', 'codex']
-// More windows than any plan has ever had is a file that is not what it says it is.
-const USAGE_MAX_WINDOWS = 6
+// More windows than the contract allows is a file that is not what it says it is. A window must say
+// what it is and how much is used; the model and the reset time may be missing, because Claude's
+// address answers `resets_at: null` for a window that has not started yet.
+export const USAGE_MAX_WINDOWS = 8
+export const USAGE_WINDOW_REQUIRED = ['kind', 'usedPercent']
+export const USAGE_WINDOW_OPTIONAL = ['model', 'resetsAt']
+export const USAGE_MAX_ACTIVITY_DAYS = 17
 const USAGE_ESTIMATE_DAYS = 7
 const USAGE_MAX_COUNT = 1e7
 const UNKNOWN_SHAPE = 'The reading is not in a shape this board knows.'
@@ -279,9 +284,13 @@ function usageLimits(raw, now) {
 
   const windows = []
   for (const window of given) {
-    if (!isPlainObject(window) || !Object.hasOwn(USAGE_WINDOWS, window.kind)) return noLimits('unavailable', UNKNOWN_SHAPE)
-    const resetMs = isoMs(window.resetsAt)
-    if (!isPercent(window.usedPercent) || !Number.isFinite(resetMs)) return noLimits('unavailable', UNKNOWN_SHAPE)
+    if (!isPlainObject(window) || USAGE_WINDOW_REQUIRED.some((key) => !Object.hasOwn(window, key))) return noLimits('unavailable', UNKNOWN_SHAPE)
+    if (!Object.hasOwn(USAGE_WINDOWS, window.kind) || !isPercent(window.usedPercent)) return noLimits('unavailable', UNKNOWN_SHAPE)
+    // No reset time is a reading that cannot say when it resets, and the page says exactly that. A
+    // reset time that is there and unreadable is a different thing: a file not in the known shape.
+    const noReset = window.resetsAt === undefined || window.resetsAt === null
+    const resetMs = noReset ? null : isoMs(window.resetsAt)
+    if (!noReset && !Number.isFinite(resetMs)) return noLimits('unavailable', UNKNOWN_SHAPE)
     // A model name that is not plainly a name costs the name, not the reading around it.
     const model = window.kind === 'weekly_model' ? cleanUsageName(window.model) : null
     const label = window.kind === 'weekly_model'
@@ -289,12 +298,12 @@ function usageLimits(raw, now) {
       : USAGE_WINDOWS[window.kind]
     // Past its reset, the percentage describes a window that has closed. Today's figure is unknown
     // until the next reading, and saying 49% of a week that already ended is the worse answer.
-    const resetSinceReading = resetMs <= now
+    const resetSinceReading = resetMs !== null && resetMs <= now
     windows.push({
       kind: window.kind,
       label,
       usedPercent: resetSinceReading ? null : window.usedPercent,
-      resetsAt: new Date(resetMs).toISOString(),
+      resetsAt: resetMs === null ? null : new Date(resetMs).toISOString(),
       resetSinceReading
     })
   }
@@ -310,11 +319,11 @@ function usageLimits(raw, now) {
 
 // Claude Code's own logs, counted on the owner's computer. Only ever an estimate, and only ever a
 // count - never a percentage, because the logs say what was done, not what the plan allows. The
-// week is the seven days up to the reading; the collector keeps fifteen so a timezone cannot cut
-// one short, and the older ones are not this week's.
+// week is the seven days up to the reading; the collector keeps a few more so a timezone cannot cut
+// one short, and the older ones are not this week's. More days than the contract allows is refused.
 function usageActivity(raw, takenMs) {
   if (!isPlainObject(raw) || raw.status === 'not found' || raw.status === undefined) return { status: 'not found' }
-  if (raw.status !== 'found' || raw.estimate !== true || !Array.isArray(raw.days) || raw.days.length > 31) {
+  if (raw.status !== 'found' || raw.estimate !== true || !Array.isArray(raw.days) || raw.days.length > USAGE_MAX_ACTIVITY_DAYS) {
     return { status: 'unavailable' }
   }
   const since = new Date(takenMs - USAGE_ESTIMATE_DAYS * 86400_000).toISOString().slice(0, 10)

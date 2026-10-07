@@ -5051,6 +5051,22 @@ test('a window past its reset shows no percentage, and says why', () => {
   assert.match(textOf(reset), /Reset since this reading/)
 })
 
+test('a window with no reset time shows its percentage and says the reset time is unknown', () => {
+  const claude = planCards(planLimitsOf(todayWith(usagePayload({
+    limits: { status: 'found', source: 'unofficial-live', readAt: inHours(-1), why: null, windows: [
+      { kind: 'five_hour', label: '5-hour', usedPercent: 0, resetsAt: null, resetSinceReading: false },
+      { kind: 'weekly_all', label: 'Weekly', usedPercent: 49, resetsAt: inHours(9), resetSinceReading: false }
+    ] }
+  })))).claude
+  const [idle, weekly] = claude.split('<div class="meter">').slice(1)
+  assert.match(textOf(idle), /\b0%/, 'a real reading with no reset time lost its number')
+  assert.match(textOf(idle), /Reset time unknown/)
+  assert.ok(!/Resets/.test(textOf(idle)), 'a missing reset time was printed as a time')
+  assert.match(idle, /aria-label="5-hour: 0% used, reset time unknown"/)
+  assert.match(textOf(weekly), /Resets/)
+  for (const junk of ['Invalid Date', 'unreadable', 'null', 'NaN']) assert.ok(!claude.includes(junk), `rendered "${junk}"`)
+})
+
 test('unavailable and not found each have a sentence, never a ring', () => {
   const usage = usagePayload(
     { limits: { status: 'unavailable', source: null, readAt: null, why: 'Signed out.', windows: [] }, activity: { status: 'not found' } },
