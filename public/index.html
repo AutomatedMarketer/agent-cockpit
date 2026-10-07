@@ -1052,6 +1052,25 @@
   .plan-estimate { font-size: .8125rem; padding-top: .7rem; border-top: 1px solid var(--line); }
   .plan-estimate .chip { margin-right: .3rem; }
   .plan-note { margin: .6rem 0 0; font-size: .75rem; color: var(--muted); }
+
+  /* Subscriptions, in the Usage section: a row per line of stack.yml, the name on the left and what
+     it costs a month on the right, wrapping under each other on a phone rather than squeezing. */
+  .panel.subs { margin-top: .75rem; }
+  .card > .subs-empty, .card > .subs-total, .card > .subs-note { margin: .55rem 0 0; }
+  .subs-empty { font-size: .875rem; color: var(--muted); }
+  .subs-list { list-style: none; margin: .6rem 0 0; padding: 0; }
+  .subs-row {
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .1rem .75rem;
+    padding: .55rem 0; border-top: 1px solid var(--line); font-size: .875rem;
+  }
+  .subs-name { flex: 1 1 10rem; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+  .subs-price { font-variant-numeric: tabular-nums; }
+  .subs-sub, .subs-mismatch { flex: 1 0 100%; font-size: .75rem; overflow-wrap: anywhere; }
+  .subs-sub { color: var(--muted); }
+  .subs-mismatch { color: var(--warn); }
+  .subs-total { padding-top: .6rem; border-top: 1px solid var(--line); font-size: .9375rem; }
+  .subs-total b { font-variant-numeric: tabular-nums; }
+  .subs-note { font-size: .75rem; color: var(--muted); }
   /* The owner's number on the Ledger is the same card as on Today, on its own. Capped, because one
      card stretched across a laptop is a band of colour with a number lost at its left end. */
   .kpis-one { max-width: 26rem; }
@@ -2014,6 +2033,66 @@ function planLimitsHtml(usage) {
     (notes.length ? `<p class="plan-note">${notes.map(escapeHtml).join(' ')}</p>` : '') + '</section>'
 }
 
+/* ---------- Subscriptions ----------
+   What the owner says they pay, from `subscriptions:` in stack.yml - their own words, not a bill.
+   The server has totalled it per currency and never converted (api/state.js shapeSubscriptions).
+   A price here keeps its cents, unlike formatMoney's whole numbers: 19.99 rounded to 20 is a
+   different number from the one on the receipt, and this is the one place a receipt is copied. */
+function priceWords(value, currency) {
+  const number = Number.isInteger(value)
+    ? value.toLocaleString('en-US')
+    : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return currency ? `${number} ${escapeHtml(currency)}` : number
+}
+
+function subscriptionRowHtml(item) {
+  let price
+  if (typeof item.price !== 'number') {
+    price = '<span class="subs-price muted">No price recorded</span>'
+  } else if (typeof item.monthly !== 'number') {
+    // A price with no currency or no month-or-year cannot join a total without a guess.
+    price = `<span class="subs-price">${priceWords(item.price, item.currency)}${item.per ? ` a ${item.per}` : ''}</span>
+      <span class="subs-sub">Not counted: it needs a three-letter currency, and month or year.</span>`
+  } else if (item.per === 'year') {
+    price = `<span class="subs-price">${priceWords(item.monthly, item.currency)} a month</span>
+      <span class="subs-sub">${priceWords(item.price, item.currency)} a year, counted as a twelfth each month.</span>`
+  } else {
+    price = `<span class="subs-price">${priceWords(item.price, item.currency)} a month</span>`
+  }
+  const mismatch = item.mismatch && item.planRead
+    ? `<span class="subs-mismatch">Your usage reading found ${escapeHtml(item.planRead)}. Worth checking which one you pay for.</span>`
+    : ''
+  return `<li class="subs-row"><span class="subs-name">${escapeHtml(item.name)}</span>${price}${mismatch}</li>`
+}
+
+function subscriptionsHtml(subscriptions) {
+  const items = Array.isArray(subscriptions?.items) ? subscriptions.items : []
+  const unreadable = subscriptions?.unreadable ?? 0
+  const skippedNote = unreadable
+    ? `<p class="subs-note">${unreadable} line${unreadable === 1 ? '' : 's'} under subscriptions: ${unreadable === 1 ? 'was' : 'were'} not shown,
+       because ${unreadable === 1 ? 'its name does' : 'their names do'} not read as plain names.</p>`
+    : ''
+  if (!items.length) {
+    return `<section class="panel card subs"><p class="title">Subscriptions</p>
+      <p class="subs-empty">No subscriptions recorded yet. <code>/onboard</code> asks what you pay each
+      month, or add them under <code>subscriptions:</code> in <code>stack.yml</code>.</p>${skippedNote}</section>`
+  }
+  const totals = Array.isArray(subscriptions.totals) ? subscriptions.totals : []
+  const totalHtml = totals.length
+    ? `<p class="subs-total">${totals.map((total) => `<b>${priceWords(total.monthly, total.currency)}</b>`).join(' and ')} a month in total${
+        totals.length > 1 ? ' &mdash; each currency added up on its own, never converted.' : '.'}</p>`
+    : ''
+  const unpriced = subscriptions.unpriced ?? 0
+  const unpricedNote = unpriced
+    ? `<p class="subs-note">${unpriced === 1 ? '1 subscription is' : `${unpriced} subscriptions are`} left out of the total,
+       because ${unpriced === 1 ? 'it has' : 'they have'} no price the board can add up.</p>`
+    : ''
+  return `<section class="panel card subs"><p class="title">Subscriptions</p>
+    <ul class="subs-list">${items.map(subscriptionRowHtml).join('')}</ul>
+    ${totalHtml}${unpricedNote}${skippedNote}
+    <p class="subs-note">From <code>subscriptions:</code> in <code>stack.yml</code> &mdash; what you wrote down, not a bill.</p></section>`
+}
+
 /* ---------- Ledger ---------- */
 
 function renderLedger() {
@@ -2164,7 +2243,9 @@ function renderToday() {
     // Spec B.2: remaining routine runs are linked, never scraped — there is no API for them.
     sectionHead('Your Claude account', '<h2>Usage</h2>') + `<div class="panel"><p class="small">Remaining routine runs live on your
       <a href="https://claude.ai/settings/usage" rel="noreferrer noopener">claude.ai usage page</a> —
-      the dashboard links there rather than guessing.</p></div>`
+      the dashboard links there rather than guessing.</p></div>` +
+    // Under it, what the owner says they pay - the one thing on this section the repo can source.
+    subscriptionsHtml(data.subscriptions)
 }
 
 /* ---------- Team ---------- */

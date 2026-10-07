@@ -3696,13 +3696,21 @@ if (process.env.COCKPIT_WRITE_BOARD_BEFORE === '1') {
 }
 
 const BOARD_BEFORE_COPY = JSON.parse(readFileSync(BOARD_BEFORE, 'utf8'))
-// Plan limits arrived on Today after the copy was taken, and is not part of personalising. It is
-// taken out - exactly one of it, and it must be there - and everything else still has to match the
-// copy byte for byte. Retaking the copy instead would pin whatever else had changed with it.
+// Plan limits and the Subscriptions card arrived on Today after the copy was taken, and neither is
+// part of personalising. Each is taken out - exactly one of each, and both must be there - and
+// everything else still has to match the copy byte for byte. Retaking the copy instead would pin
+// whatever else had changed with them.
 function todayWithoutPlanLimits(markup) {
-  const sections = markup.match(/<section class="plan-limits">[\s\S]*?<\/section>/g) ?? []
-  assert.equal(sections.length, 1, 'Today does not carry exactly one Plan limits section')
-  return markup.replace(sections[0], '')
+  let rest = markup
+  for (const [name, pattern] of [
+    ['Plan limits section', /<section class="plan-limits">[\s\S]*?<\/section>/g],
+    ['Subscriptions card', /<section class="panel card subs">[\s\S]*?<\/section>/g]
+  ]) {
+    const found = rest.match(pattern) ?? []
+    assert.equal(found.length, 1, `Today does not carry exactly one ${name}`)
+    rest = rest.replace(found[0], '')
+  }
+  return rest
 }
 const flush = async (times = 4) => { for (let turn = 0; turn < times; turn += 1) await new Promise((resolve) => setImmediate(resolve)) }
 
@@ -5118,4 +5126,139 @@ test('the meters wrap on a phone rather than taking the page sideways', () => {
   const name = Object.assign({}, ...exactRules('.plan-name').filter((rule) => !rule.inMedia).map(valuesIn))
   assert.equal(name['min-width'], '0')
   assert.equal(name['overflow-wrap'], 'anywhere')
+})
+
+/* ---------- Today: Subscriptions, inside Usage ----------------------------------------------------
+   What the owner says they pay, from `subscriptions:` in stack.yml. It sits in the Usage section
+   under the claude.ai sentence, which stays: remaining routine runs still live on claude.ai. One
+   total per currency, never converted. A yearly price says it was divided. A line with no price is
+   listed and said to be left out, never counted as free. */
+
+const usageSectionOf = (drawn) => {
+  const from = drawn.indexOf('<h2>Usage</h2>')
+  assert.ok(from >= 0, 'Today has no Usage section')
+  return drawn.slice(from)
+}
+const subsCardOf = (drawn) => /<section class="panel card subs">[\s\S]*?<\/section>/.exec(usageSectionOf(drawn))?.[0] ?? assert.fail('the Usage section has no Subscriptions card')
+const subItem = (over = {}) => ({ name: 'Claude Max', service: 'claude', price: 200, currency: 'USD', per: 'month', monthly: 200, planRead: null, mismatch: false, ...over })
+const subsPayload = (items, totals, over = {}) => ({
+  items, totals, unpriced: items.filter((item) => item.monthly === null).length, unreadable: 0, ...over
+})
+const todayWithSubs = (subscriptions, usage = undefined) => render({ ...base, subscriptions, usage }).get('today').innerHTML
+
+test('the Usage section keeps its claude.ai sentence, and Subscriptions comes after it', () => {
+  const section = usageSectionOf(todayWithSubs(subsPayload([subItem()], [{ currency: 'USD', monthly: 200 }])))
+  const link = section.indexOf('https://claude.ai/settings/usage')
+  assert.ok(link >= 0, 'the claude.ai usage link is gone')
+  assert.ok(section.indexOf('<section class="panel card subs">') > link, 'Subscriptions is not under the claude.ai sentence')
+  assert.match(textOf(section), /Subscriptions/)
+})
+
+test('no subscriptions recorded says how to add them, and prints no total', () => {
+  for (const subscriptions of [undefined, null, subsPayload([], [])]) {
+    const card = subsCardOf(todayWithSubs(subscriptions))
+    assert.match(textOf(card), /No subscriptions recorded yet/)
+    assert.match(card, /<code>\/onboard<\/code>/)
+    assert.match(card, /<code>subscriptions:<\/code>/)
+    assert.ok(!/\b0\b/.test(textOf(card)), 'an empty list printed a zero')
+    assert.ok(!/in total/.test(textOf(card)), 'an empty list printed a total')
+  }
+})
+
+test('each subscription shows its price, and the total is per currency', () => {
+  const card = subsCardOf(todayWithSubs(subsPayload([
+    subItem(),
+    subItem({ name: 'ChatGPT Pro', service: 'codex' }),
+    subItem({ name: 'Perplexity', service: 'perplexity', price: 19.99, currency: 'GBP', monthly: 19.99 })
+  ], [{ currency: 'GBP', monthly: 19.99 }, { currency: 'USD', monthly: 400 }])))
+  const words = textOf(card)
+  assert.match(words, /Claude Max 200 USD a month/)
+  assert.match(words, /Perplexity 19\.99 GBP a month/)
+  assert.match(words, /19\.99 GBP/)
+  assert.match(words, /400 USD/)
+  assert.match(words, /never converted/, 'two currencies with no word that they were kept apart')
+  // One currency needs no such sentence.
+  const single = textOf(subsCardOf(todayWithSubs(subsPayload([subItem()], [{ currency: 'USD', monthly: 200 }]))))
+  assert.match(single, /200 USD a month in total/)
+  assert.ok(!/never converted/.test(single))
+})
+
+test('a yearly price says it was divided by twelve', () => {
+  const words = textOf(subsCardOf(todayWithSubs(subsPayload(
+    [subItem({ name: 'Domain', service: 'other', price: 99, per: 'year', monthly: 8.25 })],
+    [{ currency: 'USD', monthly: 8.25 }]))))
+  assert.match(words, /99 USD a year/)
+  assert.match(words, /8\.25 USD a month/)
+  assert.match(words, /a twelfth|divided by 12/)
+})
+
+test('a line with no price is listed and said to be left out of the total', () => {
+  const words = textOf(subsCardOf(todayWithSubs(subsPayload([
+    subItem(),
+    subItem({ name: 'Notion', service: 'other', price: null, currency: null, per: null, monthly: null }),
+    subItem({ name: 'Half done', service: 'other', price: 10, currency: null, per: 'month', monthly: null })
+  ], [{ currency: 'USD', monthly: 200 }]))))
+  assert.match(words, /Notion No price recorded/)
+  assert.match(words, /Half done 10 a month/)
+  assert.match(words, /2 subscriptions are left out of the total/)
+})
+
+test('lines in stack.yml the board would not print are counted, not dropped silently', () => {
+  const words = textOf(subsCardOf(todayWithSubs(subsPayload([subItem()], [{ currency: 'USD', monthly: 200 }], { unreadable: 1 }))))
+  assert.match(words, /1 line under subscriptions: was not shown/)
+})
+
+test('a subscription that disagrees with the plan the usage reading found is pointed out, in view', () => {
+  const card = subsCardOf(todayWithSubs(subsPayload(
+    [subItem({ name: 'Claude Pro', price: 20, monthly: 20, planRead: 'Max 20x', mismatch: true })],
+    [{ currency: 'USD', monthly: 20 }])))
+  assert.match(withoutWhy(card), /class="subs-mismatch"/)
+  assert.match(textOf(withoutWhy(card)), /usage reading found Max 20x/)
+})
+
+test('everything in a subscription line is escaped', () => {
+  const hostile = '<img src=x onerror=alert(1)>'
+  const card = subsCardOf(todayWithSubs(subsPayload(
+    [subItem({ name: hostile, currency: hostile, planRead: hostile, mismatch: true })],
+    [{ currency: hostile, monthly: 200 }])))
+  assert.ok(!card.includes('<img src=x'), 'a name from stack.yml reached the page as markup')
+  assert.ok(card.includes('&lt;img src=x'))
+})
+
+test('no Subscriptions state renders undefined, NaN or [object Object]', () => {
+  const states = [
+    undefined,
+    subsPayload([], []),
+    subsPayload([subItem(), subItem({ price: null, currency: null, per: null, monthly: null }), subItem({ per: 'year', monthly: 16.67 })],
+      [{ currency: 'USD', monthly: 216.67 }], { unreadable: 2 })
+  ]
+  for (const subscriptions of states) {
+    const card = subsCardOf(todayWithSubs(subscriptions))
+    for (const junk of ['undefined', 'NaN', '[object Object]', 'Infinity', 'null']) {
+      assert.ok(!card.includes(junk), `Subscriptions rendered "${junk}"`)
+    }
+  }
+})
+
+test('every class Subscriptions puts in the markup is one the stylesheet styles', () => {
+  const emitted = new Set()
+  const markup = subsCardOf(todayWithSubs(subsPayload(
+    [subItem({ planRead: 'Max 20x', mismatch: true }), subItem({ per: 'year', monthly: 16.67 }), subItem({ price: null, monthly: null })],
+    [{ currency: 'USD', monthly: 216.67 }, { currency: 'GBP', monthly: 1 }], { unreadable: 1 }))) + subsCardOf(todayWithSubs(undefined))
+  for (const found of markup.matchAll(/class="([a-z0-9 -]+)"/g)) {
+    for (const name of found[1].split(/\s+/).filter(Boolean)) emitted.add(name)
+  }
+  assert.ok(emitted.size >= 6, `only found ${emitted.size} classes - the sweep is not reading them`)
+  for (const name of emitted) {
+    assert.ok(rulesFor(`.${name}`).length || rulesFor(`.${name}`, { desktop: true }).length,
+      `Subscriptions puts class "${name}" in the markup and no rule anywhere targets it`)
+  }
+})
+
+test('a long subscription name breaks inside its row rather than taking the phone sideways', () => {
+  const name = Object.assign({}, ...exactRules('.subs-name').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.equal(name['overflow-wrap'], 'anywhere')
+  assert.equal(name['min-width'], '0')
+  const row = Object.assign({}, ...exactRules('.subs-row').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.equal(row['flex-wrap'], 'wrap')
 })
