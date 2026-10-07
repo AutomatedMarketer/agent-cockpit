@@ -1003,6 +1003,55 @@
   .spark-line { fill: none; stroke: currentColor; stroke-width: 2.2; vector-effect: non-scaling-stroke; }
   /* The wash under the line is filled from its own gradient, which fades the same colour out. */
   .spark-fill { stroke: none; }
+
+  /* Plan limits: a card per service under the three numbers, side by side when there is room. The
+     rings wrap rather than scroll, so three of them never push a phone sideways. A ring's colour
+     says how close the plan is to its limit, and only that - the service's own colour is on its
+     letter tile, never on the ring. */
+  .plan-limits { margin: 0 0 1rem; }
+  .plan-limits > .section-head { margin-top: 1.4rem; }
+  .plan-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: .75rem; }
+  .plan-card { display: grid; gap: .8rem; align-content: start; }
+  .card > .plan-head, .card > .meters { margin: 0; }
+  .plan-head { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
+  .tile {
+    --tile: var(--kpi-ledger);
+    display: grid; place-items: center; flex: none; width: 2.25rem; height: 2.25rem; border-radius: var(--radius-sm);
+    font-size: .8125rem; font-weight: 700; letter-spacing: -.02em; color: var(--ink);
+    background: color-mix(in srgb, var(--tile) 22%, var(--panel));
+    border: 1px solid color-mix(in srgb, var(--tile) 45%, var(--line));
+  }
+  .tile-claude { --tile: var(--kpi-ledger); }
+  .tile-codex { --tile: var(--kpi-agents); }
+  .plan-name { flex: 1 1 8rem; min-width: 0; overflow-wrap: anywhere; }
+  .plan-name > p { margin: 0; }
+  .plan-tier { font-size: .8125rem; color: var(--muted); }
+  .plan-chips { display: flex; flex-wrap: wrap; gap: .3rem; }
+  .meters { display: flex; flex-wrap: wrap; gap: .9rem 1.1rem; }
+  .meter { width: 5.4rem; text-align: center; }
+  .meter > p { margin: 0; }
+  .meter-dial { position: relative; width: 4.5rem; height: 4.5rem; margin: 0 auto .35rem; }
+  .meter-ring { display: block; width: 100%; height: 100%; }
+  .meter-track, .meter-used { fill: none; stroke-width: 4; }
+  .meter-track { stroke: var(--chip); }
+  .meter-used { stroke-linecap: round; }
+  .meter-used.level-ok { stroke: var(--ok); }
+  .meter-used.level-warn { stroke: var(--warn); }
+  .meter-used.level-bad { stroke: var(--bad); }
+  .meter-value {
+    position: absolute; inset: 0; display: grid; place-items: center;
+    font-size: .9375rem; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; color: var(--ink);
+  }
+  .meter-none { color: var(--muted); font-weight: 400; }
+  .meter-label { font-size: .75rem; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+  .meter-reset { font-size: .6875rem; line-height: 1.3; color: var(--muted); }
+  .card > .plan-missing, .card > .plan-foot, .card > .plan-stale, .card > .plan-estimate { margin: 0; }
+  .plan-missing { font-size: .875rem; }
+  .plan-foot { font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
+  .plan-stale { font-size: .8125rem; color: var(--warn); overflow-wrap: anywhere; }
+  .plan-estimate { font-size: .8125rem; padding-top: .7rem; border-top: 1px solid var(--line); }
+  .plan-estimate .chip { margin-right: .3rem; }
+  .plan-note { margin: .6rem 0 0; font-size: .75rem; color: var(--muted); }
   /* The owner's number on the Ledger is the same card as on Today, on its own. Capped, because one
      card stretched across a laptop is a band of colour with a number lost at its left end. */
   .kpis-one { max-width: 26rem; }
@@ -1840,6 +1889,131 @@ function kpiCardsHtml() {
   return `<div class="kpis">${workCardHtml(days, activity)}${agentsCardHtml(days, activity)}${heroCardHtml(data.hero)}</div>`
 }
 
+/* ---------- Plan limits ----------
+   How much of each plan is used, from the reading a collector on the owner's own computer commits.
+   The board never reaches an account itself, so this is always a reading with an age, and every
+   state says which state it is in - never a zero for a number nobody read. The server has already
+   checked every name and number (api/state.js shapeUsage); this escapes them anyway, because a
+   check in one file is not a reason to trust the next one.
+
+   "unofficial" and "estimate" are in plain view. They are not reasoning about the number, they ARE
+   what the number is - the same line tests/render.test.mjs holds for spend - so neither goes behind
+   a Why?. */
+const METER_R = 18
+const USAGE_SERVICES = [
+  { key: 'claude', name: 'Claude', letters: 'Cl' },
+  { key: 'codex', name: 'Codex', letters: 'Cx' }
+]
+
+// Under 75% is fine, 75 to 89 is worth knowing, 90 and over is close to the wall.
+const meterLevel = (percent) => (percent >= 90 ? 'bad' : percent >= 75 ? 'warn' : 'ok')
+
+// The owner's local time. A reset inside the day is a clock time; further off, the day goes first.
+function resetWords(iso) {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return 'at an unreadable time'
+  const soon = at.getTime() - Date.now() < 20 * 3600_000
+  return at.toLocaleString(undefined, soon
+    ? { hour: 'numeric', minute: '2-digit' }
+    : { weekday: 'short', hour: 'numeric', minute: '2-digit' })
+}
+
+function meterHtml(window) {
+  const label = escapeHtml(window.label)
+  const track = `<circle class="meter-track" cx="22" cy="22" r="${METER_R}"/>`
+  if (window.resetSinceReading || typeof window.usedPercent !== 'number') {
+    return `<div class="meter"><div class="meter-dial">
+      <svg class="meter-ring" viewBox="0 0 44 44" role="img" aria-label="${label}: reset since this reading, so there is no current figure">${track}</svg>
+      <span class="meter-value meter-none" aria-hidden="true">&ndash;</span></div>
+      <p class="meter-label">${label}</p><p class="meter-reset">Reset since this reading</p></div>`
+  }
+  const percent = Math.round(window.usedPercent)
+  const around = 2 * Math.PI * METER_R
+  // Past the limit is a full ring - it cannot be drawn fuller - and the number says how far past.
+  const used = (Math.min(percent, 100) / 100) * around
+  const reset = resetWords(window.resetsAt)
+  return `<div class="meter"><div class="meter-dial">
+    <svg class="meter-ring" viewBox="0 0 44 44" role="img" aria-label="${label}: ${percent}% used, resets ${escapeHtml(reset)}">${track}<circle class="meter-used level-${meterLevel(percent)}" cx="22" cy="22" r="${METER_R}" stroke-dasharray="${used.toFixed(2)} ${around.toFixed(2)}" transform="rotate(-90 22 22)"/></svg>
+    <span class="meter-value" aria-hidden="true">${percent}%</span></div>
+    <p class="meter-label">${label}</p><p class="meter-reset">Resets ${escapeHtml(reset)}</p></div>`
+}
+
+// Where the number came from, said in the card's head. Both Claude sources are addresses Anthropic
+// does not document; Codex's is its own log of what the server told it, which is a different claim.
+function sourceChipHtml(source) {
+  if (source === 'unofficial-live') return '<span class="chip warn">unofficial</span>'
+  if (source === 'claude-code-saved') return '<span class="chip warn">unofficial</span><span class="chip">saved copy</span>'
+  if (source === 'codex-session-log') return '<span class="chip">from Codex&rsquo;s own log</span>'
+  return ''
+}
+
+function planNameHtml(plan) {
+  if (plan?.status === 'found' && plan.name) return escapeHtml(plan.name)
+  return plan?.status === 'unavailable' ? 'Plan could not be read' : 'Plan not found'
+}
+
+function estimateHtml(activity) {
+  if (!activity) return ''
+  if (activity.status === 'found') {
+    const replies = `${activity.replies} repl${activity.replies === 1 ? 'y' : 'ies'}`
+    const sessions = `${activity.sessions} session${activity.sessions === 1 ? '' : 's'}`
+    return `<p class="plan-estimate"><span class="chip">estimate</span> About ${replies} in ${sessions} over the
+      last 7 days, counted from Claude Code&rsquo;s own logs.</p>`
+  }
+  return activity.status === 'unavailable'
+    ? '<p class="plan-estimate">The estimate from Claude Code&rsquo;s logs could not be read.</p>'
+    : '<p class="plan-estimate">No Claude Code logs were found to estimate from.</p>'
+}
+
+function planCardHtml(service, reading) {
+  const where = reading.computer ? ` on ${escapeHtml(reading.computer)}` : ''
+  const limits = reading.limits ?? { status: 'not found', windows: [] }
+  let body
+  if (limits.status === 'found' && Array.isArray(limits.windows) && limits.windows.length) {
+    body = `<div class="meters">${limits.windows.map(meterHtml).join('')}</div>`
+  } else if (limits.status === 'unavailable') {
+    body = `<p class="plan-missing"><b>${service.name} limits were unavailable when this was taken.</b></p>` +
+      whyHtml(limits.why ?? 'The collector reached for the reading and did not get one it could trust, so it wrote down that it could not rather than a number.')
+  } else {
+    body = `<p class="plan-missing">No ${service.name} limits were found${where}.</p>`
+  }
+  const stale = reading.stale
+    ? `<p class="plan-stale">This reading is older than 8 hours, so it may be out of date. Run
+       <code>/snapshot</code>, or check the collector${where}.</p>`
+    : ''
+  return `<article class="panel card plan-card" data-service="${service.key}">
+    <div class="plan-head"><span class="tile tile-${service.key}" aria-hidden="true">${service.letters}</span>
+      <div class="plan-name"><p class="title">${service.name}</p><p class="plan-tier">${planNameHtml(reading.plan)}</p></div>
+      <div class="plan-chips">${limits.status === 'found' ? sourceChipHtml(limits.source) : ''}</div></div>
+    ${body}
+    <p class="plan-foot">Taken ${escapeHtml(ago(reading.takenAt))}${where}.</p>${stale}
+    ${service.key === 'claude' ? estimateHtml(reading.activity) : ''}</article>`
+}
+
+function planLimitsHtml(usage) {
+  const head = sectionHead('From your always-on computer', '<h2>Plan limits</h2>')
+  if (!usage || usage.status === 'none' || (usage.status === 'ok' && !usage.claude && !usage.codex)) {
+    return `<section class="plan-limits">${head}<div class="panel empty"><b>No usage reading yet.</b>
+      <span class="small">Run <code>/snapshot</code> in your team repo, or set up the collector on the
+      computer that is always on.</span>${whyHtml('These meters come from a file a collector on your own computer commits to your repo. Until one exists there is nothing to read, and nothing is shown rather than a zero.')}</div></section>`
+  }
+  if (usage.status !== 'ok') {
+    return `<section class="plan-limits">${head}<div class="panel empty"><b>Your usage reading could not be used.</b>
+      <span class="small">${escapeHtml(usage.why ?? '')} Run <code>/snapshot</code> again.</span></div></section>`
+  }
+  const notes = []
+  if (usage.unreadable) {
+    notes.push(`${usage.unreadable} usage file${usage.unreadable === 1 ? '' : 's'} could not be used, so ${usage.unreadable === 1 ? 'it was' : 'they were'} left out.`)
+  }
+  if (usage.skipped) {
+    notes.push(`${usage.skipped} more usage file${usage.skipped === 1 ? ' was' : 's were'} not read - the board reads five.`)
+  }
+  const cards = USAGE_SERVICES.filter((service) => usage[service.key])
+    .map((service) => planCardHtml(service, usage[service.key])).join('')
+  return `<section class="plan-limits">${head}<div class="plan-cards">${cards}</div>` +
+    (notes.length ? `<p class="plan-note">${notes.map(escapeHtml).join(' ')}</p>` : '') + '</section>'
+}
+
 /* ---------- Ledger ---------- */
 
 function renderLedger() {
@@ -1978,6 +2152,7 @@ function renderToday() {
   el('today').innerHTML =
     bannerHtml() + bannerPersonaliseHtml('today') +
     kpiCardsHtml() +
+    planLimitsHtml(data.usage) +
     snapshotBannerHtml(data.routines) +
     ladderHtml(data.setup) +
     fireButtonsHtml(data.workflows) +

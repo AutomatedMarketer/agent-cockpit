@@ -3270,9 +3270,9 @@ test('the owner\'s number never gets a line under it - there is no history behin
   assert.match(unchosen, /No hero number yet/)
 })
 
-test('Today opens on the banner and the numbers, then setup, the run buttons and the board', () => {
+test('Today opens on the banner, the numbers and Plan limits, then setup, the run buttons and the board', () => {
   const drawn = render({ ...base, workflows: [workflow({ fire: true })] }).get('today').innerHTML
-  const marks = ['<section class="banner"', '<div class="kpis"', 'Which of these actually ring is unknown', '<h2>Setup',
+  const marks = ['<section class="banner"', '<div class="kpis"', '<h2>Plan limits', 'Which of these actually ring is unknown', '<h2>Setup',
     '<h2 id="run-jobs">', '<h2>Board', '<h2>Due next', '<h2>Gone quiet', '<h2>Usage']
   const at = marks.map((mark) => drawn.indexOf(mark))
   marks.forEach((mark, index) => assert.ok(at[index] >= 0, `Today has no ${mark}`))
@@ -3696,6 +3696,14 @@ if (process.env.COCKPIT_WRITE_BOARD_BEFORE === '1') {
 }
 
 const BOARD_BEFORE_COPY = JSON.parse(readFileSync(BOARD_BEFORE, 'utf8'))
+// Plan limits arrived on Today after the copy was taken, and is not part of personalising. It is
+// taken out - exactly one of it, and it must be there - and everything else still has to match the
+// copy byte for byte. Retaking the copy instead would pin whatever else had changed with it.
+function todayWithoutPlanLimits(markup) {
+  const sections = markup.match(/<section class="plan-limits">[\s\S]*?<\/section>/g) ?? []
+  assert.equal(sections.length, 1, 'Today does not carry exactly one Plan limits section')
+  return markup.replace(sections[0], '')
+}
 const flush = async (times = 4) => { for (let turn = 0; turn < times; turn += 1) await new Promise((resolve) => setImmediate(resolve)) }
 
 const V1 = 'aaaa1111aaaa'
@@ -3794,7 +3802,7 @@ test('with personalising off, Today is byte for byte the board before personalis
   for (const brand of offs) {
     const label = JSON.stringify(brand)?.slice(0, 40) ?? 'no brand at all'
     const nodes = await pinnedScreens(brand === undefined ? {} : { state: { brand, art } })
-    assert.equal(nodes.get('today').innerHTML, BOARD_BEFORE_COPY.today, `Today changed with personalising off (${label})`)
+    assert.equal(todayWithoutPlanLimits(nodes.get('today').innerHTML), BOARD_BEFORE_COPY.today, `Today changed with personalising off (${label})`)
     onlyMakeItYoursAdded(nodes.get('team').innerHTML, `personalising off: ${label}`)
     assert.deepEqual(nodes.objectUrls.created, [], `a picture was made into an address with personalising off (${label})`)
   }
@@ -3818,7 +3826,7 @@ test('however /api/brand fails, the board boots with personalising off and draws
       await flush()
     })
     assert.ok(browser.requests.some((request) => request.url === '/api/brand'), `the boot never asked /api/brand (${what})`)
-    assert.equal(nodes.get('today').innerHTML, BOARD_BEFORE_COPY.today, `Today changed after ${what}`)
+    assert.equal(todayWithoutPlanLimits(nodes.get('today').innerHTML), BOARD_BEFORE_COPY.today, `Today changed after ${what}`)
     onlyMakeItYoursAdded(nodes.get('team').innerHTML, `after ${what}`)
     assert.deepEqual(browser.art(), [], `a picture was asked for after ${what}`)
   }
@@ -3837,7 +3845,7 @@ test('an /api/brand that never answers holds the board up for three seconds, no 
       mock.timers.tick(1)
       await flush()
     })
-    assert.equal(nodes.get('today').innerHTML, BOARD_BEFORE_COPY.today, 'a silent /api/brand left the board undrawn or changed it')
+    assert.equal(todayWithoutPlanLimits(nodes.get('today').innerHTML), BOARD_BEFORE_COPY.today, 'a silent /api/brand left the board undrawn or changed it')
     assert.deepEqual(browser.art(), [])
   } finally {
     mock.timers.reset()
@@ -4886,4 +4894,228 @@ test('every Personalise control is styled, the slug under a name is smaller, and
   assert.ok(capped.some((rule) => valuesIn(rule)['max-width']), 'the Make it yours forms stretch the width of a laptop')
   assert.ok(capped[0].at > rulesFor('.fire-form').find((rule) => rule.selector === '.fire-form').at)
   assert.ok(rulesFor('.picture-controls', { desktop: true }).some((rule) => valuesIn(rule)['max-width']), 'the picture controls stretch the width of a laptop')
+})
+
+/* ---------- Today: Plan limits, under the three numbers -------------------------------------------
+   How much of each plan is used, from the reading a collector on the owner's own computer commits.
+   It is a reading, never live, and every state says which it is: no reading yet, a reading the board
+   could not use, a stale one, a meter that was unavailable, and a window that has reset since. Two
+   labels have to be in plain view rather than behind a Why?: "unofficial", because the Claude
+   address is not a documented one, and "estimate", because the log count is one. */
+
+const inHours = (hours) => new Date(Date.now() + hours * 3600_000).toISOString()
+const usageService = (over = {}) => ({
+  computer: 'Mac Mini',
+  takenAt: inHours(-2),
+  ageHours: 2,
+  stale: false,
+  plan: { status: 'found', name: 'Max 20x' },
+  limits: {
+    status: 'found', source: 'unofficial-live', readAt: inHours(-2), why: null,
+    windows: [
+      { kind: 'five_hour', label: '5-hour', usedPercent: 18, resetsAt: inHours(1), resetSinceReading: false },
+      { kind: 'weekly_all', label: 'Weekly', usedPercent: 49, resetsAt: inHours(50), resetSinceReading: false },
+      { kind: 'weekly_model', label: 'Weekly, Fable only', usedPercent: 2, resetsAt: inHours(50), resetSinceReading: false }
+    ]
+  },
+  activity: { status: 'found', estimate: true, days: 7, replies: 150, sessions: 6 },
+  ...over
+})
+const usagePayload = (claude = {}, codex = null, over = {}) => ({
+  status: 'ok', why: null, read: 1, skipped: 0, unreadable: 0,
+  claude: usageService(claude),
+  codex: codex ?? usageService({
+    plan: { status: 'found', name: 'Pro' },
+    limits: { status: 'found', source: 'codex-session-log', readAt: inHours(-9), why: null,
+      windows: [{ kind: 'weekly', label: 'Weekly', usedPercent: 0, resetsAt: inHours(100), resetSinceReading: false }] },
+    activity: undefined
+  }),
+  ...over
+})
+const planLimitsOf = (drawn) => /<section class="plan-limits"[\s\S]*?<\/section>/.exec(drawn)?.[0] ?? assert.fail('Today has no Plan limits section')
+const planCards = (section) => Object.fromEntries(
+  [...section.matchAll(/<article class="panel card plan-card" data-service="([a-z]+)"[\s\S]*?<\/article>/g)].map((found) => [found[1], found[0]]))
+const withoutWhy = (markup) => markup.replace(/<details class="why">[\s\S]*?<\/details>/g, '')
+const todayWith = (usage) => render({ ...base, usage }).get('today').innerHTML
+
+test('Plan limits sits directly under the three number cards', () => {
+  const drawn = todayWith(usagePayload())
+  const kpisEnd = drawn.indexOf('<div class="kpis"')
+  const limits = drawn.indexOf('<section class="plan-limits"')
+  assert.ok(kpisEnd >= 0 && limits > kpisEnd, 'Plan limits is not after the number cards')
+  assert.ok(limits < drawn.indexOf('Which of these actually ring is unknown'), 'something sits between the number cards and Plan limits')
+  assert.ok(drawn.includes('<h2>Plan limits</h2>'))
+})
+
+test('no usage reading says so in words, and draws no meter and no zero', () => {
+  for (const usage of [undefined, null, { status: 'none', why: 'No usage reading has been taken yet.', read: 0, skipped: 0, unreadable: 0, claude: null, codex: null }]) {
+    const section = planLimitsOf(todayWith(usage))
+    assert.match(textOf(section), /No usage reading yet/)
+    assert.match(section, /<code>\/snapshot<\/code>/, 'the empty state does not say what to do')
+    assert.ok(!section.includes('<svg'), 'an empty state drew a meter')
+    assert.ok(!/\b0%/.test(section), 'an empty state printed a zero')
+  }
+})
+
+test('a reading the board could not use says why, and what to do', () => {
+  const section = planLimitsOf(todayWith({ status: 'unusable', why: 'A usage file is stamped in the future, so its age cannot be trusted.', read: 1, skipped: 0, unreadable: 1, claude: null, codex: null }))
+  assert.match(textOf(section), /could not be used/)
+  assert.match(textOf(section), /stamped in the future/)
+  assert.ok(!section.includes('<svg'))
+})
+
+test('a fresh reading draws a ring per window, each one a labelled picture', () => {
+  const { claude, codex } = planCards(planLimitsOf(todayWith(usagePayload())))
+  assert.ok(claude && codex, 'a card per service')
+  const rings = [...claude.matchAll(/<svg class="meter-ring"[^>]*>/g)].map((found) => found[0])
+  assert.equal(rings.length, 3)
+  for (const ring of rings) {
+    assert.match(ring, /role="img"/, 'a ring is a picture with no role')
+    assert.match(ring, /aria-label="[^"]+"/, 'a ring has nothing to say to a screen reader')
+  }
+  assert.match(rings[0], /aria-label="5-hour: 18% used, resets [^"]+"/)
+  assert.match(rings[2], /aria-label="Weekly, Fable only: 2% used/)
+  assert.match(textOf(claude), /Max 20x/)
+  assert.match(textOf(claude), /Taken 2 hr ago on Mac Mini/)
+  assert.match(textOf(codex), /\bPro\b/)
+})
+
+test('each ring is filled exactly as far as its percentage', () => {
+  const claude = planCards(planLimitsOf(todayWith(usagePayload({
+    limits: { status: 'found', source: 'unofficial-live', readAt: inHours(-1), why: null, windows: [
+      { kind: 'five_hour', label: '5-hour', usedPercent: 18, resetsAt: inHours(1), resetSinceReading: false },
+      { kind: 'weekly_all', label: 'Weekly', usedPercent: 112, resetsAt: inHours(9), resetSinceReading: false }
+    ] }
+  })))).claude
+  const arcs = [...claude.matchAll(/<circle class="meter-used[^"]*"[^>]*stroke-dasharray="([\d.]+) ([\d.]+)"/g)]
+    .map((found) => Number(found[1]) / Number(found[2]))
+  assert.equal(arcs.length, 2)
+  assert.ok(Math.abs(arcs[0] - 0.18) < 0.005, `18% drew ${arcs[0]}`)
+  // Past the limit is a full ring - it cannot be drawn fuller - and the number says how far past.
+  assert.ok(Math.abs(arcs[1] - 1) < 0.005, `112% drew ${arcs[1]}`)
+  assert.match(textOf(claude), /112%/)
+  assert.match(claude, /meter-used level-bad/, 'a plan past its limit is not marked as one')
+  assert.match(claude, /meter-used level-ok/)
+})
+
+test('a zero that was really read is drawn as a zero, with an empty ring', () => {
+  const { codex } = planCards(planLimitsOf(todayWith(usagePayload())))
+  assert.match(textOf(codex), /\b0%/, 'a real reading of nothing used was hidden')
+  assert.match(codex, /aria-label="Weekly: 0% used/)
+})
+
+test('"unofficial" and "estimate" are in plain view, not behind a Why?', () => {
+  const { claude, codex } = planCards(planLimitsOf(todayWith(usagePayload())))
+  assert.match(textOf(withoutWhy(claude)), /unofficial/i, 'the unofficial label is hidden or gone')
+  assert.match(textOf(withoutWhy(claude)), /estimate/i, 'the estimate label is hidden or gone')
+  assert.match(textOf(withoutWhy(claude)), /150 replies/)
+  assert.ok(!/\d+%[^<]*repl/.test(claude), 'the estimate carries a percentage')
+  // Codex reads its own log, which is a different claim, and says so.
+  assert.ok(!/unofficial/i.test(textOf(withoutWhy(codex))), 'Codex is labelled with the Claude address\'s caveat')
+  assert.match(textOf(codex), /Codex(&rsquo;|')s own log/)
+  // The saved copy is no more official than the live address.
+  const saved = planCards(planLimitsOf(todayWith(usagePayload({ limits: { ...usageService().limits, source: 'claude-code-saved' } })))).claude
+  assert.match(textOf(withoutWhy(saved)), /unofficial/i)
+  assert.match(textOf(saved), /saved copy/i)
+})
+
+test('a stale reading says how old it is, in view', () => {
+  const { claude } = planCards(planLimitsOf(todayWith(usagePayload({ takenAt: inHours(-11), ageHours: 11, stale: true }))))
+  assert.match(textOf(withoutWhy(claude)), /older than 8 hours/)
+  assert.match(claude, /class="plan-stale/)
+})
+
+test('a window past its reset shows no percentage, and says why', () => {
+  const claude = planCards(planLimitsOf(todayWith(usagePayload({
+    limits: { status: 'found', source: 'unofficial-live', readAt: inHours(-3), why: null, windows: [
+      { kind: 'five_hour', label: '5-hour', usedPercent: null, resetsAt: inHours(-1), resetSinceReading: true },
+      { kind: 'weekly_all', label: 'Weekly', usedPercent: 49, resetsAt: inHours(9), resetSinceReading: false }
+    ] }
+  })))).claude
+  // Each meter runs from its own opening to the next one's, so the first piece is the 5-hour alone.
+  const [reset] = claude.split('<div class="meter">').slice(1)
+  assert.ok(reset, 'no meter for the reset window')
+  assert.ok(!/\d%/.test(reset), 'a window that has reset still shows its old percentage')
+  assert.ok(!reset.includes('meter-used'), 'a window that has reset still draws its old arc')
+  assert.match(reset, /aria-label="5-hour: reset since this reading/)
+  assert.match(textOf(reset), /Reset since this reading/)
+})
+
+test('unavailable and not found each have a sentence, never a ring', () => {
+  const usage = usagePayload(
+    { limits: { status: 'unavailable', source: null, readAt: null, why: 'Signed out.', windows: [] }, activity: { status: 'not found' } },
+    usageService({ plan: { status: 'not found', name: null }, limits: { status: 'not found', source: null, readAt: null, why: null, windows: [] }, activity: undefined })
+  )
+  const { claude, codex } = planCards(planLimitsOf(todayWith(usage)))
+  assert.match(textOf(claude), /Claude limits were unavailable when this was taken/)
+  assert.match(textOf(claude), /Signed out\./, 'the collector\'s reason is not offered')
+  assert.match(textOf(codex), /No Codex limits were found on Mac Mini/)
+  assert.match(textOf(codex), /plan not found/i)
+  for (const card of [claude, codex]) {
+    assert.ok(!card.includes('<svg class="meter-ring"'), 'a reading that does not exist drew a ring')
+    assert.ok(!/\b0%/.test(card), 'a reading that does not exist printed a zero')
+  }
+  assert.match(textOf(claude), /No Claude Code logs were found/, 'a missing estimate says nothing')
+})
+
+test('files left out of the reading are counted on the page', () => {
+  const section = planLimitsOf(todayWith(usagePayload({}, null, { unreadable: 1, skipped: 2, read: 5 })))
+  assert.match(textOf(section), /1 usage file could not be used/)
+  assert.match(textOf(section), /2 more usage files were not read/)
+})
+
+test('everything the reading carries is escaped', () => {
+  const hostile = '<img src=x onerror=alert(1)>'
+  const drawn = todayWith(usagePayload({
+    computer: hostile,
+    plan: { status: 'found', name: hostile },
+    limits: { status: 'unavailable', source: null, readAt: null, why: hostile, windows: [] }
+  }, null, {}))
+  const section = planLimitsOf(drawn)
+  assert.ok(!section.includes('<img src=x'), 'a name from the repo reached the page as markup')
+  assert.ok(section.includes('&lt;img src=x'), 'the hostile name was dropped rather than escaped, so this proves nothing')
+  const labelled = todayWith(usagePayload({ limits: { ...usageService().limits, windows: [
+    { kind: 'weekly_model', label: 'Weekly, "x" only', usedPercent: 5, resetsAt: inHours(9), resetSinceReading: false }] } }))
+  assert.ok(!/aria-label="Weekly, "x"/.test(labelled), 'a quote in a label broke out of its attribute')
+})
+
+test('no Plan limits state renders undefined, NaN or [object Object]', () => {
+  const states = [
+    usagePayload(),
+    usagePayload({ stale: true, ageHours: 20, takenAt: inHours(-20), computer: null }),
+    usagePayload({ plan: { status: 'unavailable', name: null }, activity: { status: 'unavailable' } }),
+    { status: 'unusable', why: 'A usage file could not be read.', read: 1, skipped: 0, unreadable: 1, claude: null, codex: null }
+  ]
+  for (const usage of states) {
+    const section = planLimitsOf(todayWith(usage))
+    for (const junk of ['undefined', 'NaN', '[object Object]', 'Infinity', 'null']) {
+      assert.ok(!section.includes(junk), `Plan limits rendered "${junk}"`)
+    }
+  }
+})
+
+test('every class Plan limits puts in the markup is one the stylesheet styles', () => {
+  const emitted = new Set()
+  const section = planLimitsOf(todayWith(usagePayload({ stale: true }, null, { unreadable: 1, skipped: 1 })))
+    + planLimitsOf(todayWith(undefined))
+  for (const found of section.matchAll(/class="([a-z0-9 -]+)"/g)) {
+    for (const name of found[1].split(/\s+/).filter(Boolean)) emitted.add(name)
+  }
+  assert.ok(emitted.size >= 10, `only found ${emitted.size} classes - the sweep is not reading them`)
+  for (const name of emitted) {
+    assert.ok(rulesFor(`.${name}`).length || rulesFor(`.${name}`, { desktop: true }).length,
+      `Plan limits puts class "${name}" in the markup and no rule anywhere targets it`)
+  }
+})
+
+test('the meters wrap on a phone rather than taking the page sideways', () => {
+  const meters = Object.assign({}, ...exactRules('.meters').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.equal(meters['flex-wrap'], 'wrap', 'three rings in a row that cannot wrap push a phone sideways')
+  assert.ok(!('overflow-x' in meters))
+  const cards = Object.assign({}, ...exactRules('.plan-cards').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.match(cards['grid-template-columns'] ?? '', /auto-fit/, 'the service cards are a fixed number of columns')
+  // A long computer or plan name breaks inside the card.
+  const name = Object.assign({}, ...exactRules('.plan-name').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.equal(name['min-width'], '0')
+  assert.equal(name['overflow-wrap'], 'anywhere')
 })
