@@ -5010,6 +5010,8 @@ test('a zero that was really read is drawn as a zero, with an empty ring', () =>
   const { codex } = planCards(planLimitsOf(todayWith(usagePayload())))
   assert.match(textOf(codex), /\b0%/, 'a real reading of nothing used was hidden')
   assert.match(codex, /aria-label="Weekly: 0% used/)
+  // Nothing used is the empty track alone: a zero-length arc with round ends paints a dot.
+  assert.ok(!codex.includes('meter-used'), 'nothing used still drew an arc')
 })
 
 test('"unofficial" and "estimate" are in plain view, not behind a Why?', () => {
@@ -5118,7 +5120,7 @@ test('every class Plan limits puts in the markup is one the stylesheet styles', 
 
 test('the meters wrap on a phone rather than taking the page sideways', () => {
   const meters = Object.assign({}, ...exactRules('.meters').filter((rule) => !rule.inMedia).map(valuesIn))
-  assert.equal(meters['flex-wrap'], 'wrap', 'three rings in a row that cannot wrap push a phone sideways')
+  assert.match(meters['grid-template-columns'] ?? '', /auto-fill/, 'three rings in a row that cannot wrap push a phone sideways')
   assert.ok(!('overflow-x' in meters))
   const cards = Object.assign({}, ...exactRules('.plan-cards').filter((rule) => !rule.inMedia).map(valuesIn))
   assert.match(cards['grid-template-columns'] ?? '', /auto-fit/, 'the service cards are a fixed number of columns')

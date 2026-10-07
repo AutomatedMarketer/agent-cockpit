@@ -23,7 +23,7 @@ window, not the engine.
 
 | Screen | The question it answers |
 |---|---|
-| **Today** | What happened, what is next, what has gone quiet — plus one-tap Run buttons |
+| **Today** | What happened, what is next, what has gone quiet, how much of your plans is used — plus one-tap Run buttons |
 | **Ledger** | What your week costs, what was proposed for it, and what nothing on the team can do |
 | **Team** | Every agent: model, last run, and whether it is working, quiet or never run |
 | **Workflows** | Every job, and whether it is **armed, declared, unapproved or off** |
@@ -76,6 +76,42 @@ its screen.
 | **Your number** | The figure you chose in `tiles.yml` (`/onboard` asks which) |
 
 A number with nothing behind it shows a sentence saying why, never a zero.
+
+**Plan limits**, directly under the three numbers, show how much of your Claude and Codex plans is
+used: a ring per limit (the 5-hour one, the weekly one, a one-model weekly one when your plan has
+it), the time each one resets in your own time zone, and which computer the reading came from.
+
+| What you see | What it means |
+|---|---|
+| **unofficial** | Claude's figure comes from an address Anthropic does not document. It can change without notice; if it stops answering, the card says *unavailable* rather than guessing |
+| **from Codex's own log** | Codex's figure is the last limit Codex itself recorded on that computer |
+| **estimate** | Replies and sessions over 7 days, counted from Claude Code's logs. A count, never a percentage |
+| **Reset since this reading** | That limit has reset since the reading was taken, so its old percentage is not shown |
+| **older than 8 hours** | The reading is stale. Run `/snapshot`, or check the collector on that computer |
+
+The board never reaches your accounts. The readings come from files a collector on your always-on
+computer commits to `.agent-team/status/usage/` (one file per computer). The board reads up to five
+of them, re-checks every name and number itself, and shows the freshest real reading. No file means
+*"No usage reading yet"*, never a zero.
+
+**Subscriptions**, in the Usage section at the bottom of Today, list what you pay, from
+`subscriptions:` in your `stack.yml` (`/onboard` asks, or add them by hand):
+
+```yaml
+subscriptions:
+  - name: Claude Max
+    service: claude
+    price: 200
+    currency: USD
+    per: month
+```
+
+| Rule | Why |
+|---|---|
+| One total per currency, **never converted** | There is no exchange rate the board could honestly use |
+| A yearly price is shown a month, and says so | So every line is in the same unit as the total |
+| A line with no price is listed and **left out of the total** | Counting it as nothing would say it is free |
+| A line that disagrees with the plan the usage reading found is pointed out | `Claude Pro` written down while the reading says `Max 20x` is worth a look |
 
 ---
 
@@ -288,6 +324,11 @@ used only when you connect a picture store.
 | `404` from GitHub | The owner/repo names are wrong, or the repo is private and `GITHUB_TOKEN` is missing |
 | Every job says **UNKNOWN** | No routines snapshot in your repo. Run `/routines` in Claude Code, commit, push |
 | The snapshot banner says it is stale | Exactly what it means. Run `/routines` again and commit |
+| Plan limits says **No usage reading yet** | No file in `.agent-team/status/usage/`. Run `/snapshot` in Claude Code, or set up the collector on your always-on computer |
+| Plan limits says a reading is **older than 8 hours** | The collector has missed at least two runs. Check it on the computer the card names, or run `/snapshot` |
+| A card says its limits were **unavailable** | The collector could not get a reading it trusted. The **Why?** under it gives the collector's reason |
+| Plan limits says a usage file **could not be used** | It is damaged, dated in the future, or written by a collector this board does not know. Run the collector again |
+| A subscription is **left out of the total** | It needs a `price` like `20` or `19.99`, a three-letter `currency` like `USD`, and `per: month` or `per: year` |
 | A job says **DECLARED** | Its file claims a schedule and no routine backs it. Run `/arm` |
 | A job says **UNAPPROVED** | Something is firing that your files say is off. It is spending runs nobody approved |
 | **No hero number yet** | Your `tiles.yml` names a metric nothing computes, or your ledger has no hours in it. The sentence says which |
@@ -327,6 +368,12 @@ the page renders it. There is no database, no build step, and no framework.
 The arming logic mirrors `scripts/lib/arm.mjs` in the team repo rather than importing it — there is
 no import path between a student's repo and a deployed app. `tests/routines.test.mjs` pins the two
 to the same answers, because mirroring means drift, and drift is what a test is for.
+
+The usage readings work the same way. `tests/fixtures/usage-parity.json` is the shared contract
+with the collector in the team repo — the same bytes in both repos — and `tests/usage.test.mjs`
+holds the board to it. The board does not trust the collector's own safety check: it builds its
+answer only from the fields it knows, and a test plants fake tokens, emails and paths in every field
+of a usage file to prove none of them reaches the page.
 
 ---
 
