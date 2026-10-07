@@ -227,7 +227,9 @@ test('the two repos hold the same usage contract, byte for byte', (t) => {
     new URL('../../agent-team-template/tests/fixtures/usage-parity.json', import.meta.url)
   )
   if (!existsSync(sibling)) {
-    t.skip('agent-team-template is not checked out beside this repo')
+    // Skipped, not passed: on a machine without the other repo this check cannot run, and the
+    // reason says so in the test output rather than letting a quiet skip read as agreement.
+    t.skip(`NOT CHECKED - the usage contract was not compared with the collector's copy, because ${sibling} does not exist (agent-team-template is not checked out beside agent-cockpit)`)
     return
   }
   assert.equal(
