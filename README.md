@@ -89,6 +89,7 @@ it), the time each one resets in your own time zone, and which computer the read
 | **Reset since this reading** | That limit has reset since the reading was taken, so its old percentage is not shown |
 | **Reset time unknown** | The reading came with no reset time, which Claude does for a limit that has not started yet. The percentage is still a real reading |
 | **older than 8 hours** | The reading is stale. Run `/snapshot`, or check the collector on that computer |
+| **Reading from 5 hr ago, collected 1 min ago** | The file is new but the figures in it are older: a saved copy, or the last limit Codex logged. The age and the stale warning go by when the figures were read |
 
 The board never reaches your accounts. The readings come from files a collector on your always-on
 computer commits to `.agent-team/status/usage/` (one file per computer). The board reads up to five
@@ -309,7 +310,7 @@ Locally:
 npm test
 ```
 
-931 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+935 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

@@ -2009,6 +2009,14 @@ function planCardHtml(service, reading) {
   } else {
     body = `<p class="plan-missing">No ${service.name} limits were found${where}.</p>`
   }
+  // The server ages the card by when the limits were read, which a saved copy or a Codex log can put
+  // hours before the file was collected. Said as one line when the two are minutes apart; when they
+  // are not, both, so "1 min ago" never dates a five-hour-old figure.
+  const readAt = limits.readAt ?? reading.takenAt
+  const apart = Math.abs(new Date(reading.takenAt).getTime() - new Date(readAt).getTime())
+  const foot = apart > 10 * 60_000
+    ? `Reading from ${escapeHtml(ago(readAt))}, collected ${escapeHtml(ago(reading.takenAt))}${where}.`
+    : `Taken ${escapeHtml(ago(readAt))}${where}.`
   const stale = reading.stale
     ? `<p class="plan-stale">This reading is older than 8 hours, so it may be out of date. Run
        <code>/snapshot</code>, or check the collector${where}.</p>`
@@ -2018,7 +2026,7 @@ function planCardHtml(service, reading) {
       <div class="plan-name"><p class="title">${service.name}</p><p class="plan-tier">${planNameHtml(reading.plan)}</p></div>
       <div class="plan-chips">${limits.status === 'found' ? sourceChipHtml(limits.source) : ''}</div></div>
     ${body}
-    <p class="plan-foot">Taken ${escapeHtml(ago(reading.takenAt))}${where}.</p>${stale}
+    <p class="plan-foot">${foot}</p>${stale}
     ${service.key === 'claude' ? estimateHtml(reading.activity) : ''}</article>`
 }
 

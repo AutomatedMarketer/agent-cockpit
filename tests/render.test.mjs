@@ -5035,6 +5035,27 @@ test('a stale reading says how old it is, in view', () => {
   assert.match(claude, /class="plan-stale/)
 })
 
+test('the card gives the reading\'s age, and the collection time too when they differ', () => {
+  const saved = planCards(planLimitsOf(todayWith(usagePayload({
+    takenAt: inHours(-1 / 60), ageHours: 5,
+    limits: { ...usageService().limits, readAt: inHours(-5) }
+  })))).claude
+  assert.match(textOf(saved), /Reading from 5 hr ago, collected 1 min ago on Mac Mini\./)
+  assert.ok(!/Taken 1 min ago/.test(textOf(saved)), 'a five-hour-old reading was dated by its file')
+  // Read and collected in the same few minutes: one line, dated by the reading.
+  const fresh = planCards(planLimitsOf(todayWith(usagePayload({
+    takenAt: inHours(-2), ageHours: 2.05,
+    limits: { ...usageService().limits, readAt: inHours(-2.05) }
+  })))).claude
+  assert.match(textOf(fresh), /Taken 2 hr ago on Mac Mini\./)
+  assert.ok(!/collected/.test(textOf(fresh)))
+  // No reading time at all - an unavailable meter - is dated by the file, as before.
+  const none = planCards(planLimitsOf(todayWith(usagePayload({
+    limits: { status: 'unavailable', source: null, readAt: null, why: 'Signed out.', windows: [] }
+  })))).claude
+  assert.match(textOf(none), /Taken 2 hr ago on Mac Mini\./)
+})
+
 test('a window past its reset shows no percentage, and says why', () => {
   const claude = planCards(planLimitsOf(todayWith(usagePayload({
     limits: { status: 'found', source: 'unofficial-live', readAt: inHours(-3), why: null, windows: [

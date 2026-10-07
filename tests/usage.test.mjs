@@ -297,6 +297,56 @@ test('a reading older than eight hours is stale, and says how old', () => {
   assert.equal(shapeUsage([file('mac-mini', reading({ takenAt: hoursBefore(7.9) }))], NOW).claude.stale, false)
 })
 
+// The file is stamped when the collector writes it; the reading inside can be older - a saved copy
+// Claude Code kept, or the last limit Codex logged. Its age is the reading's, or a six-hour-old
+// figure shows as "1 min ago" and is never flagged stale.
+const minutesBefore = (minutes) => new Date(NOW - minutes * 60_000).toISOString()
+
+test('the age and the stale flag come from when the limits were read, not when the file was written', () => {
+  const body = reading({ takenAt: minutesBefore(1) })
+  body.claude.limits.readAt = hoursBefore(6)
+  body.codex.limits.readAt = hoursBefore(9)
+  const usage = shapeUsage([file('mac-mini', body)], NOW)
+  assert.equal(Math.round(usage.claude.ageHours), 6, 'the age is the file\'s, not the reading\'s')
+  assert.equal(usage.claude.stale, false)
+  assert.equal(usage.claude.limits.readAt, hoursBefore(6))
+  assert.equal(usage.claude.takenAt, minutesBefore(1), 'the file time is still there for the page to name')
+  assert.equal(usage.codex.stale, true, 'a nine-hour-old Codex figure in a fresh file was not called stale')
+})
+
+test('a reading time the board cannot trust is dropped, and the file time is used instead', () => {
+  const cases = {
+    'in the future': hoursAfter(1),
+    'after the file was written': minutesBefore(30),
+    'not a time': 'earlier',
+    'missing': undefined
+  }
+  for (const [label, readAt] of Object.entries(cases)) {
+    const body = reading({ takenAt: hoursBefore(1) })
+    body.claude.limits.readAt = readAt
+    const { claude } = shapeUsage([file('mac-mini', body)], NOW)
+    assert.equal(claude.limits.readAt, null, `a reading time ${label} was kept`)
+    assert.equal(claude.limits.status, 'found', `a reading time ${label} threw the reading away`)
+    assert.equal(Math.round(claude.ageHours), 1, `a reading time ${label} set the age`)
+  }
+  // A minute or two after the file stamp is two clocks a little apart, not a lie.
+  const body = reading({ takenAt: hoursBefore(1) })
+  body.claude.limits.readAt = new Date(NOW - 3600_000 + 120_000).toISOString()
+  assert.ok(shapeUsage([file('mac-mini', body)], NOW).claude.limits.readAt, 'two minutes of clock drift lost the reading time')
+})
+
+test('the freshest reading wins by when it was read, not when its file was written', () => {
+  // The laptop wrote its file more recently, but what it holds is a saved copy from six hours ago.
+  const laptop = reading({ takenAt: hoursBefore(1), computer: 'Laptop' })
+  laptop.claude.limits.readAt = hoursBefore(6)
+  laptop.claude.limits.windows[0].usedPercent = 77
+  const mac = reading({ takenAt: hoursBefore(3) })
+  mac.claude.limits.readAt = hoursBefore(3)
+  const usage = shapeUsage([file('laptop', laptop), file('mac-mini', mac)], NOW)
+  assert.equal(usage.claude.computer, 'Mac Mini', 'an older reading in a newer file won')
+  assert.equal(usage.claude.limits.windows[0].usedPercent, 18)
+})
+
 test('a window whose reset has passed shows no percentage', () => {
   const body = reading()
   body.claude.limits.windows[0].resetsAt = hoursBefore(1)

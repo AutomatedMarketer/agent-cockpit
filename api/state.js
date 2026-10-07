@@ -226,6 +226,9 @@ export const USAGE_WINDOW_OPTIONAL = ['model', 'resetsAt']
 export const USAGE_MAX_ACTIVITY_DAYS = 17
 const USAGE_ESTIMATE_DAYS = 7
 const USAGE_MAX_COUNT = 1e7
+// The limits are read a moment before the file is stamped, so a reading time after the stamp is two
+// clocks a little apart at most. Past this, it is not a time the board can date anything by.
+const USAGE_READ_SLACK_MS = 5 * 60_000
 const UNKNOWN_SHAPE = 'The reading is not in a shape this board knows.'
 
 export function isUsageFile(path) {
@@ -274,7 +277,7 @@ const noLimits = (status, why = null) => ({ status, source: null, readAt: null, 
 // A reading is shown whole or not at all. One window the board cannot read means the file is not
 // what the board thinks it is, and showing the other two would present a partial answer as the
 // whole one - the collector refuses a partial reading for the same reason.
-function usageLimits(raw, now) {
+function usageLimits(raw, now, takenMs) {
   if (!isPlainObject(raw) || raw.status === 'not found' || raw.status === undefined) return noLimits('not found')
   if (raw.status === 'unavailable') return noLimits('unavailable', cleanUsageName(raw.why))
   if (raw.status !== 'found') return noLimits('unavailable', UNKNOWN_SHAPE)
@@ -307,11 +310,15 @@ function usageLimits(raw, now) {
       resetSinceReading
     })
   }
+  // When the limits were read, which a saved copy or a Codex log can put hours before the file. A
+  // time in the future, or after the file was written, cannot be the moment of reading, so it is
+  // dropped and the file's own time stands in for it.
   const readMs = isoMs(raw.readAt)
+  const readTrusted = Number.isFinite(readMs) && readMs <= now && readMs <= takenMs + USAGE_READ_SLACK_MS
   return {
     status: 'found',
     source: raw.source,
-    readAt: Number.isFinite(readMs) ? new Date(readMs).toISOString() : null,
+    readAt: readTrusted ? new Date(readMs).toISOString() : null,
     why: null,
     windows
   }
@@ -356,40 +363,47 @@ function readUsageFile(body, now) {
   }
   const takenMs = isoMs(parsed.takenAt)
   if (!Number.isFinite(takenMs)) return { usable: false, why: 'A usage file does not say when it was taken.' }
-  const ageHours = (now - takenMs) / 3600_000
   // A stamp in the future is wrong, not fresh - see shapeSnapshot.
-  if (ageHours < 0) return { usable: false, why: 'A usage file is stamped in the future, so its age cannot be trusted.' }
+  if (takenMs > now) return { usable: false, why: 'A usage file is stamped in the future, so its age cannot be trusted.' }
 
   const reading = {
     usable: true,
     takenMs,
     takenAt: new Date(takenMs).toISOString(),
-    ageHours,
-    stale: ageHours > USAGE_STALE_AFTER_HOURS,
-    computer: cleanUsageName(parsed.computer)
+    computer: cleanUsageName(parsed.computer),
+    // Per service, how old its figures are: from when the limits were read, or from the file when
+    // there is no reading time. Kept apart from the payload; pickService copies what the page needs.
+    age: {}
   }
   for (const service of USAGE_SERVICES) {
     const raw = isPlainObject(parsed[service]) ? parsed[service] : {}
+    const limits = usageLimits(raw.limits, now, takenMs)
+    const readMs = limits.readAt ? Date.parse(limits.readAt) : takenMs
+    const ageHours = (now - readMs) / 3600_000
+    reading.age[service] = { readMs, ageHours, stale: ageHours > USAGE_STALE_AFTER_HOURS }
     reading[service] = {
       plan: usagePlan(raw.plan),
-      limits: usageLimits(raw.limits, now),
+      limits,
       ...(service === 'claude' ? { activity: usageActivity(raw.activity, takenMs) } : {})
     }
   }
   return reading
 }
 
-// The freshest FOUND reading wins, and names the computer it came from. A newer file that could not
-// read the meter does not hide an older one that could - the older one shows, with its age. With no
-// reading anywhere, the freshest file says why.
+// The freshest FOUND reading wins, and names the computer it came from. Freshest is by when the
+// limits were read, not when the file was written: a newer file holding a six-hour-old saved copy
+// does not beat an older file with a newer reading. A newer file that could not read the meter does
+// not hide an older one that could - the older one shows, with its age. With no reading anywhere,
+// the freshest file says why.
 function pickService(readings, service) {
-  const newestFirst = [...readings].sort((a, b) => b.takenMs - a.takenMs)
+  // Two files holding the same reading time - the same Codex log, collected twice - go to the newer file.
+  const newestFirst = [...readings].sort((a, b) => (b.age[service].readMs - a.age[service].readMs) || (b.takenMs - a.takenMs))
   const chosen = newestFirst.find((reading) => reading[service].limits.status === 'found') ?? newestFirst[0]
   return {
     computer: chosen.computer,
     takenAt: chosen.takenAt,
-    ageHours: chosen.ageHours,
-    stale: chosen.stale,
+    ageHours: chosen.age[service].ageHours,
+    stale: chosen.age[service].stale,
     ...chosen[service]
   }
 }
