@@ -224,6 +224,7 @@ export const USAGE_MAX_WINDOWS = 8
 export const USAGE_WINDOW_REQUIRED = ['kind', 'usedPercent']
 export const USAGE_WINDOW_OPTIONAL = ['model', 'resetsAt']
 export const USAGE_MAX_ACTIVITY_DAYS = 17
+export const USAGE_MAX_PERCENT = 1000
 const USAGE_ESTIMATE_DAYS = 7
 const USAGE_MAX_COUNT = 1e7
 // A reading is a few hundred bytes; the biggest the collector can write is a few kilobytes. Anything
@@ -262,7 +263,9 @@ export function cleanUsageName(value) {
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/
 const isoMs = (value) => (typeof value === 'string' && ISO_TIME.test(value) ? Date.parse(value) : NaN)
 
-const isPercent = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1000
+// Over 100 is a real reading - an account can go past its limit - and is shown as read, never
+// clipped. Past the contract's ceiling it is not a percentage of anything.
+const isPercent = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= USAGE_MAX_PERCENT
 const isCount = (value) => Number.isInteger(value) && value >= 0 && value <= USAGE_MAX_COUNT
 
 function usagePlan(raw) {

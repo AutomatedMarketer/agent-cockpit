@@ -26,7 +26,8 @@ import {
   USAGE_WINDOW_REQUIRED,
   USAGE_WINDOW_OPTIONAL,
   USAGE_MAX_ACTIVITY_DAYS,
-  USAGE_MAX_BYTES
+  USAGE_MAX_BYTES,
+  USAGE_MAX_PERCENT
 } from '../api/state.js'
 
 const NOW = Date.parse('2026-10-07T22:00:00Z')
@@ -121,6 +122,7 @@ test('usage parity: the board reads the contract the collector writes to', () =>
   assert.deepEqual(USAGE_WINDOW_REQUIRED, usageFixture.windowRequired)
   assert.deepEqual(USAGE_WINDOW_OPTIONAL, usageFixture.windowOptional)
   assert.equal(USAGE_MAX_ACTIVITY_DAYS, usageFixture.maxActivityDays)
+  assert.equal(USAGE_MAX_PERCENT, usageFixture.maxPercent)
 })
 
 // A constant that matches the contract proves nothing if the code beside it checks something else.
@@ -220,6 +222,20 @@ test('usage parity: the estimate takes as many days as the contract allows, and 
   }
   assert.equal(activityWith(usageFixture.maxActivityDays), 'found')
   assert.equal(activityWith(usageFixture.maxActivityDays + 1), 'unavailable')
+})
+
+test('usage parity: a percentage up to the contract ceiling is shown, over-limit included, and past it refused', () => {
+  const most = usageFixture.maxPercent
+  const withPercent = (percent) => limitsOf(withWindows([{ kind: 'weekly_all', usedPercent: percent, resetsAt: hoursAfter(48) }]))
+  const atCeiling = withPercent(most)
+  assert.equal(atCeiling.status, 'found', `${most}% was refused`)
+  assert.equal(atCeiling.windows[0].usedPercent, most)
+  const past = withPercent(most + 0.1)
+  assert.equal(past.status, 'unavailable', `${most + 0.1}% was accepted`)
+  assert.deepEqual(past.windows, [])
+  // Over 100 is over the limit: shown as read, never clipped to 100.
+  assert.equal(withPercent(112).windows[0].usedPercent, 112)
+  assert.equal(withPercent(-0.1).status, 'unavailable')
 })
 
 test('the two repos hold the same usage contract, byte for byte', (t) => {
