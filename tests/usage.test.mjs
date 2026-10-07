@@ -25,7 +25,8 @@ import {
   USAGE_MAX_WINDOWS,
   USAGE_WINDOW_REQUIRED,
   USAGE_WINDOW_OPTIONAL,
-  USAGE_MAX_ACTIVITY_DAYS
+  USAGE_MAX_ACTIVITY_DAYS,
+  USAGE_MAX_BYTES
 } from '../api/state.js'
 
 const NOW = Date.parse('2026-10-07T22:00:00Z')
@@ -479,6 +480,22 @@ test('at most five files are read, and the rest are counted, not ignored silentl
   const usage = shapeUsage(files, NOW, files.length)
   assert.equal(usage.read, USAGE_MAX_FILES)
   assert.equal(usage.skipped, 2)
+})
+
+// The handler passes a file it listed and could not fetch, or would not fetch because the tree says
+// it is too big, as no body. That is a file that could not be used - not one past the first five.
+test('a file that could not be fetched, or is too big, is counted as unusable, not as left out', () => {
+  const usage = shapeUsage([[`${USAGE_FOLDER}/broken.json`, null], file('mac-mini', reading())], NOW, 2)
+  assert.equal(usage.status, 'ok')
+  assert.equal(usage.unreadable, 1)
+  assert.equal(usage.skipped, 0, 'a file that failed to fetch was counted as one past five')
+  const huge = JSON.stringify(reading({ padding: 'x'.repeat(USAGE_MAX_BYTES) }))
+  const big = shapeUsage([file('mac-mini', huge)], NOW, 1)
+  assert.equal(big.status, 'unusable', 'a file over the size limit was read')
+  assert.match(big.why, /too big/)
+  const missing = shapeUsage([[`${USAGE_FOLDER}/mac-mini.json`, null]], NOW, 1)
+  assert.equal(missing.status, 'unusable')
+  assert.match(missing.why, /could not be fetched/)
 })
 
 test('an unusable file next to a good one is counted, and the good one still shows', () => {

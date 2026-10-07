@@ -1034,6 +1034,37 @@ test('only five usage files are fetched, whatever the tree holds', async () => {
   assert.equal(body.usage.skipped, 3, 'the files past five were dropped without a word')
 })
 
+test('a usage file the tree says is over 64 KB is not used, and is counted as unusable', async () => {
+  const path = '.agent-team/status/usage/mac-mini.json'
+  // The body itself is small and good, so only the size in the tree can keep it off the page.
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path, size: 64 * 1024 + 1 }],
+    overrideFiles: { [path]: JSON.stringify(usageReading()) }
+  })
+  assert.equal(body.usage.status, 'unusable', 'a file the tree called too big was fetched and read')
+  assert.match(body.usage.why, /too big/)
+  assert.equal(body.usage.unreadable, 1)
+  assert.equal(body.usage.skipped, 0)
+  // Exactly 64 KB is allowed.
+  const { body: atLimit } = await run({}, {
+    extraTree: [{ type: 'blob', path, size: 64 * 1024 }],
+    overrideFiles: { [path]: JSON.stringify(usageReading()) }
+  })
+  assert.equal(atLimit.usage.status, 'ok')
+})
+
+test('a usage file the tree lists and GitHub will not return is unusable, not "past five"', async () => {
+  const good = '.agent-team/status/usage/mac-mini.json'
+  const gone = '.agent-team/status/usage/laptop.json'
+  const { body } = await run({}, {
+    extraTree: [good, gone].map((path) => ({ type: 'blob', path })),
+    overrideFiles: { [good]: JSON.stringify(usageReading()) }
+  })
+  assert.equal(body.usage.status, 'ok')
+  assert.equal(body.usage.unreadable, 1)
+  assert.equal(body.usage.skipped, 0, 'a failed fetch was reported as a file the board does not read')
+})
+
 test('subscriptions from stack.yml reach the payload, totalled per currency', async () => {
   const stack = 'stack: []\nsubscriptions:\n  - name: Claude Max\n    service: claude\n    price: 200\n    currency: USD\n    per: month\n  - name: Domain\n    service: other\n    price: 24\n    currency: GBP\n    per: year\n'
   const { body } = await run({}, { overrideFiles: { 'stack.yml': stack } })

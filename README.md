@@ -310,7 +310,7 @@ Locally:
 npm test
 ```
 
-935 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+938 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -329,7 +329,8 @@ used only when you connect a picture store.
 | Plan limits says **No usage reading yet** | No file in `.agent-team/status/usage/`. Run `/snapshot` in Claude Code, or set up the collector on your always-on computer |
 | Plan limits says a reading is **older than 8 hours** | The collector has missed at least two runs. Check it on the computer the card names, or run `/snapshot` |
 | A card says its limits were **unavailable** | The collector could not get a reading it trusted. The **Why?** under it gives the collector's reason |
-| Plan limits says a usage file **could not be used** | It is damaged, dated in the future, or written by a collector this board does not know. Run the collector again |
+| Plan limits says a usage file **could not be used** | It is damaged, dated in the future, over 64 KB, written by a collector this board does not know, or GitHub would not return it. Run the collector again |
+| Plan limits says more usage files **were not read** | The board reads the first five files in `.agent-team/status/usage/`, one per computer. Delete the files of computers you no longer use |
 | A subscription is **left out of the total** | It needs a `price` like `20` or `19.99`, a three-letter `currency` like `USD`, and `per: month` or `per: year` |
 | A job says **DECLARED** | Its file claims a schedule and no routine backs it. Run `/arm` |
 | A job says **UNAPPROVED** | Something is firing that your files say is off. It is spending runs nobody approved |

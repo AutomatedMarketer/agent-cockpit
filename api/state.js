@@ -226,6 +226,9 @@ export const USAGE_WINDOW_OPTIONAL = ['model', 'resetsAt']
 export const USAGE_MAX_ACTIVITY_DAYS = 17
 const USAGE_ESTIMATE_DAYS = 7
 const USAGE_MAX_COUNT = 1e7
+// A reading is a few hundred bytes; the biggest the collector can write is a few kilobytes. Anything
+// over this is not a reading, and is neither fetched nor parsed.
+export const USAGE_MAX_BYTES = 64 * 1024
 // The limits are read a moment before the file is stamped, so a reading time after the stamp is two
 // clocks a little apart at most. Past this, it is not a time the board can date anything by.
 const USAGE_READ_SLACK_MS = 5 * 60_000
@@ -351,6 +354,10 @@ function usageActivity(raw, takenMs) {
 // One file, judged on its own. Every `why` is a finished sentence, for the reason shapeSnapshot
 // gives: it is printed straight after a bold sentence.
 function readUsageFile(body, now) {
+  // No body is a file the tree listed that the handler could not fetch, or would not, because the
+  // tree said it was too big. Either way it is a file that could not be used.
+  if (typeof body !== 'string') return { usable: false, why: 'A usage file could not be fetched, or was too big to read.' }
+  if (Buffer.byteLength(body, 'utf8') > USAGE_MAX_BYTES) return { usable: false, why: 'A usage file was too big to read.' }
   let parsed
   try {
     parsed = JSON.parse(body)
@@ -410,7 +417,8 @@ function pickService(readings, service) {
 
 // `found` is how many usage files the tree holds. Only the first five, in name order, are read: a
 // file per computer, and nobody has more than five always-on computers - the rest are counted so the
-// page can say some were left out rather than dropping them without a word.
+// page can say some were left out rather than dropping them without a word. `skipped` is only ever
+// those: a file among the five that could not be fetched, or was too big, is `unreadable`.
 export function shapeUsage(files, now = Date.now(), found = null) {
   const given = Array.isArray(files) ? files : []
   const total = Math.max(found ?? 0, given.length)
@@ -1435,8 +1443,10 @@ export default async function handler(request, response) {
     const ONBOARDING_STATE = '.agent-team/onboarding-state.md'
     const hasOnboarding = paths.includes(ONBOARDING_STATE)
     // One file per computer. Only the first five are fetched - shapeUsage counts the rest, so the
-    // page can say some were left out.
+    // page can say some were left out. One the tree says is over the size limit is not fetched at
+    // all, and goes to shapeUsage with no body, to be counted as a file that could not be used.
     const usagePaths = paths.filter((path) => isUsageFile(path)).sort()
+    const usageBody = async (path) => ((sizes[path] ?? 0) > USAGE_MAX_BYTES ? null : rawFile(settings, path))
 
     const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles] =
       await Promise.all([
@@ -1455,7 +1465,7 @@ export default async function handler(request, response) {
         hasLedger ? rawFile(settings, 'ledger.yml') : null,
         hasProposals ? rawFile(settings, 'proposals.yml') : null,
         hasRoutineSnapshot ? rawFile(settings, ROUTINE_SNAPSHOT) : null,
-        Promise.all(usagePaths.slice(0, USAGE_MAX_FILES).map(async (path) => [path, await rawFile(settings, path)]))
+        Promise.all(usagePaths.slice(0, USAGE_MAX_FILES).map(async (path) => [path, await usageBody(path)]))
       ])
 
     const unparseable = []
@@ -1579,9 +1589,9 @@ export default async function handler(request, response) {
 
     const ledger = shapeLedger(ledgerSource)
     const proposals = shapeProposals(proposalsSource)
-    // A file the tree listed and the fetch could not return is not a reading; it is skipped here
-    // rather than parsed as the text "null".
-    const usage = shapeUsage(usageFiles.filter(([, body]) => typeof body === 'string'), now, usagePaths.length)
+    // A file the tree listed and the fetch could not return keeps its place with no body: it is a
+    // file that could not be used, not one of those past the first five.
+    const usage = shapeUsage(usageFiles, now, usagePaths.length)
     const subscriptions = shapeSubscriptions(stackDoc, usage)
     const hero = shapeHero(tiles, ledger)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, connections, verdicts: verdictPaths.length, onboarding, now })

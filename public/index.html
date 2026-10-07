@@ -2043,10 +2043,10 @@ function planLimitsHtml(usage) {
   }
   const notes = []
   if (usage.unreadable) {
-    notes.push(`${usage.unreadable} usage file${usage.unreadable === 1 ? '' : 's'} could not be used, so ${usage.unreadable === 1 ? 'it was' : 'they were'} left out.`)
+    notes.push(`${usage.unreadable} usage file${usage.unreadable === 1 ? '' : 's'} could not be used (damaged, too big, or not returned by GitHub), so ${usage.unreadable === 1 ? 'it was' : 'they were'} left out.`)
   }
   if (usage.skipped) {
-    notes.push(`${usage.skipped} more usage file${usage.skipped === 1 ? ' was' : 's were'} not read - the board reads five.`)
+    notes.push(`${usage.skipped} more usage file${usage.skipped === 1 ? ' was' : 's were'} not read - the board reads only five.`)
   }
   const cards = USAGE_SERVICES.filter((service) => usage[service.key])
     .map((service) => planCardHtml(service, usage[service.key])).join('')

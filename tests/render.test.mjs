@@ -5109,6 +5109,10 @@ test('files left out of the reading are counted on the page', () => {
   const section = planLimitsOf(todayWith(usagePayload({}, null, { unreadable: 1, skipped: 2, read: 5 })))
   assert.match(textOf(section), /1 usage file could not be used/)
   assert.match(textOf(section), /2 more usage files were not read/)
+  // Two different things, and the sentences say which: a file that was damaged, too big or would not
+  // come back from GitHub, and a file past the five the board reads.
+  assert.match(textOf(section), /could not be used \(damaged, too big, or not returned by GitHub\)/)
+  assert.match(textOf(section), /not read - the board reads only five/)
 })
 
 test('everything the reading carries is escaped', () => {
