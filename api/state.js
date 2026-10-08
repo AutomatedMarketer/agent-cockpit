@@ -21,7 +21,8 @@ import {
   fillMarkers,
   sortRunsNewestFirst,
   runsSince,
-  heartbeatStatus, viewGate, TASK_STATUSES } from './lib.js'
+  heartbeatStatus, HEARTBEAT_STALE_AFTER_MINUTES, HEARTBEAT_STALE_MIN_MINUTES,
+  HEARTBEAT_STALE_MAX_MINUTES, viewGate, TASK_STATUSES } from './lib.js'
 import {
   parseWorkflow,
   normaliseSteps,
@@ -734,14 +735,24 @@ function safeRuntimeUrl(value) {
   return parsed.href
 }
 
+// Only a real whole number in range counts. yaml-lite hands back a bare 200 as a number and a
+// quoted "200" as a string; the string is ignored rather than guessed at, and so is anything else
+// unusable, because falling back to 30 is exactly what every runtime did before this field existed.
+function staleAfterFrom(value) {
+  return Number.isInteger(value) && value >= HEARTBEAT_STALE_MIN_MINUTES && value <= HEARTBEAT_STALE_MAX_MINUTES
+    ? value
+    : HEARTBEAT_STALE_AFTER_MINUTES
+}
+
 export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
   const entries = Array.isArray(registry?.runtimes) ? registry.runtimes : []
   return entries
     .filter((entry) => entry && typeof entry === 'object')
     .map((entry) => {
       const beat = entry.heartbeat ? heartbeats[entry.heartbeat] ?? null : null
+      const staleAfterMinutes = staleAfterFrom(entry.stale_after_minutes)
       const { status, lastBeat } = entry.heartbeat
-        ? heartbeatStatus(beat, now)
+        ? heartbeatStatus(beat, now, staleAfterMinutes)
         : { status: 'no-heartbeat', lastBeat: null }
       return {
         name: String(entry.name ?? 'unnamed'),
@@ -749,7 +760,8 @@ export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
         url: safeRuntimeUrl(entry.url),
         heartbeat: entry.heartbeat ?? null,
         status,
-        lastBeat
+        lastBeat,
+        staleAfterMinutes
       }
     })
 }

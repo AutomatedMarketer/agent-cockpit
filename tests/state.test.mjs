@@ -1117,3 +1117,48 @@ test('a runtime with a refused url still shows, just without a link', () => {
   assert.equal(runtime.name, 'Hermes')
   assert.equal(runtime.url, null)
 })
+
+/* The staleness window was a fixed 30 minutes for every runtime. A runtime whose cron runs every
+   few hours was permanently "silent". `stale_after_minutes` is the owner's word for it, per entry.
+   yaml-lite turns a bare 200 into a number and a quoted "200" into a string; only the number counts,
+   because the rest of this file treats a string where a number belongs as a mistake to ignore
+   rather than to guess at. Anything unusable falls back to 30, which is what every runtime got
+   before this existed. */
+const staleOf = (value) => shapeRuntimes(
+  { runtimes: [{ name: 'X', heartbeat: 'hb', stale_after_minutes: value }] },
+  { hb: { at: new Date(Date.now() - 3 * 3600_000).toISOString() } }
+)[0].staleAfterMinutes
+
+test('stale_after_minutes accepts whole numbers from 5 to 1440', () => {
+  assert.equal(staleOf(5), 5)
+  assert.equal(staleOf(1440), 1440)
+  assert.equal(staleOf(200), 200)
+})
+
+test('stale_after_minutes outside the range, fractional, or not a number falls back to 30', () => {
+  for (const bad of [4, 1441, 0, -5, 7.5, '200', '', null, undefined, true, NaN, [200], {}]) {
+    assert.equal(staleOf(bad), 30, `${JSON.stringify(bad)} must fall back to 30`)
+  }
+})
+
+test('a runtime with no stale_after_minutes behaves exactly as before', () => {
+  const [runtime] = shapeRuntimes(
+    { runtimes: [{ name: 'X', heartbeat: 'hb' }] },
+    { hb: { at: new Date(Date.now() - 3 * 3600_000).toISOString() } }
+  )
+  assert.equal(runtime.staleAfterMinutes, 30)
+  assert.equal(runtime.status, 'silent')
+})
+
+test('stale_after_minutes: 200 keeps a three-hour-old beat live and silences one at 3h21m', () => {
+  const now = Date.parse('2026-08-10T12:00:00Z')
+  const beatAt = (minutesOld) => new Date(now - minutesOld * 60_000).toISOString()
+  const statusFor = (minutesOld) => shapeRuntimes(
+    { runtimes: [{ name: 'X', heartbeat: 'hb', stale_after_minutes: 200 }] },
+    { hb: { at: beatAt(minutesOld) } },
+    now
+  )[0].status
+  assert.equal(statusFor(180), 'live')
+  assert.equal(statusFor(200), 'live', 'the edge itself is still live, as with the default')
+  assert.equal(statusFor(201), 'silent')
+})

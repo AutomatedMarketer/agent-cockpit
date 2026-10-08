@@ -322,6 +322,10 @@ export const TASK_STATUSES = ['todo', 'doing', 'done']
 
 export const STALE_AFTER_DAYS = 7
 export const HEARTBEAT_STALE_AFTER_MINUTES = 30
+// A runtime can set its own window in runtimes.yml with `stale_after_minutes` (a cron that runs
+// every few hours is not "silent" at 31 minutes). Whole numbers in this range only.
+export const HEARTBEAT_STALE_MIN_MINUTES = 5
+export const HEARTBEAT_STALE_MAX_MINUTES = 1440
 export const OVERNIGHT_HOURS = 24
 
 // Flat `key: value` frontmatter is all an agent file uses.
@@ -810,14 +814,14 @@ export function splitTaskText(text) {
 // A heartbeat file is `{ "runtime": "hermes", "at": "…" }`, written by the runtime's own
 // cron. Fresh means the light is on. Stale or absent means it is not, and the rail says so
 // rather than pretending everything is fine.
-export function heartbeatStatus(beat, now = Date.now()) {
+export function heartbeatStatus(beat, now = Date.now(), staleAfter = HEARTBEAT_STALE_AFTER_MINUTES) {
   if (!beat || typeof beat !== 'object' || !beat.at) {
     return { status: 'no-heartbeat', lastBeat: null }
   }
   const age = minutesSince(beat.at, now)
   if (age === null) return { status: 'no-heartbeat', lastBeat: null }
   return {
-    status: age <= HEARTBEAT_STALE_AFTER_MINUTES ? 'live' : 'silent',
+    status: age <= staleAfter ? 'live' : 'silent',
     lastBeat: beat.at
   }
 }

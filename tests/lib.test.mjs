@@ -463,3 +463,10 @@ test('a refusal opening with underscore emphasis is missed, and misses safely', 
   assert.equal(notInUse(body), false, 'if this starts detecting, the note above is out of date')
   assert.equal(notInUseBecause(body), null)
 })
+
+test('heartbeatStatus takes its staleness window as a third argument and defaults to 30 minutes', () => {
+  const threeHoursOld = { at: '2026-08-10T09:00:00Z' }
+  assert.equal(heartbeatStatus(threeHoursOld, NOW).status, 'silent')
+  assert.equal(heartbeatStatus(threeHoursOld, NOW, 200).status, 'live')
+  assert.equal(heartbeatStatus(threeHoursOld, NOW, 179).status, 'silent')
+})
