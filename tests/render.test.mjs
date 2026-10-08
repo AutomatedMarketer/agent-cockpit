@@ -5768,3 +5768,20 @@ test('on a phone the Hermes card wraps, its buttons are thumb-sized and the copy
   // The tab is drawn like every other, and hidden until there is a Hermes to show.
   assert.match(html, /<a href="#hermes" data-screen="hermes" id="tab-hermes" hidden>/)
 })
+
+test('Open Hermes from your phone: Tailscale address only, and the login page seen before the url is saved', () => {
+  const page = render({ ...base, hermes: hermesPayload(), runtimes: [hermesRuntime()] }).get('hermes').innerHTML
+  const card = page.slice(page.indexOf('>Open Hermes from your phone<'), page.indexOf('>Ask Hermes for a health check<'))
+  const variants = [...card.matchAll(/<pre class="copy-text">([\s\S]*?)<\/pre>/g)].map((match) => match[1])
+  assert.equal(variants.length, 2, 'the Mac and Windows versions are not both there')
+  for (const text of variants) {
+    assert.match(text, /only on that Tailscale address/)
+    assert.match(text, /never on 0\.0\.0\.0 or all addresses/)
+    const login = text.indexOf('login page appears')
+    const stop = text.indexOf('If no login page appears, stop the dashboard')
+    const save = text.indexOf('url: on the Hermes entry in runtimes.yml')
+    assert.ok(login > 0 && stop > login && save > stop, `the login check does not come before the url is saved: ${login}, ${stop}, ${save}`)
+  }
+  // The page does not promise a login it has not seen: it says to check for one.
+  assert.match(card, /<p class="copy-intro">[^<]*check that it asks for a login/)
+})

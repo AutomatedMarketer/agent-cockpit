@@ -3760,12 +3760,17 @@ function hermesCopyCardsHtml() {
   const open = runtime?.url
     ? `<p class="copy-lead"><a class="hermes-open" href="${escapeHtml(runtime.url)}" rel="noreferrer noopener">Open Hermes</a></p>`
     : '<p class="copy-lead">Once it opens on your phone, add its address as <code>url:</code> on the Hermes entry in <code>runtimes.yml</code>, and an Open Hermes button appears here.</p>'
+  // The login is what Hermes's own code says it does off this computer - read, not seen working
+  // here. So the words make the person SEE the login page before anything is saved, and stop the
+  // dashboard if it is not there, rather than trusting this page's say-so.
   const phone = (where, keep) => `I want to open the Hermes dashboard from my phone over Tailscale.
 On this ${where}:
 1. Check Tailscale is running and tell me this computer's Tailscale address.
-2. Start the Hermes dashboard (hermes dashboard) so it listens on that address. It asks for a login when it is not only on this computer - help me set one.
-3. ${keep}
-4. Add the address as url: on the Hermes entry in runtimes.yml in my team repo.
+2. Start the Hermes dashboard (hermes dashboard) so it listens only on that Tailscale address - never on 0.0.0.0 or all addresses.
+3. I will open that address on my phone. Wait until I tell you whether a Hermes login page appears, and help me set the login if it asks.
+4. If no login page appears, stop the dashboard straight away and tell me why it did not ask.
+5. Only once I have seen the login page: ${keep}
+6. Then add the address as url: on the Hermes entry in runtimes.yml in my team repo.
 Show me each change and ask before you make it.`
   const health = `Health check, please. In short bullet points:
 - your version, and whether an update is waiting
@@ -3780,10 +3785,10 @@ Do not show me keys, tokens, addresses or file paths.`
 Tell me what you found, and ask before changing anything.`
   return [
     copyCardHtml('Open Hermes from your phone',
-      'Hermes has its own dashboard: a web page with a chat, on the computer Hermes runs on. Tailscale is a private network between your own devices, so your phone can open that page without it ever being on the public internet. The dashboard asks for its own login.',
+      'Hermes has its own dashboard: a web page with a chat, on the computer Hermes runs on. Tailscale is a private network between your own devices, so your phone can open that page without it ever being on the public internet. Before you rely on it, check that it asks for a login when your phone opens it: if it does not, stop it.',
       [
-        ['On a Mac', 'Paste this into Claude Code on the Mac that runs Hermes:', phone('Mac', 'Keep it running after a restart, as its own LaunchAgent.')],
-        ['On Windows', 'Paste this into Claude Code on the PC that runs Hermes:', phone('Windows PC', 'Keep it running after a restart, starting when I sign in.')]
+        ['On a Mac', 'Paste this into Claude Code on the Mac that runs Hermes:', phone('Mac', 'keep it running after a restart, as its own LaunchAgent.')],
+        ['On Windows', 'Paste this into Claude Code on the PC that runs Hermes:', phone('Windows PC', 'keep it running after a restart, starting when I sign in.')]
       ], open),
     copyCardHtml('Ask Hermes for a health check',
       'A quick way to hear from Hermes itself whether all is well. Hermes answers from its own state.',
