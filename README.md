@@ -31,6 +31,16 @@ window, not the engine.
 | **Memory** | Your vault, browsable and searchable **by page name** |
 | **Connections** | Every runtime in `runtimes.yml` — alive or silent, from its own heartbeat |
 
+### Writing an entry in `runtimes.yml`
+
+| Field | What the board does with it |
+|---|---|
+| `url` | Becomes the **Open** link. Only a plain `http://` or `https://` address with no username or password in it is kept. Anything else (`javascript:`, `data:`, `file:`, a made-up string) is dropped: the runtime still shows, just without a link |
+| `heartbeat` | The file the runtime writes on a schedule. Fresh means **Live**, older means **Silent** |
+| `stale_after_minutes` | Optional. How old that heartbeat may get before the runtime shows **Silent**. A whole number from **5** to **1440**. Leave it out and it is **30**. A number out of range, a decimal, or one in quotes (`"200"`) is ignored and 30 is used |
+
+A runtime whose schedule runs every few hours needs this, or it will look silent between runs.
+
 ---
 
 ## The look
@@ -311,7 +321,7 @@ Locally:
 npm test
 ```
 
-944 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+952 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
