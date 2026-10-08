@@ -5785,3 +5785,11 @@ test('Open Hermes from your phone: Tailscale address only, and the login page se
   // The page does not promise a login it has not seen: it says to check for one.
   assert.match(card, /<p class="copy-intro">[^<]*check that it asks for a login/)
 })
+
+test('a runtime whose stale_after_minutes was not understood says so, and that 30 is used', () => {
+  const drawn = connectionsScreen({ connections: [], runtimes: [aRuntime({ staleAfterMinutes: 30, staleAfterUnderstood: false })] })
+  assert.match(drawn, /<code>stale_after_minutes<\/code> not understood, using 30 min/)
+  for (const fine of [true, undefined]) {
+    assert.ok(!/not understood/.test(connectionsScreen({ connections: [], runtimes: [aRuntime({ staleAfterMinutes: 30, staleAfterUnderstood: fine })] })))
+  }
+})

@@ -3902,7 +3902,10 @@ function renderConnections() {
         <span class="small muted">${runtime.lastBeat ? `heartbeat ${escapeHtml(ago(runtime.lastBeat))}` : 'no heartbeat file yet'}${
           // Said only when the owner set their own window in runtimes.yml; 30 is what every runtime had before.
           Number.isInteger(runtime.staleAfterMinutes) && runtime.staleAfterMinutes !== 30
-            ? ` &middot; silent after ${minutesWords(runtime.staleAfterMinutes)} without one` : ''}</span>
+            ? ` &middot; silent after ${minutesWords(runtime.staleAfterMinutes)} without one` : ''}${
+          // A setting the server could not read is said, so the owner knows why it did nothing.
+          runtime.staleAfterUnderstood === false
+            ? ' &middot; <code>stale_after_minutes</code> not understood, using 30 min' : ''}</span>
         <span class="row">${hermesShown() && runtime === hermesRuntime() ? '<a href="#hermes">Hermes page &rarr;</a>' : ''}${runtime.url ? `<a href="${escapeHtml(runtime.url)}" rel="noreferrer noopener">Open &rarr;</a>` : ''}</span>
       </div>
     </div>`).join('')

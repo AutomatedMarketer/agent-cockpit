@@ -1244,13 +1244,26 @@ function safeRuntimeUrl(value) {
   return parsed.href
 }
 
-// Only a real whole number in range counts. yaml-lite hands back a bare 200 as a number and a
-// quoted "200" as a string; the string is ignored rather than guessed at, and so is anything else
-// unusable, because falling back to 30 is exactly what every runtime did before this field existed.
+// A runtime's own heartbeat window, as people actually write it. yaml-lite hands back a bare 200 as
+// a number, but it does not know inline comments or quotes round a number: `200 # every 3 hours`
+// and `"200"` both arrive as strings. Those used to fall back to 30 without a word, so a Hermes
+// entry written with a helpful comment read Silent between every run. yaml-lite is kept in lockstep
+// with the template's own parser, so the fix is here, for this one field: a comment (a # after a
+// space) is dropped, then one pair of matching quotes, and what is left must be digits only. Any
+// other value - words, a decimal, a number outside 5-1440 - is not understood: 30 is used, and the
+// runtime row says so rather than leaving the owner to wonder why their setting did nothing.
 function staleAfterFrom(value) {
-  return Number.isInteger(value) && value >= HEARTBEAT_STALE_MIN_MINUTES && value <= HEARTBEAT_STALE_MAX_MINUTES
-    ? value
-    : HEARTBEAT_STALE_AFTER_MINUTES
+  const fallback = { minutes: HEARTBEAT_STALE_AFTER_MINUTES, understood: false }
+  if (value === undefined) return { minutes: HEARTBEAT_STALE_AFTER_MINUTES, understood: true }
+  let minutes = null
+  if (typeof value === 'number') minutes = value
+  else if (typeof value === 'string') {
+    const text = value.replace(/\s+#.*$/, '').trim().replace(/^(["'])(.*)\1$/, '$2').trim()
+    if (/^\d{1,5}$/.test(text)) minutes = Number(text)
+  }
+  return Number.isInteger(minutes) && minutes >= HEARTBEAT_STALE_MIN_MINUTES && minutes <= HEARTBEAT_STALE_MAX_MINUTES
+    ? { minutes, understood: true }
+    : fallback
 }
 
 export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
@@ -1259,7 +1272,7 @@ export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
     .filter((entry) => entry && typeof entry === 'object')
     .map((entry) => {
       const beat = entry.heartbeat ? heartbeats[entry.heartbeat] ?? null : null
-      const staleAfterMinutes = staleAfterFrom(entry.stale_after_minutes)
+      const { minutes: staleAfterMinutes, understood: staleAfterUnderstood } = staleAfterFrom(entry.stale_after_minutes)
       const { status, lastBeat } = entry.heartbeat
         ? heartbeatStatus(beat, now, staleAfterMinutes)
         : { status: 'no-heartbeat', lastBeat: null }
@@ -1270,7 +1283,8 @@ export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
         heartbeat: entry.heartbeat ?? null,
         status,
         lastBeat,
-        staleAfterMinutes
+        staleAfterMinutes,
+        staleAfterUnderstood
       }
     })
 }

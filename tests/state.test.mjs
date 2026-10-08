@@ -1136,8 +1136,46 @@ test('stale_after_minutes accepts whole numbers from 5 to 1440', () => {
 })
 
 test('stale_after_minutes outside the range, fractional, or not a number falls back to 30', () => {
-  for (const bad of [4, 1441, 0, -5, 7.5, '200', '', null, undefined, true, NaN, [200], {}]) {
+  for (const bad of [4, 1441, 0, -5, 7.5, '', null, undefined, true, NaN, [200], {}, '7.5', '4', '1441', 'two hundred', '200m', '+200', '-200', '2 00', '0x10']) {
     assert.equal(staleOf(bad), 30, `${JSON.stringify(bad)} must fall back to 30`)
+  }
+})
+
+const understood = (value) => shapeRuntimes(
+  { runtimes: [{ name: 'X', heartbeat: 'hb', ...(value === undefined ? {} : { stale_after_minutes: value }) }] }, {}
+)[0].staleAfterUnderstood
+
+test('stale_after_minutes written as digits in quotes, or with spaces round them, is the number', () => {
+  assert.equal(staleOf('200'), 200)
+  assert.equal(staleOf(' 200 '), 200)
+  assert.equal(understood('200'), true)
+})
+
+test('stale_after_minutes the board cannot use is said to be not understood; leaving it out is fine', () => {
+  assert.equal(understood(undefined), true, 'a runtime with no window of its own was flagged')
+  assert.equal(understood(200), true)
+  for (const bad of ['two hundred', '', 7.5, 4, 1441, '4', null, true, [200]]) {
+    assert.equal(understood(bad), false, `${JSON.stringify(bad)} was taken as understood`)
+  }
+})
+
+test('stale_after_minutes as people write it in runtimes.yml: a comment after it, or quotes round it', async () => {
+  const entry = (line) => `runtimes:\n  - name: Hermes\n    kind: agent-runtime\n    heartbeat: runs/heartbeat/hermes.json\n    ${line}\n`
+  const cases = [
+    ['stale_after_minutes: 200 # every 3 hours', 200, true],
+    ['stale_after_minutes: 200    #every 3 hours', 200, true],
+    ['stale_after_minutes: "200"', 200, true],
+    ["stale_after_minutes: '200'  # quoted, with a comment", 200, true],
+    ['stale_after_minutes: "200" # quoted, with a comment', 200, true],
+    ['stale_after_minutes: 200#no space is not a comment', 30, false],
+    ['stale_after_minutes: three hours # words', 30, false],
+    ['stale_after_minutes: 2000 # too long', 30, false]
+  ]
+  for (const [line, minutes, ok] of cases) {
+    const { body } = await run({}, { overrideFiles: { 'runtimes.yml': entry(line) } })
+    const [runtime] = body.runtimes
+    assert.equal(runtime.staleAfterMinutes, minutes, line)
+    assert.equal(runtime.staleAfterUnderstood, ok, line)
   }
 })
 

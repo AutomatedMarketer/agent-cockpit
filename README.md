@@ -79,7 +79,7 @@ address or a path is never shown; the wall says how many it left out.
 |---|---|
 | `url` | Becomes the **Open** link. Only a plain `http://` or `https://` address with no username or password in it is kept. Anything else (`javascript:`, `data:`, `file:`, a made-up string) is dropped: the runtime still shows, just without a link |
 | `heartbeat` | The file the runtime writes on a schedule. Fresh means **Live**, older means **Silent** |
-| `stale_after_minutes` | Optional. How old that heartbeat may get before the runtime shows **Silent**. A whole number from **5** to **1440**. Leave it out and it is **30**. A number out of range, a decimal, or one in quotes (`"200"`) is ignored and 30 is used |
+| `stale_after_minutes` | Optional. How old that heartbeat may get before the runtime shows **Silent**. A whole number from **5** to **1440**. Leave it out and it is **30**. `200`, `"200"` and `200 # every 3 hours` all work. Anything else - words, a decimal, a number out of range - is not understood: 30 is used, and the runtime's row says *stale_after_minutes not understood, using 30 min* |
 
 A runtime whose schedule runs every few hours needs this, or it will look silent between runs.
 
@@ -363,7 +363,7 @@ Locally:
 npm test
 ```
 
-1048 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1052 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
