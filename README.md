@@ -30,6 +30,27 @@ window, not the engine.
 | **Skills** | What this team can actually do, and which jobs use each skill |
 | **Memory** | Your vault, browsable and searchable **by page name** |
 | **Connections** | What you proved works, what each of your computers has set up, and every runtime in `runtimes.yml` — alive or silent, from its own heartbeat |
+| **Hermes** | Only if you run Hermes: whether it is up, its version, and each profile's model, skills and week — plus how to open it from your phone |
+
+### Hermes
+
+If a computer of yours runs Hermes, a **Hermes** card sits at the top of Connections and a
+**Hermes** page appears in the sidebar. Without Hermes you never see either. The card reads
+`.agent-team/status/hermes/`, which `/snapshot` (or the collector on your always-on computer)
+writes.
+
+| Word on the card | What it means |
+|---|---|
+| **Running** | At the last check, Hermes's gateway or one of its schedulers had stamped its own file within five minutes |
+| **Down at last check** | Neither had. Open Hermes and ask it for a health check (the Hermes page has the words to paste) |
+| **Not checked for 9 h** | The reading is over 8 hours old, so the board will not say up or down. Run `/snapshot`, or check the collector |
+| **update available** | Hermes's own update check says a newer version is out |
+
+The Hermes page has three cards to copy from, for a Mac and for Windows: opening Hermes's own
+dashboard from your phone over Tailscale, a health-check question for Hermes, and the checks to
+run when Hermes is missing from the board. Its **Open Hermes** button opens the `url` of the
+Hermes entry in `runtimes.yml`; give that entry `stale_after_minutes: 200`, because its heartbeat
+is written every three hours.
 
 ### The Connections wall
 
@@ -342,7 +363,7 @@ Locally:
 npm test
 ```
 
-1032 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1046 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -363,6 +384,7 @@ used only when you connect a picture store.
 | A card says its limits were **unavailable** | The collector could not get a reading it trusted. The **Why?** under it gives the collector's reason |
 | Plan limits says a usage file **could not be used** | It is damaged, dated in the future, over 64 KB, written by a collector this board does not know, or GitHub would not return it. Run the collector again |
 | Plan limits says more usage files **were not read** | The board reads the first five files in `.agent-team/status/usage/`, one per computer. Delete the files of computers you no longer use |
+| You run Hermes and there is no Hermes card | No file in `.agent-team/status/hermes/` that found Hermes. Run `/snapshot` on the computer that runs it; the Hermes page's **Hermes is not on my board** card has the full checks |
 | Connections says **Nothing found yet** | No file in `.agent-team/status/connections/`. Run `/snapshot` in Claude Code on each computer you use |
 | The wall says a connections file **could not be used** | It is damaged, dated in the future, over 64 KB, written by a collector this board does not know, or GitHub would not return it. Run `/snapshot` again |
 | A server you know you have is missing from the wall | Its name did not read as a plain name (the wall counts those), it belongs to one project folder (counted, not named), or the list stopped at its cap |

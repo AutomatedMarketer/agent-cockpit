@@ -2,7 +2,7 @@ import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { shapeHero, shapeFound, matchProved } from '../api/state.js'
+import { shapeHero, shapeFound, matchProved, shapeHermes } from '../api/state.js'
 import { AGENT_PALETTE, agentColorIndex, PICTURE_BUDGET, DEFAULT_ART_STYLE } from '../api/lib.js'
 import { cssRules } from './helpers/css-rules.mjs'
 
@@ -812,7 +812,7 @@ test('every screen has a title - none renders the word undefined in its header',
 test('the nav has exactly as many tabs as there are screens, and the grid fits them', () => {
   const tabs = html.split('<div class="tabs">')[1].split('</div>')[0]
   const links = tabs.match(/data-screen="/g) ?? []
-  assert.equal(links.length, SCREENS.length, 'nav tabs and screens have drifted apart')
+  assert.equal(links.length, SCREENS.length + OPTIONAL_TABS.length, 'nav tabs and screens have drifted apart')
 
   // A 6-column grid holding 7 links wraps to a second row, and --nav-h (which the body's
   // top padding is built from) only ever described one row. The result was a strip of every
@@ -2819,14 +2819,17 @@ const exactRules = (selector) => cssRules().filter((rule) =>
   rule.selector.split(',').map((one) => one.trim()).includes(selector))
 
 const WIDE = /min-width:\s*48rem/
-const TAB_LABEL = { today: 'Today', ledger: 'Ledger', team: 'Team', workflows: 'Workflows', skills: 'Skills', memory: 'Memory', connections: 'Connections' }
+const TAB_LABEL = { today: 'Today', ledger: 'Ledger', team: 'Team', workflows: 'Workflows', skills: 'Skills', memory: 'Memory', connections: 'Connections', hermes: 'Hermes' }
+// A tab that is only there for somebody who has it: Hermes, shown when a Hermes reading found one.
+const OPTIONAL_TABS = ['hermes']
 
 test('every tab is a drawn icon and its name - no character from a font standing in for a picture', () => {
   // The glyphs were whatever the phone's font made of &#9881; and &#9673; - a gear on one phone, an
   // emoji on the next, a box on a third.
   const links = [...tabsMarkup().matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/g)]
     .map(([, attributes, inside]) => ({ screen: /data-screen="([a-z]+)"/.exec(attributes)?.[1], inside }))
-  assert.deepEqual(links.map((link) => link.screen), SCREENS, 'the tabs are not one per screen, in nav order')
+  assert.deepEqual(links.map((link) => link.screen).filter((screen) => !OPTIONAL_TABS.includes(screen)), SCREENS, 'the tabs are not one per screen, in nav order')
+  assert.deepEqual(links.map((link) => link.screen).filter((screen) => OPTIONAL_TABS.includes(screen)), OPTIONAL_TABS, 'an optional tab is missing')
   for (const { screen, inside } of links) {
     const icon = /<svg\b([^>]*)>([\s\S]*?)<\/svg>/.exec(inside)
     assert.ok(icon, `the ${screen} tab has no drawn icon`)
@@ -5558,4 +5561,210 @@ test('a runtime with its own heartbeat window says when it goes silent; the defa
   assert.match(custom, /silent after 3 hr 20 min without one/)
   const plain = connectionsScreen({ connections: [], runtimes: [aRuntime({ staleAfterMinutes: 30 })] })
   assert.ok(!/silent after/.test(plain))
+})
+
+/* ---------- Hermes: the card atop Connections, and its own page -------------------------------
+   Built from the contract's sample through the server's real shapeHermes. The card is there only
+   when a Hermes reading found Hermes (decision D6), and so are the page and its tab: a student with
+   no Hermes never meets an empty Hermes screen. Running, Down and Not checked are always words. */
+
+const hermesContract = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/hermes-parity.json', import.meta.url)), 'utf8'))
+const hermesSample = (over = {}) => {
+  const doc = structuredClone(hermesContract.sample)
+  // Re-dated to the real clock, keeping the gaps the sample has: beats near the check, donna's three hours back.
+  const shift = Date.now() - 3600_000 - Date.parse(doc.takenAt)
+  const move = (iso) => new Date(Date.parse(iso) + shift).toISOString()
+  doc.takenAt = move(doc.takenAt)
+  doc.gateway.beatAt = move(doc.gateway.beatAt)
+  for (const item of doc.profiles.items) {
+    if (item.scheduler.beatAt) item.scheduler.beatAt = move(item.scheduler.beatAt)
+    if (item.sessions.lastActiveAt) item.sessions.lastActiveAt = move(item.sessions.lastActiveAt)
+  }
+  return { ...doc, ...over }
+}
+const hermesPayload = (docs = [hermesSample()]) =>
+  shapeHermes(docs.map((doc, index) => [`.agent-team/status/hermes/c${index}.json`, typeof doc === 'string' ? doc : JSON.stringify(doc)]), Date.now())
+const noHermes = () => {
+  const doc = hermesSample()
+  doc.install = { status: 'not found' }
+  doc.gateway = { status: 'not found' }
+  doc.profiles = { status: 'not found' }
+  return doc
+}
+const downHermes = () => {
+  const doc = hermesSample()
+  doc.gateway = { status: 'found', state: 'stopped', beatAt: doc.takenAt }
+  doc.profiles.items = doc.profiles.items.map((item) => ({ ...item, scheduler: { status: 'not found' } }))
+  return doc
+}
+const hermesRuntime = (over = {}) => aRuntime({ name: 'Hermes', url: 'http://mac-mini.tail.ts.net:9119/', staleAfterMinutes: 200, ...over })
+const hermesCardOf = (drawn) => {
+  const start = drawn.indexOf('<article class="panel card hermes-card')
+  return start === -1 ? '' : drawn.slice(start, drawn.indexOf('</article>', start))
+}
+
+test('the Hermes card is first on Connections when a reading found Hermes, and absent otherwise', () => {
+  const drawn = connectionsScreen({ connections: [provedGmail], hermes: hermesPayload() })
+  const card = drawn.indexOf('hermes-card')
+  assert.ok(card >= 0 && card < drawn.indexOf('<h2>Connections</h2>'), 'the Hermes card is not at the top of Connections')
+  for (const hermes of [undefined, hermesPayload([]), hermesPayload([noHermes()])]) {
+    assert.ok(!connectionsScreen({ connections: [provedGmail], hermes }).includes('hermes-card'), 'a card for a Hermes nobody has')
+  }
+})
+
+test('the card says Running in words, with the version, the update and where it was checked', () => {
+  const card = hermesCardOf(connectionsScreen({ hermes: hermesPayload() }))
+  assert.match(card, /<p class="hermes-alive hermes-running">Running<\/p>/)
+  assert.match(card, /Hermes 0\.21\.3 - update available/)
+  assert.match(card, /checked 1 hr ago on Mac Mini/)
+})
+
+test('one line per profile: name, model, skills, this week, last active', () => {
+  const card = hermesCardOf(connectionsScreen({ hermes: hermesPayload() }))
+  const rows = [...card.matchAll(/<li class="hermes-profile">([\s\S]*?)<\/li>/g)].map((match) => match[1].replace(/<[^>]+>/g, ' ').replace(/&middot;/g, '·').replace(/\s+/g, ' ').trim())
+  assert.equal(rows.length, 3)
+  assert.match(rows[0], /^default claude-opus-5-5 via anthropic · 89 skills · 14 conversations · 21 scheduled runs this week · last active 1 hr ago$/)
+  assert.match(rows[1], /^donna gpt-5\.1 · 12 skills · 0 conversations · 56 scheduled runs this week$/)
+  assert.match(rows[2], /^coder Model not known · Skills not counted · Not available \(needs a newer Node\)$/)
+})
+
+test('Down and Not checked are words too, and the old one says what to do', () => {
+  const down = hermesCardOf(connectionsScreen({ hermes: hermesPayload([downHermes()]) }))
+  assert.match(down, /<p class="hermes-alive hermes-down">Down at last check<\/p>/)
+  assert.match(down, /Gateway: Stopped/)
+  const old = hermesSample({ takenAt: new Date(Date.now() - 9.5 * 3600_000).toISOString() })
+  const stale = hermesCardOf(connectionsScreen({ hermes: hermesPayload([old]) }))
+  assert.match(stale, /<p class="hermes-alive hermes-stale">Not checked for 9 h<\/p>/)
+  assert.match(stale, /\/snapshot/)
+  assert.ok(!/Running|Down at last check/.test(stale), 'an old reading claims to know whether Hermes is up')
+})
+
+test('the Hermes tab and page exist only when a reading found Hermes', () => {
+  const without = render({ ...base, hermes: hermesPayload([noHermes()]) }, { hash: '#hermes' })
+  assert.equal(without.get('tab-hermes').hidden, true, 'a tab for a Hermes nobody has')
+  assert.equal(without.get('hermes').innerHTML, '', 'a Hermes page was drawn with no Hermes')
+  assert.equal(String(without.get('screen-title').textContent), 'Today', '#hermes opened an empty page')
+  const none = render({ ...base }, { hash: '#hermes' })
+  assert.equal(none.get('tab-hermes').hidden, true)
+  const withIt = render({ ...base, hermes: hermesPayload() }, { hash: '#hermes' })
+  assert.equal(withIt.get('tab-hermes').hidden, false)
+  assert.equal(String(withIt.get('screen-title').textContent), 'Hermes')
+  assert.match(withIt.get('hermes').innerHTML, /hermes-card/)
+  // The card on Connections points at the page.
+  assert.match(hermesCardOf(withIt.get('connections').innerHTML), /href="#hermes"/)
+})
+
+test('the page has the whole detail: gateway, each profile\'s scheduler and last activity', () => {
+  const page = render({ ...base, hermes: hermesPayload() }).get('hermes').innerHTML
+  assert.match(page, /Gateway: Running/)
+  assert.match(page, /Scheduler last beat 1 hr ago/)
+  assert.match(page, /Scheduler last beat 4 hr ago/)
+  assert.match(page, /No scheduler beat found/)
+  assert.match(page, /1 profile was left out because its name did not read as a plain name/)
+})
+
+test('three copy cards, each for a Mac and for Windows, saying what to do in plain words', () => {
+  const page = render({ ...base, hermes: hermesPayload(), runtimes: [hermesRuntime()] }).get('hermes').innerHTML
+  for (const title of ['Open Hermes from your phone', 'Ask Hermes for a health check', 'Hermes is not on my board']) {
+    assert.ok(page.includes(`>${title}<`), `no "${title}" card`)
+  }
+  assert.equal((page.match(/<p class="copy-os">On a Mac<\/p>/g) ?? []).length, 3)
+  assert.equal((page.match(/<p class="copy-os">On Windows<\/p>/g) ?? []).length, 3)
+  assert.equal((page.match(/<button type="button" class="copy-btn" data-copy>Copy<\/button>/g) ?? []).length, 6)
+  assert.match(page, /Tailscale/)
+  assert.match(page, /stale_after_minutes: 200/)
+  assert.match(page, /\/snapshot/)
+  // The checks for "not on my board" come in the order the plan gives.
+  const notOnBoard = page.slice(page.indexOf('>Hermes is not on my board<'))
+  const order = ['/snapshot', 'schedule', 'stale_after_minutes: 200'].map((words) => notOnBoard.indexOf(words))
+  assert.ok(order.every((at) => at > 0) && order[0] < order[1] && order[1] < order[2], `the checks are out of order: ${order}`)
+})
+
+test('Open Hermes opens the Hermes runtime\'s own address, and only when there is one', () => {
+  const page = render({ ...base, hermes: hermesPayload(), runtimes: [hermesRuntime()] }).get('hermes').innerHTML
+  assert.match(page, /<a class="hermes-open" href="http:\/\/mac-mini\.tail\.ts\.net:9119\/" rel="noreferrer noopener">Open Hermes<\/a>/)
+  for (const runtimes of [[], [hermesRuntime({ url: null })], [aRuntime({ name: 'OpenClaw' })]]) {
+    const without = render({ ...base, hermes: hermesPayload(), runtimes }).get('hermes').innerHTML
+    assert.ok(!without.includes('class="hermes-open"'), 'an Open Hermes button with nowhere safe to go')
+    assert.match(without, /add its address as <code>url:<\/code>/)
+  }
+})
+
+test('the Hermes runtime row links to the Hermes page, but only when there is one', () => {
+  const linked = connectionsScreen({ runtimes: [hermesRuntime()], hermes: hermesPayload() })
+  const row = linked.slice(linked.indexOf('<h2>Runtimes</h2>'))
+  assert.match(row, /<a href="#hermes">Hermes page &rarr;<\/a>/)
+  const unlinked = connectionsScreen({ runtimes: [hermesRuntime()], hermes: hermesPayload([noHermes()]) })
+  assert.ok(!unlinked.includes('href="#hermes"'))
+  const other = connectionsScreen({ runtimes: [aRuntime({ name: 'OpenClaw' })], hermes: hermesPayload() })
+  assert.ok(!other.slice(other.indexOf('<h2>Runtimes</h2>')).includes('href="#hermes"'))
+})
+
+test('a Hermes reading the board could not use says so on Connections, with why', () => {
+  const drawn = connectionsScreen({ connections: [provedGmail], hermes: hermesPayload(['{ broken']) })
+  assert.match(drawn, /Your Hermes reading could not be used\./)
+  assert.match(drawn, /A Hermes file could not be read\./)
+})
+
+test('hostile text on the Hermes card and page is escaped', () => {
+  const nasty = '<img src=x onerror=alert(1)>'
+  const hermes = hermesPayload()
+  const [computer] = hermes.computers
+  computer.computer = nasty
+  computer.install.label = nasty
+  computer.aliveLabel = nasty
+  computer.gateway.stateLabel = nasty
+  computer.profiles.items[0].name = nasty
+  computer.profiles.items[0].modelLabel = nasty
+  computer.profiles.items[2].sessions.label = nasty
+  const nodes = render({ ...base, hermes, runtimes: [hermesRuntime({ url: 'http://x/"><img src=x onerror=alert(1)>' })] })
+  for (const screen of ['connections', 'hermes']) {
+    const drawn = nodes.get(screen).innerHTML
+    assert.ok(!drawn.includes('<img src=x'), `raw markup reached ${screen}`)
+  }
+  assert.ok((nodes.get('hermes').innerHTML.match(/&lt;img src=x/g) ?? []).length >= 7)
+})
+
+test('no Hermes state renders undefined, NaN, null or [object Object]', () => {
+  const sparse = hermesSample()
+  sparse.install = { status: 'found' }
+  sparse.gateway = { status: 'unavailable', why: 'could not be read' }
+  sparse.profiles = { status: 'found', items: [], hidden: 0, more: 2 }
+  const old = hermesSample({ takenAt: new Date(Date.now() - 30 * 3600_000).toISOString(), computer: '' })
+  for (const hermes of [hermesPayload(), hermesPayload([downHermes()]), hermesPayload([sparse]), hermesPayload([old]), hermesPayload(['{']), hermesPayload([hermesSample(), downHermes()])]) {
+    const nodes = render({ ...base, hermes, runtimes: [hermesRuntime()] })
+    for (const screen of ['connections', 'hermes']) {
+      for (const junk of ['undefined', 'NaN', '[object Object]', 'Infinity', 'null']) {
+        assert.ok(!nodes.get(screen).innerHTML.includes(junk), `${screen} rendered "${junk}"`)
+      }
+    }
+  }
+})
+
+test('every class the Hermes card and page put in the markup is one the stylesheet styles', () => {
+  const nodes = render({ ...base, hermes: hermesPayload([hermesSample(), downHermes(), hermesSample({ takenAt: new Date(Date.now() - 20 * 3600_000).toISOString() })]), runtimes: [hermesRuntime()] })
+  const markup = nodes.get('hermes').innerHTML + hermesCardOf(nodes.get('connections').innerHTML) +
+    connectionsScreen({ connections: [provedGmail], hermes: hermesPayload(['{']) })
+  const emitted = new Set()
+  for (const found of markup.matchAll(/class="([a-z0-9 -]+)"/g)) {
+    for (const name of found[1].split(/\s+/).filter(Boolean)) emitted.add(name)
+  }
+  assert.ok(emitted.size >= 15, `only found ${emitted.size} classes - the sweep is not reading them`)
+  for (const name of emitted) {
+    assert.ok(rulesFor(`.${name}`).length || rulesFor(`.${name}`, { desktop: true }).length,
+      `the Hermes card or page puts class "${name}" in the markup and no rule anywhere targets it`)
+  }
+})
+
+test('on a phone the Hermes card wraps, its buttons are thumb-sized and the copy text never goes sideways', () => {
+  const rule = (selector) => Object.assign({}, ...exactRules(selector).filter((one) => !one.inMedia).map(valuesIn))
+  for (const control of ['.copy-btn', '.hermes-open', '.copy-card > summary']) {
+    assert.ok(Number.parseFloat(rule(control)['min-height'] ?? '0') >= 2.75, `${control} is smaller than a thumb`)
+  }
+  assert.equal(rule('.copy-text')['white-space'], 'pre-wrap', 'copied text runs off the side of a phone')
+  assert.equal(rule('.copy-text')['overflow-wrap'], 'anywhere')
+  assert.equal(rule('.hermes-top')['flex-wrap'], 'wrap')
+  assert.equal(rule('.hermes-profile')['overflow-wrap'], 'anywhere')
+  // The tab is drawn like every other, and hidden until there is a Hermes to show.
+  assert.match(html, /<a href="#hermes" data-screen="hermes" id="tab-hermes" hidden>/)
 })

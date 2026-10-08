@@ -1132,6 +1132,68 @@
   @media (prefers-reduced-motion: reduce) {
     .found-group > summary::after { transition: none; }
   }
+
+  /* Hermes: a card per computer that runs it, at the top of Connections and on its own page. The
+     state is the biggest thing on the card, in words; its colour repeats the word. A profile is a
+     name over one line of facts that wraps where it must, never sideways. */
+  .hermes-cards { display: grid; gap: .75rem; }
+  .hermes-card { display: grid; gap: .55rem; align-content: start; }
+  .card > .hermes-top, .card > .hermes-foot, .card > .hermes-old, .card > .hermes-note, .card > .hermes-links { margin: 0; }
+  .hermes-top { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .7rem; }
+  .tile-hermes { --tile: var(--link); }
+  .hermes-name { flex: 1 1 9rem; min-width: 0; overflow-wrap: anywhere; }
+  .hermes-name > p { margin: 0; }
+  .hermes-version { font-size: .8125rem; color: var(--muted); }
+  .hermes-top > .hermes-alive { margin: 0; }
+  .hermes-alive { font-size: 1.375rem; font-weight: 700; letter-spacing: -.03em; line-height: 1.15; overflow-wrap: anywhere; }
+  .hermes-running { color: var(--ok); }
+  .hermes-down { color: var(--warn); }
+  .hermes-stale { color: var(--muted); }
+  .hermes-old { font-size: .8125rem; color: var(--warn); overflow-wrap: anywhere; }
+  .hermes-foot { font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
+  .hermes-profiles { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  .hermes-profile {
+    display: grid; gap: .1rem; padding: .55rem 0; border-bottom: 1px solid var(--line);
+    min-width: 0; overflow-wrap: anywhere; font-size: .8125rem;
+  }
+  .hermes-profile-name { font-size: .875rem; font-weight: 600; color: var(--ink); }
+  .hermes-profile-line { color: var(--ink); }
+  .hermes-profile-more { font-size: .75rem; color: var(--muted); }
+  .hermes-note { font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
+  .hermes-links { display: flex; flex-wrap: wrap; gap: 0 1rem; }
+
+  /* Copy cards: folded until opened, the words to paste in a block that wraps rather than scrolls,
+     and a Copy button a thumb can hit under each. */
+  .copy-cards { display: grid; gap: .75rem; }
+  .copy-card > summary {
+    display: flex; align-items: center; min-height: 2.75rem; padding: .4rem 1.05rem; cursor: pointer;
+    list-style: none; font-weight: 600; font-size: .9375rem;
+  }
+  .copy-card > summary::-webkit-details-marker { display: none; }
+  .copy-card > summary::after {
+    content: ""; width: .38rem; height: .38rem; margin: -.15rem 0 0 auto;
+    border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg);
+  }
+  .copy-card[open] > summary::after { transform: rotate(225deg); margin-top: .2rem; }
+  .copy-card > summary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; border-radius: var(--radius); }
+  .copy-body { display: grid; gap: .6rem; max-width: 48rem; padding: 0 1.05rem 1rem; }
+  .copy-body p { margin: 0; }
+  .copy-intro { font-size: .875rem; max-width: 62ch; }
+  .copy-variant { display: grid; gap: .4rem; padding-top: .7rem; border-top: 1px solid var(--line); min-width: 0; }
+  .copy-os { font-size: .6875rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .copy-lead { font-size: .8125rem; overflow-wrap: anywhere; }
+  .copy-text {
+    margin: 0; padding: .7rem .8rem; border-radius: var(--radius-sm); background: var(--chip); color: var(--ink);
+    font-size: .8125rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .copy-btn, .hermes-open {
+    justify-self: start; display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0 1rem;
+    font: inherit; font-size: .875rem; font-weight: 600; color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer;
+  }
+  .hermes-open { color: var(--link); }
+  .copy-btn:hover, .hermes-open:hover { text-decoration: none; border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+  .copy-btn:focus-visible, .hermes-open:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
   /* The owner's number on the Ledger is the same card as on Today, on its own. Capped, because one
      card stretched across a laptop is a band of colour with a number lost at its left end. */
   .kpis-one { max-width: 26rem; }
@@ -1192,6 +1254,7 @@
   <div id="skills" class="screen"></div>
   <div id="memory" class="screen"></div>
   <div id="connections" class="screen"></div>
+  <div id="hermes" class="screen"></div>
 
   <footer id="foot"></footer>
 </div>
@@ -1223,6 +1286,8 @@
     <a href="#memory" data-screen="memory"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 0V4.5A2.5 2.5 0 0 0 9 4zM15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 0"/></svg>Memory<span class="count" id="count-memory"></span></a>
     <span class="nav-caption">Tools</span>
     <a href="#connections" data-screen="connections"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H6a4 4 0 0 0 0 8h3M15 7h3a4 4 0 0 1 0 8h-3M8 11h8"/></svg>Connections<span class="count" id="count-connections"></span></a>
+    <!-- Only for somebody whose Hermes reading found Hermes; renderShell unhides it. -->
+    <a href="#hermes" data-screen="hermes" id="tab-hermes" hidden><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></svg>Hermes</a>
   </div>
   <!-- Lazy, and display:none until the window is wide and tall enough, so a phone never fetches it. -->
   <div class="side-art">
@@ -3593,6 +3658,177 @@ function foundWallHtml(found) {
     (notes.length ? `<p class="found-note">${notes.map(escapeHtml).join(' ')}</p>` : ''))
 }
 
+/* ---------- Hermes ----------
+   The card at the top of Connections and the #hermes page, from api/state.js shapeHermes. Both
+   exist only for somebody whose Hermes reading found Hermes (decision D6): a student without it
+   never sees a Hermes card, tab or page. Running / Down at last check / Not checked for N h is
+   worked out by the server from the times in the file, and is always said in words - the colour on
+   the word repeats it, never replaces it. */
+
+// A computer whose reading found any part of Hermes. "Hermes not found" everywhere is a computer
+// without Hermes, and gets nothing.
+const hasHermes = (computer) => ['install', 'gateway', 'profiles'].some((part) => computer?.[part]?.status === 'found')
+const hermesComputers = () => (data?.hermes?.status === 'ok' && Array.isArray(data.hermes.computers)
+  ? data.hermes.computers.filter(hasHermes) : [])
+const hermesShown = () => hermesComputers().length > 0
+// The runtimes.yml entry called Hermes, whose url the server has already held to http and https.
+const hermesRuntime = () => (data?.runtimes ?? []).find((runtime) => /^hermes$/i.test(String(runtime?.name ?? '').trim())) ?? null
+
+function hermesSessionsWords(sessions) {
+  if (sessions?.status !== 'found') return escapeHtml(sessions?.label ?? 'No sessions recorded')
+  const parts = [
+    plural(sessions.conversations, 'conversation'),
+    `${plural(sessions.scheduled, 'scheduled run')} this week`
+  ]
+  if (sessions.lastActiveAt) parts.push(`last active ${escapeHtml(ago(sessions.lastActiveAt))}`)
+  return parts.join(' &middot; ')
+}
+
+function hermesProfileHtml(item, detail) {
+  const skills = typeof item.skills === 'number' ? plural(item.skills, 'skill') : 'Skills not counted'
+  const line = [escapeHtml(item.modelLabel), skills, hermesSessionsWords(item.sessions)].join(' &middot; ')
+  const scheduler = detail
+    ? `<span class="hermes-profile-more">${item.schedulerBeatAt ? `Scheduler last beat ${escapeHtml(ago(item.schedulerBeatAt))}` : 'No scheduler beat found'}</span>`
+    : ''
+  return `<li class="hermes-profile"><span class="hermes-profile-name">${escapeHtml(item.name)}</span>
+    <span class="hermes-profile-line">${line}</span>${scheduler}</li>`
+}
+
+function hermesGatewayWords(gateway) {
+  if (gateway?.status === 'found') {
+    return `Gateway: ${escapeHtml(gateway.stateLabel)}${gateway.beatAt ? `, last stamp ${escapeHtml(ago(gateway.beatAt))}` : ''}`
+  }
+  return gateway?.status === 'not found' ? 'Gateway not found' : 'Gateway could not be read'
+}
+
+function hermesCardHtml(computer, detail) {
+  const where = computer.computer ? escapeHtml(computer.computer) : 'a computer with no name shown'
+  const profiles = computer.profiles ?? { status: 'not found', items: [], hidden: 0, more: 0 }
+  const items = profiles.items ?? []
+  let list
+  if (items.length) list = `<ul class="hermes-profiles">${items.map((item) => hermesProfileHtml(item, detail)).join('')}</ul>`
+  else if (profiles.status === 'found') list = '<p class="hermes-note">No profiles were listed.</p>'
+  else list = `<p class="hermes-note">${profiles.status === 'not found' ? 'No profiles found.' : 'The profiles could not be read.'}</p>`
+  const notes = []
+  if (profiles.hidden > 0) {
+    notes.push(profiles.hidden === 1
+      ? '1 profile was left out because its name did not read as a plain name.'
+      : `${profiles.hidden} profiles were left out because their names did not read as plain names.`)
+  }
+  if (profiles.more > 0) notes.push(`${plural(profiles.more, 'more profile was', 'more profiles were')} not listed - the card shows twelve.`)
+  const stale = computer.alive === 'stale'
+    ? `<p class="hermes-old">This reading is too old to say whether Hermes is up. Run <code>/snapshot</code> on
+       ${computer.computer ? where : 'that computer'}, or check its collector.</p>`
+    : ''
+  const runtime = hermesRuntime()
+  const links = detail
+    ? ''
+    : `<p class="hermes-links"><a class="watch" href="#hermes">Hermes page &rarr;</a>${runtime?.url
+      ? `<a class="watch" href="${escapeHtml(runtime.url)}" rel="noreferrer noopener">Open Hermes &rarr;</a>` : ''}</p>`
+  // A word the server did not send is drawn as no word at all, never as the class "undefined".
+  const alive = ['running', 'down', 'stale'].includes(computer.alive) ? computer.alive : 'stale'
+  return `<article class="panel card hermes-card">
+    <div class="hermes-top"><span class="tile tile-hermes" aria-hidden="true">H</span>
+      <div class="hermes-name"><p class="title">Hermes</p><p class="hermes-version">${escapeHtml(computer.install?.label ?? '')}</p></div>
+      <p class="hermes-alive hermes-${alive}">${escapeHtml(computer.aliveLabel)}</p></div>
+    <p class="hermes-foot">checked ${escapeHtml(ago(computer.takenAt))} on ${where}${alive === 'stale' ? '' : ` &middot; ${hermesGatewayWords(computer.gateway)}`}</p>
+    ${stale}${list}${notes.length ? `<p class="hermes-note">${notes.map(escapeHtml).join(' ')}</p>` : ''}${links}</article>`
+}
+
+// The top of Connections: a card per computer that has Hermes, or one sentence when the reading
+// itself could not be used. Nothing at all for somebody without Hermes.
+function hermesSectionHtml() {
+  if (data?.hermes?.status === 'unusable') {
+    return `${sectionHead('Your always-on helper', '<h2>Hermes</h2>')}<div class="panel empty"><b>Your Hermes reading could not be used.</b>
+      <span class="small">${escapeHtml(data.hermes.why ?? '')} Run <code>/snapshot</code> again.</span></div>`
+  }
+  if (!hermesShown()) return ''
+  return `${sectionHead('Your always-on helper', '<h2>Hermes</h2>')}<div class="hermes-cards">${hermesComputers().map((computer) => hermesCardHtml(computer, false)).join('')}</div>`
+}
+
+/* The copy cards: each a short explanation and the exact words to paste, for a Mac and for
+   Windows. The words are pasted into Claude Code or into Hermes - the board itself sends nothing. */
+function copyCardHtml(title, intro, variants, extra = '') {
+  const blocks = variants.map(([os, lead, text]) => `<div class="copy-variant"><p class="copy-os">${os}</p>
+    <p class="copy-lead">${lead}</p><pre class="copy-text">${escapeHtml(text)}</pre>
+    <button type="button" class="copy-btn" data-copy>Copy</button></div>`).join('')
+  return `<details class="panel copy-card"><summary>${title}</summary><div class="copy-body"><p class="copy-intro">${intro}</p>${extra}${blocks}</div></details>`
+}
+
+function hermesCopyCardsHtml() {
+  const runtime = hermesRuntime()
+  const open = runtime?.url
+    ? `<p class="copy-lead"><a class="hermes-open" href="${escapeHtml(runtime.url)}" rel="noreferrer noopener">Open Hermes</a></p>`
+    : '<p class="copy-lead">Once it opens on your phone, add its address as <code>url:</code> on the Hermes entry in <code>runtimes.yml</code>, and an Open Hermes button appears here.</p>'
+  const phone = (where, keep) => `I want to open the Hermes dashboard from my phone over Tailscale.
+On this ${where}:
+1. Check Tailscale is running and tell me this computer's Tailscale address.
+2. Start the Hermes dashboard (hermes dashboard) so it listens on that address. It asks for a login when it is not only on this computer - help me set one.
+3. ${keep}
+4. Add the address as url: on the Hermes entry in runtimes.yml in my team repo.
+Show me each change and ask before you make it.`
+  const health = `Health check, please. In short bullet points:
+- your version, and whether an update is waiting
+- whether your gateway is running
+- each profile, its model, and when its scheduler last ran
+- any scheduled job that failed in the last 24 hours, and why
+Do not show me keys, tokens, addresses or file paths.`
+  const board = (where, schedule) => `Hermes is not showing on my dashboard. Check these in order and stop at the first one that is wrong:
+1. Run /snapshot on this ${where} and tell me whether .agent-team/status/hermes/ now has a file for it.
+2. ${schedule}
+3. Check runtimes.yml has a Hermes entry with heartbeat: runs/heartbeat/hermes.json and stale_after_minutes: 200.
+Tell me what you found, and ask before changing anything.`
+  return [
+    copyCardHtml('Open Hermes from your phone',
+      'Hermes has its own dashboard: a web page with a chat, on the computer Hermes runs on. Tailscale is a private network between your own devices, so your phone can open that page without it ever being on the public internet. The dashboard asks for its own login.',
+      [
+        ['On a Mac', 'Paste this into Claude Code on the Mac that runs Hermes:', phone('Mac', 'Keep it running after a restart, as its own LaunchAgent.')],
+        ['On Windows', 'Paste this into Claude Code on the PC that runs Hermes:', phone('Windows PC', 'Keep it running after a restart, starting when I sign in.')]
+      ], open),
+    copyCardHtml('Ask Hermes for a health check',
+      'A quick way to hear from Hermes itself whether all is well. Hermes answers from its own state.',
+      [
+        ['On a Mac', 'Open Hermes (its dashboard, or type <code>hermes</code> in Terminal) and paste:', health],
+        ['On Windows', 'Open Hermes (Hermes Desktop, its dashboard, or <code>hermes</code> in PowerShell) and paste:', health]
+      ]),
+    copyCardHtml('Hermes is not on my board',
+      'The card comes from a small file a collector writes on the computer that runs Hermes, every three hours. These are the checks, in order.',
+      [
+        ['On a Mac', 'Paste this into Claude Code in your team repo, on the Mac that runs Hermes:',
+          board('Mac', 'Check the collector\'s schedule on this Mac (the LaunchAgent in .agent-team/status/README.md, under The Mac schedule) is loaded and ran in the last 3 hours.')],
+        ['On Windows', 'Paste this into Claude Code in your team repo, on the PC that runs Hermes:',
+          board('PC', 'There is no schedule on Windows: the list is only taken when /snapshot runs. If Hermes runs on another computer, the check has to run there.')]
+      ])
+  ].join('')
+}
+
+function renderHermes() {
+  if (!hermesShown()) {
+    el('hermes').innerHTML = ''
+    return
+  }
+  el('hermes').innerHTML = `
+    ${sectionHead('Your always-on helper', '<h2>Hermes</h2>')}
+    <div class="hermes-cards">${hermesComputers().map((computer) => hermesCardHtml(computer, true)).join('')}</div>
+    ${sectionHead('When you need it', '<h2>Help</h2>')}
+    <div class="copy-cards">${hermesCopyCardsHtml()}</div>`
+}
+
+// The copy buttons. Delegated, like every button on this page, because the screens are drawn again
+// on every reading. The text copied is the block's own, exactly as shown.
+document.addEventListener('click', async (event) => {
+  const button = event.target.closest?.('button[data-copy]')
+  if (!button) return
+  const text = button.parentElement?.querySelector('.copy-text')?.textContent ?? ''
+  try {
+    await navigator.clipboard.writeText(text)
+    button.textContent = 'Copied'
+  } catch {
+    button.textContent = 'Select and copy it'
+  }
+  setTimeout(() => { button.textContent = 'Copy' }, 2000)
+})
+
 // "3 hr 20 min", for a runtime's own heartbeat window.
 function minutesWords(minutes) {
   const hours = Math.floor(minutes / 60)
@@ -3616,7 +3852,9 @@ function renderConnections() {
   // Day zero keeps its one message. Once a computer has sent its list, the screen is drawn whole.
   const foundAny = found?.status === 'ok' || found?.status === 'unusable'
 
-  if (!connections.length && !runtimes.length && !foundAny) {
+  const hermesTop = hermesSectionHtml()
+
+  if (!connections.length && !runtimes.length && !foundAny && !hermesTop) {
     el('connections').innerHTML = `<div class="panel empty">Nothing connected yet. Run <code>/connect</code> in your team repo and it will wire one tool, prove it by reading your own data back to you, and register it here.</div>`
     return
   }
@@ -3660,7 +3898,7 @@ function renderConnections() {
           // Said only when the owner set their own window in runtimes.yml; 30 is what every runtime had before.
           Number.isInteger(runtime.staleAfterMinutes) && runtime.staleAfterMinutes !== 30
             ? ` &middot; silent after ${minutesWords(runtime.staleAfterMinutes)} without one` : ''}</span>
-        ${runtime.url ? `<a href="${escapeHtml(runtime.url)}" rel="noreferrer noopener">Open &rarr;</a>` : ''}
+        <span class="row">${hermesShown() && runtime === hermesRuntime() ? '<a href="#hermes">Hermes page &rarr;</a>' : ''}${runtime.url ? `<a href="${escapeHtml(runtime.url)}" rel="noreferrer noopener">Open &rarr;</a>` : ''}</span>
       </div>
     </div>`).join('')
 
@@ -3692,6 +3930,7 @@ function renderConnections() {
   // (grep: accessDetail, the rung's pass in the heuristic branch, its detail in both), and the
   // sentence now says exactly that and stops.
   el('connections').innerHTML = `
+    ${hermesTop}
     ${sectionHead('What your team can reach', '<h2>Connections</h2>')}
     ${connectionRows
       ? `<div class="panel">${connectionRows}</div>`
@@ -4561,14 +4800,19 @@ document.addEventListener('change', (event) => {
 
 /* ---------- shell ---------- */
 
+// Hermes is a screen only for somebody who has Hermes, so it is not in TITLES: every screen there
+// is always reachable. Without a Hermes reading, #hermes goes to Today like any unknown address.
+const OPTIONAL_TITLES = { hermes: 'Hermes' }
+
 function showScreen(name) {
-  const screen = SCREENS.includes(name) ? name : 'today'
-  for (const candidate of SCREENS) {
+  const routable = hermesShown() ? [...SCREENS, 'hermes'] : SCREENS
+  const screen = routable.includes(name) ? name : 'today'
+  for (const candidate of [...SCREENS, 'hermes']) {
     el(candidate).classList.toggle('active', candidate === screen)
   }
   document.querySelectorAll('nav a').forEach((link) =>
     link.classList.toggle('active', link.dataset.screen === screen))
-  el('screen-title').textContent = TITLES[screen]
+  el('screen-title').textContent = TITLES[screen] ?? OPTIONAL_TITLES[screen]
   // Today's banner carries this line itself, so the copy under the top bar would say it twice.
   el('strap').hidden = screen === 'today'
   window.scrollTo(0, 0)
@@ -4651,6 +4895,7 @@ function renderShell() {
   el('fresh-text').textContent = `Read ${ago(data.generatedAt)}`
 
   el('jump-run').hidden = !data.workflows.some((workflow) => workflow.fire)
+  el('tab-hermes').hidden = !hermesShown()
 }
 
 function render() {
@@ -4665,6 +4910,7 @@ function render() {
   renderSkills()
   renderMemory()
   renderConnections()
+  renderHermes()
   renderShell()
   el('foot').textContent = `Read from your repo ${stamp(data.generatedAt)}. Nothing on this page comes from anywhere else.`
   showScreen(location.hash.slice(1))
