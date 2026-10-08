@@ -1281,3 +1281,108 @@ test('a connections file the tree says is over 64 KB is not used, and only five 
   assert.equal(many.found.computers.length, 3)
   assert.equal(many.found.notShown, 2)
 })
+
+/* ---------- the Hermes card reaches the payload, and nothing planted in it does ---------------
+   .agent-team/status/hermes/<computer>.json, through the real handler: a token, an email, an
+   address and a home path planted everywhere, Hermes's own private fields (argv, pid, base_url,
+   session titles) added beside the ones the collector reads, and a yes/no "alive" flag on a
+   stopped Hermes - which the board must not believe. */
+
+const hermesPath = '.agent-team/status/hermes/mac-mini.json'
+const hermesReading = (planted = null, { stopped = false } = {}) => {
+  const takenAt = new Date(Date.now() - 3600_000).toISOString().replace(/\.\d+Z$/, 'Z')
+  const near = new Date(Date.parse(takenAt) - 40_000).toISOString().replace(/\.\d+Z$/, 'Z')
+  const extra = planted ? { argv: ['hermes', planted], pid: 4242, base_url: planted, titles: [planted], cwd: planted, note: planted } : {}
+  return {
+    schema: 'agent-status/hermes/v1',
+    takenAt,
+    computer: planted ?? 'Mac Mini',
+    ...extra,
+    ...(stopped ? { alive: true } : {}),
+    install: { status: 'found', version: planted ?? '0.21.3', updateAvailable: true, ...extra },
+    gateway: { status: 'found', state: stopped ? 'stopped' : 'running', beatAt: near, ...extra, ...(stopped ? { alive: true } : {}) },
+    profiles: {
+      status: 'found',
+      ...extra,
+      items: [
+        { name: 'default', model: planted ?? 'claude-opus-5-5', provider: planted ?? 'anthropic', ...extra,
+          skills: { status: 'found', count: 89 },
+          sessions: { status: 'found', days: 7, conversations: 14, scheduled: 21, lastActiveAt: takenAt, ...extra },
+          scheduler: stopped ? { status: 'not found' } : { status: 'found', beatAt: near } },
+        { name: planted ?? 'donna', skills: { status: 'not found' }, sessions: { status: 'unavailable', why: planted ?? 'needs a newer Node' }, scheduler: { status: 'not found' } }
+      ],
+      hidden: 0,
+      more: 0
+    }
+  }
+}
+
+test('a Hermes file in the repo reaches the payload as hermes, re-checked, with Running worked out', async () => {
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: hermesPath }],
+    overrideFiles: { [hermesPath]: JSON.stringify(hermesReading()) }
+  })
+  assert.equal(body.hermes.status, 'ok')
+  const [computer] = body.hermes.computers
+  assert.equal(computer.computer, 'Mac Mini')
+  assert.equal(computer.aliveLabel, 'Running')
+  assert.equal(computer.install.label, 'Hermes 0.21.3 - update available')
+  assert.deepEqual(computer.profiles.items.map((item) => [item.name, item.modelLabel]), [['default', 'claude-opus-5-5 via anthropic'], ['donna', 'Model not known']])
+})
+
+test('a stopped Hermes whose file says alive: true reaches the payload as Down', async () => {
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: hermesPath }],
+    overrideFiles: { [hermesPath]: JSON.stringify(hermesReading(null, { stopped: true })) }
+  })
+  assert.equal(body.hermes.computers[0].alive, 'down')
+  assert.ok(!JSON.stringify(body.hermes).includes('"alive":true'))
+})
+
+test('a repo with no Hermes file says so in the payload', async () => {
+  const { body } = await run()
+  assert.equal(body.hermes.status, 'none')
+  assert.deepEqual(body.hermes.computers, [])
+})
+
+test('/api/state never carries a token, email, address or path planted in a Hermes file', async () => {
+  const planted = [
+    ['sk', 'ant', 'oat01', 'Zm9vYmFyYmF6cXV4'.repeat(3)].join('-'),
+    'ey' + 'J' + 'hbGciOiJIUzI1NiJ9.' + 'eyJlbWFpbCI6ImZha2UifQ',
+    'fake.person' + '@' + 'example.com',
+    ['5f0c2b1e', '9a7d', '4c3b', '8e21', '0d6f4a9b7c55'].join('-'),
+    'Bear' + 'er ' + 'abc123def456',
+    'https://' + 'api.example.com/v1?key=' + 'Zm9vYmFyYmF6cXV4',
+    '/Users/' + 'fakeperson' + '/.hermes/SOUL.md',
+    'C:' + '\\Users\\' + 'fakeperson' + '\\AppData\\Local\\hermes'
+  ]
+  for (const value of planted) {
+    const { body, statusCode } = await run({}, {
+      extraTree: [{ type: 'blob', path: hermesPath }],
+      overrideFiles: { [hermesPath]: JSON.stringify(hermesReading(value)) }
+    })
+    assert.equal(statusCode, 200)
+    assert.ok(!JSON.stringify(body).includes(value), `"${value.slice(0, 12)}..." reached /api/state`)
+    // Still read, not thrown away whole: Running and the profile around the planted values survive.
+    assert.equal(body.hermes.computers[0].aliveLabel, 'Running')
+    assert.deepEqual(body.hermes.computers[0].profiles.items.map((item) => item.name), ['default'])
+    assert.equal(body.hermes.computers[0].profiles.hidden, 1)
+  }
+})
+
+test('a Hermes file the tree says is over 64 KB is not used, and only five are fetched', async () => {
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: hermesPath, size: 64 * 1024 + 1 }],
+    overrideFiles: { [hermesPath]: JSON.stringify(hermesReading()) }
+  })
+  assert.equal(body.hermes.status, 'unusable')
+  assert.match(body.hermes.why, /too big/)
+  const paths = ['a', 'b', 'c', 'd', 'e', 'f'].map((slug) => `.agent-team/status/hermes/${slug}.json`)
+  const { body: many } = await run({}, {
+    extraTree: paths.map((path) => ({ type: 'blob', path })),
+    overrideFiles: Object.fromEntries(paths.map((path) => [path, JSON.stringify(hermesReading())]))
+  })
+  assert.equal(many.hermes.read, 5)
+  assert.equal(many.hermes.skipped, 1)
+  assert.equal(many.hermes.computers.length, 3)
+})

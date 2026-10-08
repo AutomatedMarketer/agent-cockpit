@@ -342,7 +342,7 @@ Locally:
 npm test
 ```
 
-1005 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1032 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -419,6 +419,13 @@ sample into exactly the shape the contract says, keeps every name it says to kee
 name it says to refuse. A server's address, command and settings are never read, even when somebody
 writes them into the file, and **Proved** comes only from `connections/register.yml`, never from
 what a computer found.
+
+The Hermes card too: `tests/fixtures/hermes-parity.json` is shared byte for byte, and
+`tests/hermes.test.mjs` runs every one of its worked examples. The board decides **Running** or
+**Down** itself, from the times in the file: Hermes's gateway or one of its schedulers stamped its own
+file within five minutes of the check. A yes/no flag in the file is never read, and nothing Hermes
+keeps beside the fields read - its command line, its addresses, chat titles, memory - can reach the
+page.
 
 ---
 

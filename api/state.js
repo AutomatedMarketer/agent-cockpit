@@ -686,20 +686,54 @@ function foundTool(raw) {
   return { name: raw.name, state: raw.state, label, version }
 }
 
-function readFoundFile(body, now) {
-  if (typeof body !== 'string') return { usable: false, why: 'A connections file could not be fetched, or was too big to read.' }
-  if (Buffer.byteLength(body, 'utf8') > FOUND_MAX_BYTES) return { usable: false, why: 'A connections file was too big to read.' }
+// One status file's envelope, judged the same way for every part the collector writes: no body
+// (not fetched, or the tree said it was too big), too big, not JSON, another schema, no time, or a
+// time in the future. Every `why` is a finished sentence naming which kind of file it was.
+function readStatusEnvelope(body, now, { schema, maxBytes, noun }) {
+  if (typeof body !== 'string') return { usable: false, why: `A ${noun} file could not be fetched, or was too big to read.` }
+  if (Buffer.byteLength(body, 'utf8') > maxBytes) return { usable: false, why: `A ${noun} file was too big to read.` }
   let parsed
   try {
     parsed = JSON.parse(body)
   } catch {
-    return { usable: false, why: 'A connections file could not be read.' }
+    return { usable: false, why: `A ${noun} file could not be read.` }
   }
-  if (!isPlainObject(parsed)) return { usable: false, why: 'A connections file could not be read.' }
-  if (parsed.schema !== FOUND_SCHEMA) return { usable: false, why: 'A connections file was written in a format this board does not know.' }
+  if (!isPlainObject(parsed)) return { usable: false, why: `A ${noun} file could not be read.` }
+  if (parsed.schema !== schema) return { usable: false, why: `A ${noun} file was written in a format this board does not know.` }
   const takenMs = isoMs(parsed.takenAt)
-  if (!Number.isFinite(takenMs)) return { usable: false, why: 'A connections file does not say when it was taken.' }
-  if (takenMs > now) return { usable: false, why: 'A connections file is stamped in the future, so its age cannot be trusted.' }
+  if (!Number.isFinite(takenMs)) return { usable: false, why: `A ${noun} file does not say when it was taken.` }
+  if (takenMs > now) return { usable: false, why: `A ${noun} file is stamped in the future, so its age cannot be trusted.` }
+  return { usable: true, parsed, takenMs }
+}
+
+// A time as the collector writes it: whole seconds, Z, no milliseconds.
+const isoSeconds = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z')
+
+// `found` is how many files of this kind the tree holds. Only the first five, in name order, are
+// read, and the rest are counted in `skipped`. Of the files that could be used, the newest three
+// are shown and the others counted in `notShown`: a card per computer is already a long screen on
+// a phone, and nobody has more than three computers they set things up on.
+function shapeStatusFiles(files, now, found, { maxFiles, maxComputers, noneWhy, read }) {
+  const given = Array.isArray(files) ? files : []
+  const total = Math.max(found ?? 0, given.length)
+  const toRead = [...given].sort((a, b) => String(a[0]).localeCompare(String(b[0]))).slice(0, maxFiles)
+  const shaped = toRead.map(([, body]) => read(body, now))
+  const readings = shaped.filter((reading) => reading.usable).sort((a, b) => b.takenMs - a.takenMs)
+  const base = {
+    read: toRead.length,
+    skipped: total - toRead.length,
+    unreadable: shaped.length - readings.length,
+    notShown: Math.max(0, readings.length - maxComputers)
+  }
+  if (!toRead.length) return { status: 'none', why: noneWhy, ...base, computers: [] }
+  if (!readings.length) return { status: 'unusable', why: shaped[0].why, ...base, computers: [] }
+  return { status: 'ok', why: null, ...base, computers: readings.slice(0, maxComputers).map((reading) => reading.computer) }
+}
+
+function readFoundFile(body, now) {
+  const envelope = readStatusEnvelope(body, now, { schema: FOUND_SCHEMA, maxBytes: FOUND_MAX_BYTES, noun: 'connections' })
+  if (!envelope.usable) return envelope
+  const { parsed, takenMs } = envelope
   const tools = Array.isArray(parsed.tools)
     ? keepEntries(parsed.tools, FOUND_CAPS.tools, foundTool, (tool) => tool.name).kept
     : []
@@ -708,7 +742,7 @@ function readFoundFile(body, now) {
     takenMs,
     computer: {
       computer: cleanUsageName(parsed.computer),
-      takenAt: new Date(takenMs).toISOString().replace('.000Z', 'Z'),
+      takenAt: isoSeconds(takenMs),
       freshness: now - takenMs > FOUND_STALE_AFTER_HOURS * 3600_000 ? 'stale' : 'fresh',
       tools,
       claude: foundClaude(parsed.claude),
@@ -717,25 +751,10 @@ function readFoundFile(body, now) {
   }
 }
 
-// `found` is how many connections files the tree holds. Only the first five, in name order, are
-// read, and the rest are counted in `skipped`. Of the files that could be used, the newest three
-// are shown and the others counted in `notShown`: a wall per computer is already a long screen on
-// a phone, and nobody has more than three computers they set things up on.
 export function shapeFound(files, now = Date.now(), found = null) {
-  const given = Array.isArray(files) ? files : []
-  const total = Math.max(found ?? 0, given.length)
-  const toRead = [...given].sort((a, b) => String(a[0]).localeCompare(String(b[0]))).slice(0, FOUND_MAX_FILES)
-  const shaped = toRead.map(([, body]) => readFoundFile(body, now))
-  const readings = shaped.filter((reading) => reading.usable).sort((a, b) => b.takenMs - a.takenMs)
-  const base = {
-    read: toRead.length,
-    skipped: total - toRead.length,
-    unreadable: shaped.length - readings.length,
-    notShown: Math.max(0, readings.length - FOUND_MAX_COMPUTERS)
-  }
-  if (!toRead.length) return { status: 'none', why: 'Nothing has been found yet.', ...base, computers: [] }
-  if (!readings.length) return { status: 'unusable', why: shaped[0].why, ...base, computers: [] }
-  return { status: 'ok', why: null, ...base, computers: readings.slice(0, FOUND_MAX_COMPUTERS).map((reading) => reading.computer) }
+  return shapeStatusFiles(files, now, found, {
+    maxFiles: FOUND_MAX_FILES, maxComputers: FOUND_MAX_COMPUTERS, noneWhy: 'Nothing has been found yet.', read: readFoundFile
+  })
 }
 
 // The name a register entry and a found tile are matched by: the last part of a plugin server's
@@ -771,6 +790,192 @@ export function matchProved(found, connections = []) {
         : computer.codex
     }))
   }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The Hermes card: Hermes's version, whether it is running, and each profile's model, skills and
+// last week - read from .agent-team/status/hermes/<computer>.json on the Connections wall's terms
+// (five files, 64 KB, unusable said in a sentence, stale after eight hours, newest three computers).
+//
+// Running is worked out HERE, from the times in the file, by the contract's alive rule: the gateway
+// says running and stamped its own file within five minutes of the check, or any profile's
+// scheduler did. A file never says whether Hermes is alive, and a yes/no flag somebody adds is never
+// read - the output is built from known keys only, so it cannot be. The collector never runs
+// `hermes`, and nothing Hermes keeps beside the fields read (argv, pid, base_url, chats, titles,
+// memory) has a key here to arrive through.
+//
+// KEEP IN SYNC with scripts/lib/status/hermes-schema.mjs in agent-team-template.
+// tests/fixtures/hermes-parity.json is the shared contract, the same bytes in both repos, and
+// tests/hermes.test.mjs holds the board to it, `expectedShape` and every alive example included.
+export const HERMES_SCHEMA = 'agent-status/hermes/v1'
+export const HERMES_FOLDER = '.agent-team/status/hermes'
+export const HERMES_COMPUTER_SLUG = /^[a-z0-9-]{1,32}$/
+export const HERMES_STALE_AFTER_HOURS = 8
+export const HERMES_MAX_FILES = 5
+export const HERMES_MAX_BYTES = 65536
+export const HERMES_MAX_COMPUTERS = 3
+export const HERMES_STATUSES = ['found', 'not found', 'unavailable']
+export const HERMES_CAPS = { profiles: 12 }
+export const HERMES_DEFAULT_PROFILE = 'default'
+export const HERMES_SESSION_DAYS = 7
+export const HERMES_GATEWAY_STATES = {
+  starting: 'Starting',
+  running: 'Running',
+  degraded: 'Running with problems',
+  stopped: 'Stopped',
+  startup_failed: 'Failed to start',
+  unknown: 'Unknown'
+}
+export const HERMES_ALIVE = {
+  withinSeconds: 300,
+  gatewayStates: ['running'],
+  words: { running: 'Running', down: 'Down at last check', stale: 'Not checked for {hours} h' }
+}
+export const HERMES_WORDS = {
+  install: {
+    version: 'Hermes {version}',
+    noVersion: 'Hermes, version not known',
+    updateAvailable: '{label} - update available',
+    upToDate: '{label} - up to date',
+    'not found': 'Hermes not found',
+    unavailable: 'Hermes could not be read'
+  },
+  model: { both: '{model} via {provider}', modelOnly: '{model}', none: 'Model not known' },
+  sessions: { 'not found': 'No sessions recorded', unavailable: 'Not available ({why})' }
+}
+// Hermes's own profile id rule, with the connection-name rule on top.
+export const HERMES_PROFILE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const HERMES_MAX_COUNT = 1e7
+
+const fillWords = (template, values) => template.replace(/\{(\w+)\}/g, (_, key) => String(values[key]))
+
+export const isProfileName = (value) => typeof value === 'string' && HERMES_PROFILE_NAME.test(value) && isConnectionName(value)
+
+// The collector writes only the last segment after a slash, so a model with a slash in it is not
+// one the collector wrote. What arrives is held to the connection-name rule as it is.
+export const hermesModelName = (value) => (isConnectionName(value) ? value : null)
+
+export function isHermesFile(path) {
+  const prefix = `${HERMES_FOLDER}/`
+  if (typeof path !== 'string' || !path.startsWith(prefix) || !path.endsWith('.json')) return false
+  return HERMES_COMPUTER_SLUG.test(path.slice(prefix.length, -'.json'.length))
+}
+
+const isHermesCount = (value) => Number.isInteger(value) && value >= 0 && value <= HERMES_MAX_COUNT
+// A time the board can date anything by, as the collector writes it; anything else is no time.
+const hermesTime = (value) => {
+  const ms = isoMs(value)
+  return Number.isFinite(ms) ? isoSeconds(ms) : null
+}
+// found, not found, or - for anything else, including a status the board does not know - unavailable.
+const hermesStatus = (raw) => {
+  if (!isPlainObject(raw) || raw.status === undefined || raw.status === 'not found') return 'not found'
+  return raw.status === 'found' ? 'found' : 'unavailable'
+}
+
+function hermesInstall(raw) {
+  const status = hermesStatus(raw)
+  if (status !== 'found') return { status, version: null, updateAvailable: null, label: HERMES_WORDS.install[status] }
+  const version = typeof raw.version === 'string' && raw.version.length <= FOUND_MAX_VERSION_LENGTH && FOUND_VERSION.test(raw.version)
+    ? raw.version : null
+  const updateAvailable = typeof raw.updateAvailable === 'boolean' ? raw.updateAvailable : null
+  const base = version ? fillWords(HERMES_WORDS.install.version, { version }) : HERMES_WORDS.install.noVersion
+  const label = updateAvailable === true ? fillWords(HERMES_WORDS.install.updateAvailable, { label: base })
+    : updateAvailable === false ? fillWords(HERMES_WORDS.install.upToDate, { label: base }) : base
+  return { status, version, updateAvailable, label }
+}
+
+function hermesGateway(raw) {
+  const status = hermesStatus(raw)
+  const none = (which) => ({ status: which, state: null, stateLabel: null, beatAt: null })
+  if (status !== 'found') return none(status)
+  // A state the contract does not name is not a gateway the board can describe.
+  if (typeof raw.state !== 'string' || !Object.hasOwn(HERMES_GATEWAY_STATES, raw.state)) return none('unavailable')
+  return { status, state: raw.state, stateLabel: HERMES_GATEWAY_STATES[raw.state], beatAt: hermesTime(raw.beatAt) }
+}
+
+function hermesSessions(raw) {
+  const status = hermesStatus(raw)
+  const unavailable = (why) => ({
+    status: 'unavailable',
+    label: why ? fillWords(HERMES_WORDS.sessions.unavailable, { why }) : HERMES_WORDS.sessions.unavailable.replace(/\s*\(\{why\}\)/, '')
+  })
+  if (status === 'not found') return { status, label: HERMES_WORDS.sessions['not found'] }
+  if (status === 'unavailable') return unavailable(raw.why === undefined ? null : cleanUsageName(raw.why))
+  if (raw.days !== HERMES_SESSION_DAYS || !isHermesCount(raw.conversations) || !isHermesCount(raw.scheduled)) return unavailable(null)
+  return { status, days: raw.days, conversations: raw.conversations, scheduled: raw.scheduled, lastActiveAt: hermesTime(raw.lastActiveAt) }
+}
+
+function hermesProfile(raw) {
+  if (!isProfileName(raw.name)) return null
+  const model = hermesModelName(raw.model)
+  // "x via provider" needs an x, and a provider that is plainly a name.
+  const provider = model && isConnectionName(raw.provider) ? raw.provider : null
+  const modelLabel = model && provider ? fillWords(HERMES_WORDS.model.both, { model, provider })
+    : model ? fillWords(HERMES_WORDS.model.modelOnly, { model }) : HERMES_WORDS.model.none
+  const skills = hermesStatus(raw.skills) === 'found' && isHermesCount(raw.skills.count) ? raw.skills.count : null
+  return {
+    name: raw.name,
+    model,
+    provider,
+    modelLabel,
+    skills,
+    sessions: hermesSessions(raw.sessions),
+    schedulerBeatAt: hermesStatus(raw.scheduler) === 'found' ? hermesTime(raw.scheduler.beatAt) : null
+  }
+}
+
+function hermesProfiles(raw) {
+  const status = hermesStatus(raw)
+  const none = (which) => ({ status: which, items: [], hidden: 0, more: 0 })
+  if (status !== 'found') return none(status)
+  if (!Array.isArray(raw.items) || !isHermesCount(raw.hidden) || !isHermesCount(raw.more)) return none('unavailable')
+  // The file's order stands - default first, as the collector writes it. A name the board refuses,
+  // or one listed twice, is counted in hidden; past twelve, in more.
+  const kept = keepEntries(raw.items, HERMES_CAPS.profiles, hermesProfile, (item) => item.name)
+  return { status, items: kept.kept, hidden: raw.hidden + kept.hidden, more: raw.more + kept.more }
+}
+
+// The contract's alive rule, from the times the board itself accepted: the gateway in a running
+// state with a stamp within five minutes of the check, either way, or any profile's scheduler beat
+// within the same window.
+function hermesAlive(takenMs, gateway, profiles) {
+  const near = (iso) => iso !== null && Math.abs(Date.parse(iso) - takenMs) <= HERMES_ALIVE.withinSeconds * 1000
+  if (gateway.status === 'found' && HERMES_ALIVE.gatewayStates.includes(gateway.state) && near(gateway.beatAt)) return true
+  return profiles.items.some((item) => near(item.schedulerBeatAt))
+}
+
+function readHermesFile(body, now) {
+  const envelope = readStatusEnvelope(body, now, { schema: HERMES_SCHEMA, maxBytes: HERMES_MAX_BYTES, noun: 'Hermes' })
+  if (!envelope.usable) return envelope
+  const { parsed, takenMs } = envelope
+  const ageMs = now - takenMs
+  const stale = ageMs > HERMES_STALE_AFTER_HOURS * 3600_000
+  const install = hermesInstall(parsed.install)
+  const gateway = hermesGateway(parsed.gateway)
+  const profiles = hermesProfiles(parsed.profiles)
+  // An old reading is neither Running nor Down: it is how long since anybody looked.
+  const alive = stale ? 'stale' : hermesAlive(takenMs, gateway, profiles) ? 'running' : 'down'
+  return {
+    usable: true,
+    takenMs,
+    computer: {
+      computer: cleanUsageName(parsed.computer),
+      takenAt: isoSeconds(takenMs),
+      freshness: stale ? 'stale' : 'fresh',
+      alive,
+      aliveLabel: fillWords(HERMES_ALIVE.words[alive], { hours: Math.floor(ageMs / 3600_000) }),
+      install,
+      gateway,
+      profiles
+    }
+  }
+}
+
+export function shapeHermes(files, now = Date.now(), found = null) {
+  return shapeStatusFiles(files, now, found, {
+    maxFiles: HERMES_MAX_FILES, maxComputers: HERMES_MAX_COMPUTERS, noneWhy: 'No Hermes reading has been taken yet.', read: readHermesFile
+  })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1811,8 +2016,10 @@ export default async function handler(request, response) {
     // The Connections wall's files, on the same terms: five fetched, none the tree calls too big.
     const foundPaths = paths.filter((path) => isFoundFile(path)).sort()
     const foundBody = async (path) => ((sizes[path] ?? 0) > FOUND_MAX_BYTES ? null : rawFile(settings, path))
+    const hermesPaths = paths.filter((path) => isHermesFile(path)).sort()
+    const hermesBody = async (path) => ((sizes[path] ?? 0) > HERMES_MAX_BYTES ? null : rawFile(settings, path))
 
-    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles, foundFiles] =
+    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles, foundFiles, hermesFiles] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
@@ -1830,7 +2037,8 @@ export default async function handler(request, response) {
         hasProposals ? rawFile(settings, 'proposals.yml') : null,
         hasRoutineSnapshot ? rawFile(settings, ROUTINE_SNAPSHOT) : null,
         Promise.all(usagePaths.slice(0, USAGE_MAX_FILES).map(async (path) => [path, await usageBody(path)])),
-        Promise.all(foundPaths.slice(0, FOUND_MAX_FILES).map(async (path) => [path, await foundBody(path)]))
+        Promise.all(foundPaths.slice(0, FOUND_MAX_FILES).map(async (path) => [path, await foundBody(path)])),
+        Promise.all(hermesPaths.slice(0, HERMES_MAX_FILES).map(async (path) => [path, await hermesBody(path)]))
       ])
 
     const unparseable = []
@@ -1960,6 +2168,7 @@ export default async function handler(request, response) {
     const subscriptions = shapeSubscriptions(stackDoc, usage)
     // Proved is matched in from the register here, after both are read, and from nowhere else.
     const found = matchProved(shapeFound(foundFiles, now, foundPaths.length), connections)
+    const hermes = shapeHermes(hermesFiles, now, hermesPaths.length)
     const hero = shapeHero(tiles, ledger)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, connections, verdicts: verdictPaths.length, onboarding, now })
 
@@ -1992,6 +2201,7 @@ export default async function handler(request, response) {
       usage,
       subscriptions,
       found,
+      hermes,
       routines: {
         takenAt: snapshot.takenAt,
         usable: snapshot.usable,
