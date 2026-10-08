@@ -757,19 +757,26 @@ export function shapeFound(files, now = Date.now(), found = null) {
   })
 }
 
-// The name a register entry and a found tile are matched by: the last part of a plugin server's
-// `plugin:<plugin>:<server>`, a claude.ai connector without its `claude.ai ` prefix, and only the
-// letters and numbers, in lower case. So "Gmail" in the register badges "claude.ai Gmail", and
-// "Supermetrics" badges "plugin:marketing:supermetrics".
-function provedKey(name) {
-  if (typeof name !== 'string') return ''
-  const bare = name.replace(/^claude\.ai\s+/i, '').split(':').at(-1)
-  return bare.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+// A name as matching compares it: trimmed and in lower case, and nothing else. Punctuation is kept,
+// so `sl-ack` is not `slack`.
+const provedKey = (name) => (typeof name === 'string' ? name.trim().toLowerCase() : '')
+
+// The names one found entry can be proved by. Its whole name always. A claude.ai connector also by
+// its name without the `claude.ai ` prefix its scope gives it - "Gmail" in the register badges
+// "claude.ai Gmail". A plugin server only by its whole `plugin:<plugin>:<server>` name: cutting it
+// down to its last part made "Slack" prove `plugin:slack:slack`, a different server from the
+// connector somebody tested. Nothing is matched across scopes, and no part of a name is guessed at.
+function provedNamesOf(entry, scope) {
+  const whole = provedKey(entry.name)
+  const names = [whole]
+  if (scope === 'claude.ai' && whole.startsWith('claude.ai ')) names.push(whole.slice('claude.ai '.length))
+  return names
 }
 
 // Adds `proved` to every found server and plugin: true only when the register has a PROVED entry
-// - a verified date and a proof - with the same name or slug. Nothing the connections file says can
-// make it true. A new object; the shape shapeFound made, which the contract fixes, is left alone.
+// - a verified date and a proof - whose name or slug is one of that entry's names above. Nothing
+// the connections file says can make it true. A new object; the shape shapeFound made, which the
+// contract fixes, is left alone.
 export function matchProved(found, connections = []) {
   if (!found || !Array.isArray(found.computers)) return found
   const proved = new Set()
@@ -777,7 +784,8 @@ export function matchProved(found, connections = []) {
     if (entry?.proved !== true) continue
     for (const key of [provedKey(entry.name), provedKey(entry.slug)]) if (key) proved.add(key)
   }
-  const mark = (entry) => ({ ...entry, proved: proved.has(provedKey(entry.name)) })
+  // Codex's servers and plugins carry no scope, so only their whole name counts.
+  const mark = (entry) => ({ ...entry, proved: provedNamesOf(entry, entry.scope).some((name) => proved.has(name)) })
   return {
     ...found,
     computers: found.computers.map((computer) => ({

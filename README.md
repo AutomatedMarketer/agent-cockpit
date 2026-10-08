@@ -67,7 +67,7 @@ most.
 | **Failed** | Amber: the server did not answer. Type `/mcp` in Claude Code to see why |
 | **Waiting for approval**, **Not checked**, **Seen before** | Claude Code is waiting for your yes; the live check did not run; a claude.ai connector used before and not checked this time |
 | **Found** / **Turned off** | A Codex server or plugin that is set up, or set up and switched off |
-| **Proved** | Only when `connections/register.yml` has the same name with a date and a proof. Found is never proved |
+| **Proved** | Only when `connections/register.yml` has the same name (or slug) with a date and a proof. Same means the whole name, ignoring capitals and spaces at the ends: `Gmail` matches the connector `claude.ai Gmail`, but a plugin server needs its full `plugin:<plugin>:<server>` name. Found is never proved |
 | **Checked more than 8 hours ago** | The list is old. Run `/snapshot` on that computer, or check its collector |
 
 Servers set up for one project folder are counted, never named. A name that looks like a key, an
@@ -363,7 +363,7 @@ Locally:
 npm test
 ```
 
-1046 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1047 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

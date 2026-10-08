@@ -458,7 +458,9 @@ test('a found tile is Proved only when the register proved it, matched by name',
   const proved = matchProved(shaped, register(
     { name: 'GitHub', slug: 'github', verified: '2026-08-20', proof: 'Listed my repos' },
     { name: 'Gmail', slug: 'gmail', verified: '2026-08-20', proof: 'Read three subjects' },
+    // A plugin server is proved only by its full name: "Supermetrics" alone does not reach it.
     { name: 'Supermetrics', verified: '2026-08-20', proof: 'Pulled last week' },
+    { name: ' plugin:context7:context7 ', verified: '2026-08-20', proof: 'Looked up the React docs' },
     // In the register, but with no proof: a claim, so no badge.
     { name: 'n8n MCP', slug: 'n8n-mcp', verified: '2026-08-20' }
   ))
@@ -467,8 +469,8 @@ test('a found tile is Proved only when the register proved it, matched by name',
   assert.deepEqual(servers, {
     github: true,
     'n8n-mcp': false,
-    'plugin:context7:context7': false,
-    'plugin:marketing:supermetrics': true,
+    'plugin:context7:context7': true,
+    'plugin:marketing:supermetrics': false,
     'claude.ai Gmail': true,
     'claude.ai Google Drive': false,
     'team-tools': false
@@ -477,6 +479,38 @@ test('a found tile is Proved only when the register proved it, matched by name',
   assert.deepEqual(computer.codex.servers.map((server) => server.proved), [false, false, false])
   // The shape the contract fixes is not changed underneath the badge.
   assert.deepEqual(shaped.computers, fixture.expectedShape.computers)
+})
+
+test('Proved needs the whole name: a near name, another scope or a stripped punctuation mark is not proof', () => {
+  const doc = clone(fixture.sample)
+  doc.claude.servers = [
+    { name: 'claude.ai Slack', scope: 'claude.ai', transport: 'web', state: 'connected' },
+    { name: 'plugin:slack:slack', scope: 'plugin', transport: 'web', state: 'connected' },
+    { name: 'slack', scope: 'user', transport: 'local', state: 'connected' },
+    { name: 'sl-ack', scope: 'user', transport: 'local', state: 'connected' },
+    { name: 'Slack bot', scope: 'other', transport: 'unknown', state: 'connected' }
+  ]
+  doc.codex.servers = [{ name: 'slack' }, { name: 'slack.app' }]
+  doc.codex.plugins = [{ name: 'slack', from: 'openai-curated' }]
+  const badges = (...entries) => {
+    const [computer] = matchProved(shapeOne(doc), register(...entries)).computers
+    return [...computer.claude.servers, ...computer.codex.servers, ...computer.codex.plugins]
+      .filter((entry) => entry.proved).map((entry) => entry.name)
+  }
+  const proved = (name, slug) => ({ name, ...(slug ? { slug } : {}), verified: '2026-08-20', proof: 'Read my channels' })
+  // The reviewer's case: proving the claude.ai connector proves that connector and nothing else.
+  assert.deepEqual(badges(proved('claude.ai Slack')), ['claude.ai Slack'])
+  // "Slack" proves the connector (its own prefix taken off) and anything named exactly slack - not
+  // the plugin server, not sl-ack, not "Slack bot".
+  assert.deepEqual(badges(proved('Slack')), ['claude.ai Slack', 'slack', 'slack', 'slack'])
+  assert.deepEqual(badges(proved('  SLACK  ')), ['claude.ai Slack', 'slack', 'slack', 'slack'])
+  // A slug is a name too, matched just as strictly.
+  assert.deepEqual(badges(proved('Team chat', 'sl-ack')), ['sl-ack'])
+  // The plugin server only by its whole name.
+  assert.deepEqual(badges(proved('plugin:slack:slack')), ['plugin:slack:slack'])
+  for (const near of ['slack:slack', 'sl ack', 'slackapp', 'claude.ai  Slack bot', 'plugin:slack']) {
+    assert.deepEqual(badges(proved(near)), [], `"${near}" proved something`)
+  }
 })
 
 test('found is never proved: with no register, nothing gets a badge, whatever the file says', () => {
