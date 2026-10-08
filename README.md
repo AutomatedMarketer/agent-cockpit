@@ -29,7 +29,28 @@ window, not the engine.
 | **Workflows** | Every job, and whether it is **armed, declared, unapproved or off** |
 | **Skills** | What this team can actually do, and which jobs use each skill |
 | **Memory** | Your vault, browsable and searchable **by page name** |
-| **Connections** | Every runtime in `runtimes.yml` — alive or silent, from its own heartbeat |
+| **Connections** | What you proved works, what each of your computers has set up, and every runtime in `runtimes.yml` — alive or silent, from its own heartbeat |
+
+### The Connections wall
+
+Between your proved connections and your machines, **Found on your computers** shows what each
+computer reported in its last `/snapshot`: its installed tools and their versions, the servers
+Claude Code can reach (your own, plugin servers and claude.ai connectors), and Codex's servers and
+plugins. It reads `.agent-team/status/connections/`, one file per computer, newest first, three at
+most.
+
+| Word on the wall | What it means |
+|---|---|
+| **Connected** | The server answered the live check |
+| **Needs sign-in** | Grey on purpose: the server wants you to log in. Some you leave signed out, and that is fine |
+| **Failed** | Amber: the server did not answer. Type `/mcp` in Claude Code to see why |
+| **Waiting for approval**, **Not checked**, **Seen before** | Claude Code is waiting for your yes; the live check did not run; a claude.ai connector used before and not checked this time |
+| **Found** / **Turned off** | A Codex server or plugin that is set up, or set up and switched off |
+| **Proved** | Only when `connections/register.yml` has the same name with a date and a proof. Found is never proved |
+| **Checked more than 8 hours ago** | The list is old. Run `/snapshot` on that computer, or check its collector |
+
+Servers set up for one project folder are counted, never named. A name that looks like a key, an
+address or a path is never shown; the wall says how many it left out.
 
 ### Writing an entry in `runtimes.yml`
 
@@ -321,7 +342,7 @@ Locally:
 npm test
 ```
 
-986 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1005 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -342,6 +363,9 @@ used only when you connect a picture store.
 | A card says its limits were **unavailable** | The collector could not get a reading it trusted. The **Why?** under it gives the collector's reason |
 | Plan limits says a usage file **could not be used** | It is damaged, dated in the future, over 64 KB, written by a collector this board does not know, or GitHub would not return it. Run the collector again |
 | Plan limits says more usage files **were not read** | The board reads the first five files in `.agent-team/status/usage/`, one per computer. Delete the files of computers you no longer use |
+| Connections says **Nothing found yet** | No file in `.agent-team/status/connections/`. Run `/snapshot` in Claude Code on each computer you use |
+| The wall says a connections file **could not be used** | It is damaged, dated in the future, over 64 KB, written by a collector this board does not know, or GitHub would not return it. Run `/snapshot` again |
+| A server you know you have is missing from the wall | Its name did not read as a plain name (the wall counts those), it belongs to one project folder (counted, not named), or the list stopped at its cap |
 | A subscription is **left out of the total** | It needs a `price` like `20` or `19.99`, a three-letter `currency` like `USD`, and `per: month` or `per: year` |
 | A job says **DECLARED** | Its file claims a schedule and no routine backs it. Run `/arm` |
 | A job says **UNAPPROVED** | Something is firing that your files say is off. It is spending runs nobody approved |

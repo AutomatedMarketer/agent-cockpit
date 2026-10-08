@@ -2,7 +2,7 @@ import test, { mock } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { shapeHero } from '../api/state.js'
+import { shapeHero, shapeFound, matchProved } from '../api/state.js'
 import { AGENT_PALETTE, agentColorIndex, PICTURE_BUDGET, DEFAULT_ART_STYLE } from '../api/lib.js'
 import { cssRules } from './helpers/css-rules.mjs'
 
@@ -5328,4 +5328,234 @@ test('a long subscription name breaks inside its row rather than taking the phon
   assert.equal(name['min-width'], '0')
   const row = Object.assign({}, ...exactRules('.subs-row').filter((rule) => !rule.inMedia).map(valuesIn))
   assert.equal(row['flex-wrap'], 'wrap')
+})
+
+/* ---------- Connections: the wall of what each computer found ---------------------------------
+   Between the register (Proved) and Machines. Built here from the contract's own sample through the
+   server's real shapeFound and matchProved, so these tests draw what the API actually sends. Every
+   state is said in words; "Needs sign-in" is grey, never an alarm (decision D9); found never reads
+   as proved. */
+
+const foundContract = JSON.parse(readFileSync(fileURLToPath(new URL('./fixtures/connections-parity.json', import.meta.url)), 'utf8'))
+const foundSample = (over = {}) => ({ ...structuredClone(foundContract.sample), takenAt: new Date(Date.now() - 3600_000).toISOString(), ...over })
+const foundPayload = (docs = [foundSample()], register = []) => matchProved(
+  shapeFound(docs.map((doc, index) => [`.agent-team/status/connections/c${index}.json`, typeof doc === 'string' ? doc : JSON.stringify(doc)]), Date.now()),
+  register)
+const wallOf = (payload) => {
+  const drawn = render({ ...base, ...payload }).get('connections').innerHTML
+  const start = drawn.indexOf('<section class="found-wall">')
+  return start === -1 ? '' : drawn.slice(start, drawn.indexOf('</section><!-- found-wall -->', start))
+}
+const provedGmail = { name: 'Gmail', slug: 'gmail', kind: 'connector', account: null, scopes: [], usedBy: [], verified: '2026-08-24', proof: 'Read three subjects', proved: true }
+
+test('the wall sits between Proved and Machines, under its own heading', () => {
+  const drawn = connectionsScreen({ connections: [provedGmail], runtimes: [aRuntime()], found: foundPayload() })
+  const proved = drawn.indexOf('<h2>Connections</h2>')
+  const wall = drawn.indexOf('<h2>Found on your computers</h2>')
+  const machines = drawn.indexOf('<h2>Runtimes</h2>')
+  assert.ok(proved >= 0 && wall > proved && machines > wall, `order is proved ${proved}, wall ${wall}, machines ${machines}`)
+  // Found is not proved, and the wall says so where it starts.
+  assert.match(wallOf({ found: foundPayload() }), /Found is not the same as proved/)
+})
+
+test('each computer is headed with its name and how long ago it was checked', () => {
+  const wall = wallOf({ found: foundPayload() })
+  assert.match(wall, /Found on Mac Mini/)
+  assert.match(wall, /checked 1 hr ago/)
+  const unnamed = wallOf({ found: foundPayload([foundSample({ computer: 'x'.repeat(30) })]) })
+  assert.match(unnamed, /Found on a computer with no name shown/)
+})
+
+test('every state is said in words, from the contract', () => {
+  // A break is offered after each colon in a name; the name itself is whole.
+  const wall = wallOf({ found: foundPayload() }).replaceAll('<wbr>', '')
+  for (const words of ['Connected', 'Failed', 'Needs sign-in', 'Waiting for approval', 'Seen before', 'Checked live', 'Turned off',
+    'Found', 'Not found', 'Could not check', 'Local program', 'Web service', '2.1.293', '0.154.0', 'from openai-curated']) {
+    assert.ok(wall.includes(words), `the wall never says "${words}"`)
+  }
+  for (const name of ['github', 'n8n-mcp', 'plugin:context7:context7', 'plugin:marketing:supermetrics', 'claude.ai Gmail', 'team-tools', 'docs-search', 'old-crm', 'canva']) {
+    assert.ok(wall.includes(`>${name}<`), `${name} is not on the wall`)
+  }
+})
+
+test('Needs sign-in is grey and Failed is amber - neither is red, and no state is colour alone', () => {
+  const wall = wallOf({ found: foundPayload() })
+  const chipFor = (words) => new RegExp(`<span class="(chip[^"]*)">${words}</span>`).exec(wall)?.[1]
+  assert.equal(chipFor('Needs sign-in'), 'chip', 'a server signed out on purpose is drawn as a warning')
+  assert.equal(chipFor('Failed'), 'chip warn')
+  assert.equal(chipFor('Connected'), 'chip ok')
+  assert.ok(!/class="chip[^"]*\bbad\b/.test(wall), 'something on the wall is drawn as an alarm')
+})
+
+test('servers are grouped by where they come from, each with a letter tile', () => {
+  const wall = wallOf({ found: foundPayload() })
+  const order = ['Your servers', 'Plugin servers', 'claude.ai connectors', 'Other'].map((heading) => wall.indexOf(`>${heading}<`))
+  assert.ok(order.every((at) => at > 0), `a scope heading is missing: ${order}`)
+  assert.deepEqual([...order].sort((a, b) => a - b), order, 'the scope groups are out of order')
+  const tiles = [...wall.matchAll(/<span class="tile found-tile" aria-hidden="true">([^<]*)<\/span>/g)].map((match) => match[1])
+  // Seven Claude servers, three Codex servers and two plugins.
+  assert.equal(tiles.length, 12)
+  // The letter is the server's own: the last part of a plugin server's name, and a connector's
+  // name without "claude.ai".
+  assert.deepEqual(tiles.slice(0, 7), ['G', 'N', 'C', 'S', 'G', 'G', 'T'])
+})
+
+test('project servers are a count, never names, and a count of none says nothing', () => {
+  assert.match(wallOf({ found: foundPayload() }), /4 projects have their own servers\. Their names are not shown\./)
+  const one = foundSample()
+  one.claude.projectServers = 1
+  assert.match(wallOf({ found: foundPayload([one]) }), /1 project has its own servers\./)
+  const none = foundSample()
+  none.claude.projectServers = 0
+  assert.ok(!/projects? ha(s|ve) (its|their) own servers/.test(wallOf({ found: foundPayload([none]) })))
+})
+
+test('names left out are counted in a sentence, and more past a cap are said too', () => {
+  const doc = foundSample()
+  doc.codex.hidden = 2
+  doc.claude.more = 3
+  const wall = wallOf({ found: foundPayload([doc]) })
+  assert.match(wall, /3 names were left out because they did not read as plain names/)
+  assert.match(wall, /3 more servers were not listed/)
+  const clean = foundSample()
+  clean.claude.hidden = 0
+  assert.ok(!/left out because/.test(wallOf({ found: foundPayload([clean]) })))
+})
+
+test('a found tile the register proved gets a Proved badge; found alone never does', () => {
+  const unproved = wallOf({ found: foundPayload() })
+  assert.ok(!/>Proved</.test(unproved), 'something found was badged Proved with nothing in the register')
+  const wall = wallOf({ found: foundPayload([foundSample()], [provedGmail]) })
+  const gmail = [...wall.matchAll(/<li class="found-item">[\s\S]*?<\/li>/g)].map((match) => match[0]).find((item) => item.includes('claude.ai Gmail')) ?? ''
+  assert.match(gmail, /<span class="chip ok">Proved<\/span>/)
+  assert.equal((wall.match(/>Proved</g) ?? []).length, 1)
+})
+
+test('installed tools show a version when found, and words when not', () => {
+  const wall = wallOf({ found: foundPayload() })
+  assert.match(wall, /Installed tools/)
+  assert.match(wall, /<span class="found-title">Claude Code<\/span><span class="found-version">2\.1\.293<\/span>/)
+  assert.match(wall, /<span class="found-title">GitHub CLI<\/span><span class="found-version muted">Not found<\/span>/)
+  assert.match(wall, /<span class="found-title">ChatGPT app<\/span><span class="found-version muted">Could not check<\/span>/)
+})
+
+test('no reading yet is said in words, with what to run, and draws no zero', () => {
+  const wall = wallOf({ connections: [provedGmail], found: foundPayload([]) })
+  assert.match(wall, /Nothing found yet\./)
+  assert.match(wall, /\/snapshot/)
+  assert.ok(!/\b0\b/.test(wall.replace(/<[^>]+>/g, ' ')), 'the empty wall printed a zero')
+  // A payload from a board older than the wall has no `found` at all.
+  assert.match(wallOf({ connections: [provedGmail] }), /Nothing found yet\./)
+})
+
+test('a file the board could not use says why', () => {
+  const wall = wallOf({ connections: [provedGmail], found: foundPayload(['{ broken']) })
+  assert.match(wall, /could not be used/)
+  assert.match(wall, /A connections file could not be read\./)
+})
+
+test('a list older than eight hours carries a stale warning with its age', () => {
+  const wall = wallOf({ found: foundPayload([foundSample({ takenAt: new Date(Date.now() - 11 * 3600_000).toISOString() })]) })
+  assert.match(wall, /checked 11 hr ago/)
+  assert.match(wall, /<p class="found-stale">Checked more than 8 hours ago/)
+  assert.ok(!wallOf({ found: foundPayload() }).includes('found-stale'))
+})
+
+test('several computers each get their own section, newest first, and the rest are counted', () => {
+  const docs = ['Studio', 'Mac Mini', 'Old laptop', 'Work PC'].map((computer, index) =>
+    foundSample({ computer, takenAt: new Date(Date.now() - (index + 1) * 3600_000).toISOString() }))
+  const wall = wallOf({ found: foundPayload(docs) })
+  const heads = [...wall.matchAll(/<span class="title">Found on ([A-Za-z ]+)</g)].map((match) => match[1])
+  assert.deepEqual(heads, ['Studio', 'Mac Mini', 'Old laptop'])
+  assert.match(wall, /1 more computer was not shown/)
+  // Only the newest computer opens; the others are there, closed, so a phone is not a wall of tiles.
+  const groups = [...wall.matchAll(/<details class="found-group"( open)?>/g)].map((match) => Boolean(match[1]))
+  assert.deepEqual(groups, [true, true, true, false, false, false, false, false, false])
+})
+
+test('a Claude or Codex block that found nothing says so in words', () => {
+  const doc = foundSample()
+  doc.claude = { status: 'not found' }
+  doc.codex = { status: 'unavailable', why: 'could not be read' }
+  const wall = wallOf({ found: foundPayload([doc]) })
+  assert.match(wall, /Claude Code was not found on this computer\./)
+  assert.match(wall, /Codex&rsquo;s servers and plugins could not be read: could not be read\./)
+  const live = foundSample()
+  live.claude.live = 'timed out'
+  assert.match(wallOf({ found: foundPayload([live]) }), /Live check took too long/)
+})
+
+test('hostile text on the wall is escaped', () => {
+  const nasty = '<img src=x onerror=alert(1)>'
+  const found = foundPayload()
+  const [computer] = found.computers
+  computer.computer = nasty
+  computer.claude.servers[0].name = nasty
+  computer.claude.servers[1].stateLabel = nasty
+  computer.codex.plugins[0].from = nasty
+  computer.tools[0].version = nasty
+  computer.claude.liveLabel = nasty
+  const wall = wallOf({ found })
+  assert.ok(!wall.includes('<img src=x'), 'raw markup reached the wall')
+  assert.ok((wall.match(/&lt;img src=x/g) ?? []).length >= 6, 'some fields on the wall are not escaped')
+})
+
+test('no wall state renders undefined, NaN, null or [object Object]', () => {
+  const notFound = foundSample()
+  notFound.claude = { status: 'not found' }
+  notFound.codex = { status: 'unavailable', why: 'could not be read' }
+  const empty = foundSample()
+  empty.claude.servers = []
+  empty.codex.servers = []
+  empty.codex.plugins = []
+  empty.tools = []
+  for (const found of [undefined, foundPayload([]), foundPayload(['{']), foundPayload(), foundPayload([notFound]), foundPayload([empty]),
+    foundPayload([foundSample({ takenAt: new Date(Date.now() - 20 * 3600_000).toISOString(), computer: '' })])]) {
+    const wall = wallOf({ connections: [provedGmail], found })
+    assert.ok(wall.length > 0, 'the wall drew nothing')
+    for (const junk of ['undefined', 'NaN', '[object Object]', 'Infinity', 'null']) {
+      assert.ok(!wall.includes(junk), `the wall rendered "${junk}"`)
+    }
+  }
+})
+
+test('every class the wall puts in the markup is one the stylesheet styles', () => {
+  const stale = foundSample({ takenAt: new Date(Date.now() - 11 * 3600_000).toISOString() })
+  stale.codex.hidden = 1
+  stale.claude.more = 1
+  const notFound = foundSample()
+  notFound.claude = { status: 'not found' }
+  const markup = wallOf({ found: foundPayload([foundSample(), stale, notFound], [provedGmail]) }) + wallOf({ found: foundPayload([]) })
+  const emitted = new Set()
+  for (const found of markup.matchAll(/class="([a-z0-9 -]+)"/g)) {
+    for (const name of found[1].split(/\s+/).filter(Boolean)) emitted.add(name)
+  }
+  assert.ok(emitted.size >= 12, `only found ${emitted.size} classes - the sweep is not reading them`)
+  for (const name of emitted) {
+    assert.ok(rulesFor(`.${name}`).length || rulesFor(`.${name}`, { desktop: true }).length,
+      `the wall puts class "${name}" in the markup and no rule anywhere targets it`)
+  }
+})
+
+test('the wall wraps on a phone: lists reflow, long names break, and a group is a thumb-sized tap', () => {
+  const rule = (selector) => Object.assign({}, ...exactRules(selector).filter((one) => !one.inMedia).map(valuesIn))
+  for (const list of ['.found-list', '.found-tools']) {
+    assert.match(rule(list)['grid-template-columns'] ?? '', /auto-fill/, `${list} is a fixed number of columns`)
+    assert.match(rule(list)['grid-template-columns'] ?? '', /min\(100%/, `${list} has a column wider than a phone`)
+    assert.ok(!('overflow-x' in rule(list)))
+  }
+  for (const name of ['.found-name', '.found-head']) {
+    assert.equal(rule(name)['overflow-wrap'], 'anywhere', `${name} can push a phone sideways`)
+    assert.equal(rule(name)['min-width'], '0')
+  }
+  assert.equal(rule('.found-item')['flex-wrap'], 'wrap')
+  const summary = rule('.found-group > summary')
+  assert.ok(Number.parseFloat(summary['min-height'] ?? '0') >= 2.75, 'a group heading is a smaller tap target than 2.75rem')
+})
+
+test('a runtime with its own heartbeat window says when it goes silent; the default says nothing more', () => {
+  const custom = connectionsScreen({ connections: [], runtimes: [aRuntime({ staleAfterMinutes: 200 })] })
+  assert.match(custom, /silent after 3 hr 20 min without one/)
+  const plain = connectionsScreen({ connections: [], runtimes: [aRuntime({ staleAfterMinutes: 30 })] })
+  assert.ok(!/silent after/.test(plain))
 })

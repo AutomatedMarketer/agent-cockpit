@@ -1076,6 +1076,62 @@
   .subs-total { padding-top: .1rem; font-size: .9375rem; }
   .subs-total b { font-variant-numeric: tabular-nums; }
   .subs-note { font-size: .75rem; color: var(--muted); }
+
+  /* Connections: the wall of what each computer found. A card per computer; inside it three folding
+     groups, so a phone can close what it has read. Each list is one column on a phone and as many as
+     fit on a laptop, and every name breaks inside its row - a server name has no length limit. The
+     tiles are neutral on purpose: the state is the word in the chip, and only Failed is amber. */
+  .found-wall > .panel.empty { margin-bottom: .2rem; }
+  .found-intro { margin: -.35rem 0 .85rem; max-width: 62ch; font-size: .8125rem; color: var(--muted); }
+  .found-computer + .found-computer { margin-top: .75rem; }
+  .card > .found-head, .card > .found-stale, .card > .found-note { margin: 0; }
+  .found-head { min-width: 0; overflow-wrap: anywhere; font-size: .8125rem; color: var(--muted); }
+  .found-head > .title { color: var(--ink); }
+  .found-age { white-space: nowrap; }
+  .card > .found-stale { margin-top: .5rem; }
+  .found-stale { font-size: .8125rem; color: var(--warn); overflow-wrap: anywhere; }
+  .found-group { margin-top: .7rem; border-top: 1px solid var(--line); }
+  .found-group > summary {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .6rem; min-height: 2.75rem;
+    padding: .35rem 0; cursor: pointer; list-style: none;
+  }
+  .found-group > summary::-webkit-details-marker { display: none; }
+  .found-group > summary::after {
+    content: ""; width: .38rem; height: .38rem; margin: -.15rem .2rem 0 auto;
+    border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
+    transform: rotate(45deg); transition: transform .15s ease;
+  }
+  .found-group[open] > summary::after { transform: rotate(225deg); margin-top: .2rem; }
+  .found-group > summary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; border-radius: 4px; }
+  .found-group-name { font-size: .9375rem; font-weight: 600; color: var(--ink); }
+  .found-count { font-size: .75rem; color: var(--muted); }
+  .found-live { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0 0 .3rem; }
+  .found-sub {
+    margin: .7rem 0 .25rem; font-size: .6875rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  .found-list, .found-tools { list-style: none; margin: 0; padding: 0; display: grid; }
+  .found-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); gap: 0 1.1rem; }
+  .found-item { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; min-width: 0; padding: .4rem 0; }
+  .found-tile { --tile: var(--muted); width: 1.9rem; height: 1.9rem; font-size: .75rem; }
+  .found-name { display: grid; flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+  .found-title { min-width: 0; font-size: .875rem; font-weight: 600; overflow-wrap: anywhere; }
+  .found-meta { font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
+  .found-chips { display: flex; flex-direction: column; align-items: flex-end; gap: .3rem; }
+  .found-tools { grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr)); gap: 0 1.1rem; margin-bottom: .5rem; }
+  .found-tool {
+    display: flex; flex-wrap: wrap; justify-content: space-between; gap: .1rem .6rem; min-width: 0;
+    padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .875rem;
+  }
+  .found-version { font-variant-numeric: tabular-nums; color: var(--ink); overflow-wrap: anywhere; }
+  .found-version.muted { color: var(--muted); }
+  .found-missing { margin: 0 0 .6rem; font-size: .875rem; overflow-wrap: anywhere; }
+  .found-note { margin: .45rem 0 .2rem; font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
+  .card > .found-note { margin-top: .6rem; }
+  .found-wall > .found-note { margin: .6rem 0 0; }
+  @media (prefers-reduced-motion: reduce) {
+    .found-group > summary::after { transition: none; }
+  }
   /* The owner's number on the Ledger is the same card as on Today, on its own. Capped, because one
      card stretched across a laptop is a band of colour with a number lost at its left end. */
   .kpis-one { max-width: 26rem; }
@@ -3390,6 +3446,161 @@ async function submitWorkflowRequest() {
 
 /* ---------- Connections ---------- */
 
+/* The wall: what each computer found - its tools, Claude Code's servers, Codex's servers and
+   plugins - from the files the collector commits (api/state.js shapeFound). Every state is said in
+   the contract's own words, so colour only ever repeats what a word already says. "Needs sign-in"
+   stays grey (decision D9): some servers are signed out on purpose, and an alarm for each would
+   teach the owner to ignore the colour. Only Failed is amber, and nothing here is red.
+
+   A phone gets one computer open and the rest folded, because three computers' worth of servers is
+   a scroll nobody finishes. Server names are whatever somebody typed into a config file; the server
+   has checked them, and every one is escaped here all the same. */
+const FOUND_SCOPE_ORDER = [
+  ['user', 'Your servers'], ['plugin', 'Plugin servers'], ['claude.ai', 'claude.ai connectors'], ['other', 'Other']
+]
+const FOUND_CHIP = { connected: 'chip ok', failed: 'chip warn', 'waiting for approval': 'chip on' }
+// A sentence read out of a file ends with its full stop, wherever it came from.
+const sentence = (text) => (/[.!?]$/.test(text) ? text : `${text}.`)
+
+// The letter on a server's tile: its own name's first letter or number, after the parts every
+// plugin server or claude.ai connector shares - so three plugin servers are not three Ps.
+function foundLetter(name) {
+  const bare = String(name ?? '').replace(/^claude\.ai\s+/i, '').split(':').at(-1)
+  return (/[\p{L}\p{N}]/u.exec(bare)?.[0] ?? '·').toUpperCase()
+}
+
+function foundItemHtml(entry, { meta = '', label, chip = 'chip' }) {
+  return `<li class="found-item"><span class="tile found-tile" aria-hidden="true">${escapeHtml(foundLetter(entry.name))}</span>
+    <span class="found-name"><span class="found-title">${breakable(entry.name)}</span>${meta ? `<span class="found-meta">${meta}</span>` : ''}</span>
+    <span class="found-chips"><span class="${chip}">${escapeHtml(label)}</span>${entry.proved === true ? '<span class="chip ok">Proved</span>' : ''}</span></li>`
+}
+
+// A plugin server's name is one long word to a browser. A break offered after each colon lets
+// `plugin:marketing:supermetrics` wrap at its own parts instead of mid-word.
+const breakable = (name) => escapeHtml(name).replace(/:/g, ':<wbr>')
+
+const foundListHtml = (items) => `<ul class="found-list">${items.join('')}</ul>`
+
+function foundGroupHtml(name, count, body, open) {
+  return `<details class="found-group"${open ? ' open' : ''}><summary><span class="found-group-name">${name}</span>
+    <span class="found-count">${count}</span></summary>${body}</details>`
+}
+
+// A block that found nothing: not found, or there and unreadable, with the collector's reason.
+function foundMissingHtml(block, notFound, unreadable) {
+  if (block?.status === 'not found') return `<p class="found-missing">${notFound}</p>`
+  const why = block?.why ? `: ${escapeHtml(sentence(block.why))}` : '.'
+  return `<p class="found-missing">${unreadable}${why}</p>`
+}
+
+function foundClaudeHtml(claude, open) {
+  if (claude?.status !== 'found') {
+    return foundGroupHtml('Claude Code', claude?.status === 'not found' ? 'Not found' : 'Could not be read',
+      foundMissingHtml(claude, 'Claude Code was not found on this computer.', 'Claude Code&rsquo;s servers could not be read'), open)
+  }
+  const servers = claude.servers ?? []
+  const counts = ['connected', 'failed', 'needs sign-in']
+    .map((state) => [servers.filter((server) => server.state === state), state])
+    .filter(([matching]) => matching.length)
+    .map(([matching, state]) => `${matching.length} ${state}`)
+  const count = [plural(servers.length, 'server', 'servers'), ...counts].join(' &middot; ')
+  let body = `<p class="found-live"><span class="chip">${escapeHtml(claude.liveLabel)}</span></p>`
+  if (!servers.length) body += '<p class="found-missing">No servers are set up in Claude Code on this computer.</p>'
+  for (const [scope, heading] of FOUND_SCOPE_ORDER) {
+    const inScope = servers.filter((server) => server.scope === scope)
+    if (!inScope.length) continue
+    body += `<p class="found-sub">${heading}</p>` + foundListHtml(inScope.map((server) =>
+      foundItemHtml(server, { meta: escapeHtml(server.transportLabel), label: server.stateLabel, chip: FOUND_CHIP[server.state] ?? 'chip' })))
+  }
+  if (claude.projectServers > 0) {
+    body += `<p class="found-note">${claude.projectServers === 1 ? '1 project has its own servers' : `${claude.projectServers} projects have their own servers`}. Their names are not shown.</p>`
+  }
+  if (claude.more > 0) body += `<p class="found-note">${plural(claude.more, 'more server was', 'more servers were')} not listed - the list stops at 100.</p>`
+  return foundGroupHtml('Claude Code', count, body, open)
+}
+
+function foundCodexHtml(codex, open) {
+  if (codex?.status !== 'found') {
+    return foundGroupHtml('Codex', codex?.status === 'not found' ? 'Not found' : 'Could not be read',
+      foundMissingHtml(codex, 'Codex was not found on this computer.', 'Codex&rsquo;s servers and plugins could not be read'), open)
+  }
+  const servers = codex.servers ?? []
+  const plugins = codex.plugins ?? []
+  const codexChip = (entry) => (entry.state === 'found' ? 'chip on' : 'chip')
+  let body = ''
+  if (!servers.length && !plugins.length) body += '<p class="found-missing">No servers or plugins are set up in Codex on this computer.</p>'
+  if (servers.length) {
+    body += '<p class="found-sub">Servers</p>' + foundListHtml(servers.map((server) => foundItemHtml(server, { label: server.label, chip: codexChip(server) })))
+  }
+  if (plugins.length) {
+    body += '<p class="found-sub">Plugins</p>' + foundListHtml(plugins.map((plugin) =>
+      foundItemHtml(plugin, { meta: `from ${escapeHtml(plugin.from)}`, label: plugin.label, chip: codexChip(plugin) })))
+  }
+  if (codex.more > 0) body += `<p class="found-note">${plural(codex.more, 'more Codex server or plugin was', 'more Codex servers or plugins were')} not listed.</p>`
+  const count = `${plural(servers.length, 'server', 'servers')} &middot; ${plural(plugins.length, 'plugin', 'plugins')}`
+  return foundGroupHtml('Codex', count, body, open)
+}
+
+function foundToolsHtml(tools, open) {
+  if (!tools?.length) return foundGroupHtml('Installed tools', 'None checked', '<p class="found-missing">No tools were checked in this reading.</p>', open)
+  const found = tools.filter((tool) => tool.state === 'found').length
+  const rows = tools.map((tool) => {
+    const value = tool.state === 'found'
+      ? `<span class="found-version">${escapeHtml(tool.version ?? tool.label)}</span>`
+      : `<span class="found-version muted">${escapeHtml(tool.label)}</span>`
+    return `<li class="found-tool"><span class="found-title">${escapeHtml(tool.name)}</span>${value}</li>`
+  }).join('')
+  return foundGroupHtml('Installed tools', `${found} of ${tools.length} found`, `<ul class="found-tools">${rows}</ul>`, open)
+}
+
+function foundComputerHtml(computer, open) {
+  const where = computer.computer ? escapeHtml(computer.computer) : 'a computer with no name shown'
+  const stale = computer.freshness === 'stale'
+    ? `<p class="found-stale">Checked more than 8 hours ago, so this may be out of date. Run <code>/snapshot</code>
+       on ${computer.computer ? where : 'that computer'}, or check its collector.</p>`
+    : ''
+  const hidden = ['claude', 'codex'].reduce((total, key) => total + (computer[key]?.status === 'found' ? computer[key].hidden ?? 0 : 0), 0)
+  const hiddenNote = hidden > 0
+    ? `<p class="found-note">${hidden === 1
+      ? '1 name was left out because it did not read as a plain name - it could have been a key, an address or a path.'
+      : `${hidden} names were left out because they did not read as plain names - any of them could have been a key, an address or a path.`}</p>`
+    : ''
+  return `<article class="panel card found-computer">
+    <p class="found-head"><span class="title">Found on ${where}</span> <span class="found-age">&middot; checked ${escapeHtml(ago(computer.takenAt))}</span></p>
+    ${stale}${foundClaudeHtml(computer.claude, open)}${foundCodexHtml(computer.codex, open)}${foundToolsHtml(computer.tools, open)}${hiddenNote}</article>`
+}
+
+function foundWallHtml(found) {
+  const head = `${sectionHead('What your computers have set up', '<h2>Found on your computers</h2>')}
+    <p class="found-intro">From each computer&rsquo;s last <code>/snapshot</code>. Found is not the same as proved:
+    only the list above says a connection has worked with your own data.</p>`
+  const wrap = (inner) => `<section class="found-wall">${head}${inner}</section><!-- found-wall -->`
+  const computers = Array.isArray(found?.computers) ? found.computers : []
+  if (!found || found.status === 'none' || (found.status === 'ok' && !computers.length)) {
+    return wrap(`<div class="panel empty"><b>Nothing found yet.</b>
+      <span class="small">Run <code>/snapshot</code> in your team repo on each computer you use, and this fills in
+      with its tools, servers and plugins.</span>${whyHtml('A collector on your own computer writes down what it has set up and commits that list to your repo. The board only reads that list; it never reaches your computer.')}</div>`)
+  }
+  if (found.status !== 'ok') {
+    return wrap(`<div class="panel empty"><b>Your found list could not be used.</b>
+      <span class="small">${escapeHtml(found.why ?? '')} Run <code>/snapshot</code> again.</span></div>`)
+  }
+  const notes = []
+  if (found.notShown) notes.push(`${plural(found.notShown, 'more computer was', 'more computers were')} not shown - the wall shows the newest three.`)
+  if (found.unreadable) notes.push(`${plural(found.unreadable, 'connections file', 'connections files')} could not be used (damaged, too big, or not returned by GitHub), so ${found.unreadable === 1 ? 'it was' : 'they were'} left out.`)
+  if (found.skipped) notes.push(`${plural(found.skipped, 'more connections file was', 'more connections files were')} not read - the board reads only five.`)
+  return wrap(computers.map((computer, index) => foundComputerHtml(computer, index === 0)).join('') +
+    (notes.length ? `<p class="found-note">${notes.map(escapeHtml).join(' ')}</p>` : ''))
+}
+
+// "3 hr 20 min", for a runtime's own heartbeat window.
+function minutesWords(minutes) {
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  if (!hours) return `${rest} min`
+  return rest ? `${hours} hr ${rest} min` : `${hours} hr`
+}
+
 // Two rails, and they answer different questions. Connections are what the team can reach on
 // the owner's behalf — Gmail, a calendar, a CRM — read from connections/register.yml, which
 // /connect writes after a tool has answered with the owner's own data. Runtimes are machines
@@ -3401,8 +3612,11 @@ async function submitWorkflowRequest() {
 function renderConnections() {
   const connections = data.connections ?? []
   const runtimes = data.runtimes ?? []
+  const found = data.found ?? null
+  // Day zero keeps its one message. Once a computer has sent its list, the screen is drawn whole.
+  const foundAny = found?.status === 'ok' || found?.status === 'unusable'
 
-  if (!connections.length && !runtimes.length) {
+  if (!connections.length && !runtimes.length && !foundAny) {
     el('connections').innerHTML = `<div class="panel empty">Nothing connected yet. Run <code>/connect</code> in your team repo and it will wire one tool, prove it by reading your own data back to you, and register it here.</div>`
     return
   }
@@ -3442,7 +3656,10 @@ function renderConnections() {
         <span class="state">${escapeHtml(STATE_LABEL[runtime.status] ?? runtime.status)}</span>
       </div>
       <div class="row between" style="margin-top:.35rem">
-        <span class="small muted">${runtime.lastBeat ? `heartbeat ${escapeHtml(ago(runtime.lastBeat))}` : 'no heartbeat file yet'}</span>
+        <span class="small muted">${runtime.lastBeat ? `heartbeat ${escapeHtml(ago(runtime.lastBeat))}` : 'no heartbeat file yet'}${
+          // Said only when the owner set their own window in runtimes.yml; 30 is what every runtime had before.
+          Number.isInteger(runtime.staleAfterMinutes) && runtime.staleAfterMinutes !== 30
+            ? ` &middot; silent after ${minutesWords(runtime.staleAfterMinutes)} without one` : ''}</span>
         ${runtime.url ? `<a href="${escapeHtml(runtime.url)}" rel="noreferrer noopener">Open &rarr;</a>` : ''}
       </div>
     </div>`).join('')
@@ -3481,6 +3698,7 @@ function renderConnections() {
       : `<div class="panel empty"><b>Nothing connected yet.</b>
          <span class="small">Run <code>/connect</code> in your team repo and it will wire one tool,
          prove it by reading your own data back to you, and register it here.</span></div>`}
+    ${foundWallHtml(found)}
     ${sectionHead('Machines', '<h2>Runtimes</h2>')}
     ${runtimeRows
       ? `<div class="panel">${runtimeRows}</div>`
