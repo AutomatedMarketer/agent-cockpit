@@ -715,6 +715,25 @@ export function shapeConnections(register) {
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
+// A runtime's url is typed into runtimes.yml in the team repo and ends up in an href. Escaping the
+// text stops a quote breaking out of the attribute; it does nothing about the scheme, and the page
+// allows inline scripts, so `javascript:` ran on click. new URL() strips the leading whitespace and
+// control characters a browser would also ignore, so a disguised scheme is judged as the browser
+// will read it. Credentials are refused because a link on the board should not carry a password
+// into history and the Referer header.
+function safeRuntimeUrl(value) {
+  if (typeof value !== 'string') return null
+  let parsed
+  try {
+    parsed = new URL(value)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+  if (parsed.username || parsed.password) return null
+  return parsed.href
+}
+
 export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
   const entries = Array.isArray(registry?.runtimes) ? registry.runtimes : []
   return entries
@@ -727,7 +746,7 @@ export function shapeRuntimes(registry, heartbeats, now = Date.now()) {
       return {
         name: String(entry.name ?? 'unnamed'),
         kind: String(entry.kind ?? 'runtime'),
-        url: typeof entry.url === 'string' ? entry.url : null,
+        url: safeRuntimeUrl(entry.url),
         heartbeat: entry.heartbeat ?? null,
         status,
         lastBeat

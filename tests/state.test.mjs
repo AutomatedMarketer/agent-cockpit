@@ -2,7 +2,7 @@
 // a network, a token, or a live account.
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import handler, { isTaskCard, shapeHero, markOwnerSwitchedOff, shapeSkills, shapeSetup, ownerNameFrom, shapeActivity } from '../api/state.js'
+import handler, { shapeRuntimes, isTaskCard, shapeHero, markOwnerSwitchedOff, shapeSkills, shapeSetup, ownerNameFrom, shapeActivity } from '../api/state.js'
 
 // This suite covers the endpoint's data logic, not the view gate - that has its own
 // suite in gate.test.mjs. Opting out here keeps every case from carrying a key header.
@@ -258,7 +258,7 @@ test('the connections rail reads runtimes.yml and judges each heartbeat', async 
   assert.equal(body.runtimes.length, 2)
   const hermes = body.runtimes.find((runtime) => runtime.name === 'Hermes')
   assert.equal(hermes.status, 'live')
-  assert.equal(hermes.url, 'http://hermes.tail.ts.net:8080')
+  assert.equal(hermes.url, 'http://hermes.tail.ts.net:8080/')
   const openclaw = body.runtimes.find((runtime) => runtime.name === 'OpenClaw')
   assert.equal(openclaw.status, 'silent', 'a three-hour-old heartbeat is silent')
 })
@@ -1078,4 +1078,42 @@ test('a stack.yml with no subscriptions gives an empty list', async () => {
   const { body } = await run()
   assert.deepEqual(body.subscriptions.items, [])
   assert.deepEqual(body.subscriptions.totals, [])
+})
+
+/* runtimes.yml comes from the team repo, and the url goes into an href on the Connections screen.
+   The CSP allows inline scripts, so `javascript:` in that field ran on click. The scheme is judged
+   here, once, on the server: only http and https survive, and a runtime with any other value still
+   shows - just without a link. escapeHtml stops quotes breaking out of the attribute; it does not
+   stop a scheme, which is why that is not enough on its own. */
+const urlOf = (url) => shapeRuntimes({ runtimes: [{ name: 'X', url }] }, {})[0].url
+
+test('a runtime url keeps http and https and nothing else', () => {
+  assert.equal(urlOf('http://hermes.tail.ts.net:8080'), 'http://hermes.tail.ts.net:8080/')
+  assert.equal(urlOf('https://example.com/dash?x=1'), 'https://example.com/dash?x=1')
+  for (const hostile of [
+    'javascript:alert(1)',
+    'JaVaScRiPt:alert(1)',
+    ' javascript:alert(1)',
+    '\tjava\nscript:alert(1)',
+    '\u0001javascript:alert(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'vbscript:msgbox(1)',
+    'file:///etc/passwd',
+    '//evil.example/x',
+    'not a url',
+    ''
+  ]) {
+    assert.equal(urlOf(hostile), null, `${JSON.stringify(hostile)} must not become a link`)
+  }
+})
+
+test('a runtime url with credentials in it is dropped', () => {
+  assert.equal(urlOf('http://user:pass@host.example/'), null)
+  assert.equal(urlOf('https://user@host.example/'), null)
+})
+
+test('a runtime with a refused url still shows, just without a link', () => {
+  const [runtime] = shapeRuntimes({ runtimes: [{ name: 'Hermes', kind: 'agent', url: 'javascript:alert(1)' }] }, {})
+  assert.equal(runtime.name, 'Hermes')
+  assert.equal(runtime.url, null)
 })
