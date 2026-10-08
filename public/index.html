@@ -1971,9 +1971,11 @@ function meterHtml(window) {
     <p class="meter-label">${label}</p><p class="meter-reset">${resetLine}</p></div>`
 }
 
-// Where the number came from, said in the card's head. Both Claude sources are addresses Anthropic
-// does not document; Codex's is its own log of what the server told it, which is a different claim.
+// Where the number came from, said in the card's head. The live address and the saved copy are ones
+// Anthropic does not document. The status line is Claude Code's own, documented data, so it is the
+// official reading and says so. Codex's is its own log of what the server told it, a different claim.
 function sourceChipHtml(source) {
+  if (source === 'claude-code-statusline') return '<span class="chip ok">From Claude Code</span>'
   if (source === 'unofficial-live') return '<span class="chip warn">unofficial</span>'
   if (source === 'claude-code-saved') return '<span class="chip warn">unofficial</span><span class="chip">saved copy</span>'
   if (source === 'codex-session-log') return '<span class="chip">from Codex&rsquo;s own log</span>'
@@ -2004,6 +2006,9 @@ function planCardHtml(service, reading) {
   let body
   if (limits.status === 'found' && Array.isArray(limits.windows) && limits.windows.length) {
     body = `<div class="meters">${limits.windows.map(meterHtml).join('')}</div>`
+    if (limits.source === 'claude-code-statusline') {
+      body += whyHtml(`These figures come from Claude Code’s own status line on ${reading.computer ?? 'the computer that took the reading'}: the plan limits Claude Code reports in its documented status line data, saved by a small script on that computer.`)
+    }
   } else if (limits.status === 'unavailable') {
     body = `<p class="plan-missing"><b>${service.name} limits were unavailable when this was taken.</b></p>` +
       whyHtml(limits.why ?? 'The collector reached for the reading and did not get one it could trust, so it wrote down that it could not rather than a number.')

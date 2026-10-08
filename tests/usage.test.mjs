@@ -189,6 +189,10 @@ test('usage parity: every source the contract names is accepted, and nothing els
     body.claude.limits.source = source
     assert.equal(limitsOf(body).status, 'found', `${source} was refused`)
   }
+  // The status line is Claude Code's own, documented reading: named as itself, not folded into another.
+  const statusLine = reading()
+  statusLine.claude.limits.source = 'claude-code-statusline'
+  assert.equal(limitsOf(statusLine).source, 'claude-code-statusline')
   const body = reading()
   body.claude.limits.source = 'something-else'
   assert.equal(limitsOf(body).status, 'unavailable')

@@ -5029,6 +5029,21 @@ test('"unofficial" and "estimate" are in plain view, not behind a Why?', () => {
   assert.match(textOf(saved), /saved copy/i)
 })
 
+// Claude Code's status line carries the plan limits in data Anthropic documents, so this source is
+// the official one. It is labelled as such, and never with the unofficial address's caveat.
+test("the status line reading is labelled as Claude Code's own, never unofficial", () => {
+  const claude = planCards(planLimitsOf(todayWith(usagePayload({ limits: { ...usageService().limits, source: 'claude-code-statusline' } })))).claude
+  const head = /<div class="plan-chips">[\s\S]*?<\/div>/.exec(claude)?.[0] ?? assert.fail('the Claude card has no chips')
+  assert.match(head, /<span class="chip ok">From Claude Code<\/span>/, 'the official source has no label in view')
+  assert.ok(!/unofficial/i.test(textOf(withoutWhy(claude))), 'the official source was called unofficial')
+  assert.ok(!/saved copy/i.test(textOf(claude)), 'the official source was called a saved copy')
+  const why = /<details class="why">[\s\S]*?<\/details>/.exec(claude)?.[0] ?? assert.fail('the official source has no Why?')
+  assert.match(textOf(why), /Claude Code(&rsquo;|'|’)s own status line on Mac Mini/)
+  // The other sources keep their own labels, and no Why? of this one.
+  const live = planCards(planLimitsOf(todayWith(usagePayload()))).claude
+  assert.ok(!/status line/.test(live), 'the unofficial address was explained as the status line')
+})
+
 test('a stale reading says how old it is, in view', () => {
   const { claude } = planCards(planLimitsOf(todayWith(usagePayload({ takenAt: inHours(-11), ageHours: 11, stale: true }))))
   assert.match(textOf(withoutWhy(claude)), /older than 8 hours/)

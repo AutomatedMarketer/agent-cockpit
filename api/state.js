@@ -209,7 +209,7 @@ export const USAGE_STALE_AFTER_HOURS = 8
 export const USAGE_MAX_FILES = 5
 export const USAGE_MAX_STRING = 60
 export const USAGE_STATUSES = ['found', 'not found', 'unavailable']
-export const USAGE_SOURCES = ['unofficial-live', 'claude-code-saved', 'codex-session-log']
+export const USAGE_SOURCES = ['unofficial-live', 'claude-code-statusline', 'claude-code-saved', 'codex-session-log']
 export const USAGE_WINDOWS = {
   five_hour: '5-hour',
   weekly_all: 'Weekly',

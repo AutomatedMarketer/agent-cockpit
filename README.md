@@ -83,6 +83,7 @@ it), the time each one resets in your own time zone, and which computer the read
 
 | What you see | What it means |
 |---|---|
+| **From Claude Code** | Claude's figure comes from Claude Code's own status line on that computer, data Anthropic documents, saved by a small script there. The official source |
 | **unofficial** | Claude's figure comes from an address Anthropic does not document. It can change without notice; if it stops answering, the card says *unavailable* rather than guessing |
 | **from Codex's own log** | Codex's figure is the last limit Codex itself recorded on that computer |
 | **estimate** | Replies and sessions over 7 days, counted from Claude Code's logs. A count, never a percentage |
@@ -310,7 +311,7 @@ Locally:
 npm test
 ```
 
-943 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+944 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
