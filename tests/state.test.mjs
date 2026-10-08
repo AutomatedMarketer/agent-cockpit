@@ -1162,3 +1162,122 @@ test('stale_after_minutes: 200 keeps a three-hour-old beat live and silences one
   assert.equal(statusFor(200), 'live', 'the edge itself is still live, as with the default')
   assert.equal(statusFor(201), 'silent')
 })
+
+/* ---------- the Connections wall reaches the payload, and nothing planted in it does -----------
+   The collector commits .agent-team/status/connections/<computer>.json. Like the usage file it is
+   one push away from anybody with access to the repo, so this is the end-to-end proof: a token, an
+   email, an address and a home path planted in every field, keys the board does not know added
+   everywhere, through the real handler. And "Proved" still comes from the register alone. */
+
+const foundPath = '.agent-team/status/connections/mac-mini.json'
+const foundReading = (planted = null) => {
+  const extra = planted ? { url: planted, command: planted, args: [planted], env: { KEY: planted }, headers: { Authorization: planted }, note: planted } : {}
+  return {
+    schema: 'agent-status/connections/v1',
+    takenAt: new Date(Date.now() - 3600_000).toISOString().replace(/\.\d+Z$/, 'Z'),
+    computer: planted ?? 'Mac Mini',
+    ...extra,
+    tools: [
+      { name: 'Claude Code', state: 'found', version: planted ?? '2.1.293', ...extra },
+      { name: 'Git', state: planted ?? 'found', version: '2.47.1' }
+    ],
+    claude: {
+      status: 'found',
+      live: 'checked',
+      ...extra,
+      servers: [
+        { name: 'claude.ai Gmail', scope: 'claude.ai', transport: 'web', state: 'connected', ...extra },
+        { name: 'github', scope: 'user', transport: 'local', state: 'failed', proved: true, verified: '2026-08-20', proof: 'yes' },
+        { name: planted ?? 'n8n-mcp', scope: 'user', transport: 'web', state: 'needs sign-in' },
+        { name: 'stripe', scope: planted ?? 'user', transport: planted ?? 'web', state: planted ?? 'connected' }
+      ],
+      projectServers: 2,
+      hidden: 0,
+      more: 0
+    },
+    codex: {
+      status: 'found',
+      ...extra,
+      servers: [{ name: planted ?? 'docs-search', enabled: true, ...extra }],
+      plugins: [{ name: 'canva', from: planted ?? 'openai-curated', enabled: false, ...extra }],
+      hidden: 0,
+      more: 0
+    }
+  }
+}
+
+test('a connections file in the repo reaches the payload as found, re-checked', async () => {
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: foundPath }],
+    overrideFiles: { [foundPath]: JSON.stringify(foundReading()) }
+  })
+  assert.equal(body.found.status, 'ok')
+  const [computer] = body.found.computers
+  assert.equal(computer.computer, 'Mac Mini')
+  assert.equal(computer.freshness, 'fresh')
+  assert.deepEqual(computer.claude.servers.map((server) => [server.name, server.stateLabel]), [
+    ['claude.ai Gmail', 'Connected'], ['github', 'Failed'], ['n8n-mcp', 'Needs sign-in'], ['stripe', 'Connected']
+  ])
+  assert.equal(computer.claude.projectServers, 2)
+  assert.deepEqual(computer.codex.plugins.map((plugin) => plugin.label), ['Turned off'])
+})
+
+test('Proved on the wall comes from the register only, never from the connections file', async () => {
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: foundPath }],
+    overrideFiles: { [foundPath]: JSON.stringify(foundReading()) }
+  })
+  const proved = Object.fromEntries(body.found.computers[0].claude.servers.map((server) => [server.name, server.proved]))
+  // Gmail is proved in the register (a date and a proof). Stripe has a date and no proof: a claim.
+  // GitHub says `proved: true` in the file itself, which nothing reads.
+  assert.deepEqual(proved, { 'claude.ai Gmail': true, github: false, 'n8n-mcp': false, stripe: false })
+})
+
+test('a repo with no connections file says so in the payload', async () => {
+  const { body } = await run()
+  assert.equal(body.found.status, 'none')
+  assert.deepEqual(body.found.computers, [])
+})
+
+test('/api/state never carries a token, email, address or path planted in a connections file', async () => {
+  const planted = [
+    ['sk', 'ant', 'oat01', 'Zm9vYmFyYmF6cXV4'.repeat(3)].join('-'),
+    'ey' + 'J' + 'hbGciOiJIUzI1NiJ9.' + 'eyJlbWFpbCI6ImZha2UifQ',
+    'fake.person' + '@' + 'example.com',
+    ['5f0c2b1e', '9a7d', '4c3b', '8e21', '0d6f4a9b7c55'].join('-'),
+    'Bear' + 'er ' + 'abc123def456',
+    'https://' + 'mcp.example.com/sse?key=' + 'Zm9vYmFyYmF6cXV4',
+    'npx -y ' + '@acme/secret-mcp --token ' + 'Zm9vYmFyYmF6cXV4',
+    '/Users/' + 'fakeperson' + '/secret-client'
+  ]
+  for (const value of planted) {
+    const { body, statusCode } = await run({}, {
+      extraTree: [{ type: 'blob', path: foundPath }],
+      overrideFiles: { [foundPath]: JSON.stringify(foundReading(value)) }
+    })
+    assert.equal(statusCode, 200)
+    assert.ok(!JSON.stringify(body).includes(value), `"${value.slice(0, 12)}..." reached /api/state`)
+    // Still read, not thrown away whole: the entries around the planted values survive.
+    assert.deepEqual(body.found.computers[0].claude.servers.map((server) => server.name), ['claude.ai Gmail', 'github'])
+    assert.ok(body.found.computers[0].claude.hidden >= 2)
+  }
+})
+
+test('a connections file the tree says is over 64 KB is not used, and only five are fetched', async () => {
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: foundPath, size: 64 * 1024 + 1 }],
+    overrideFiles: { [foundPath]: JSON.stringify(foundReading()) }
+  })
+  assert.equal(body.found.status, 'unusable', 'a file the tree called too big was fetched and read')
+  assert.match(body.found.why, /too big/)
+
+  const paths = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((slug) => `.agent-team/status/connections/${slug}.json`)
+  const { body: many } = await run({}, {
+    extraTree: [...paths, '.agent-team/status/connections/Not A Slug.json'].map((path) => ({ type: 'blob', path })),
+    overrideFiles: Object.fromEntries(paths.map((path) => [path, JSON.stringify(foundReading())]))
+  })
+  assert.equal(many.found.read, 5)
+  assert.equal(many.found.skipped, 2)
+  assert.equal(many.found.computers.length, 3)
+  assert.equal(many.found.notShown, 2)
+})

@@ -321,7 +321,7 @@ Locally:
 npm test
 ```
 
-952 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+986 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -388,6 +388,13 @@ with the collector in the team repo — the same bytes in both repos — and `te
 holds the board to it. The board does not trust the collector's own safety check: it builds its
 answer only from the fields it knows, and a test plants fake tokens, emails and paths in every field
 of a usage file to prove none of them reaches the page.
+
+The Connections wall is the same again. `tests/fixtures/connections-parity.json` is its contract,
+byte for byte the collector's, and `tests/found.test.mjs` checks that the board turns the contract's
+sample into exactly the shape the contract says, keeps every name it says to keep and drops every
+name it says to refuse. A server's address, command and settings are never read, even when somebody
+writes them into the file, and **Proved** comes only from `connections/register.yml`, never from
+what a computer found.
 
 ---
 

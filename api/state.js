@@ -478,6 +478,302 @@ export function shapeUsage(files, now = Date.now(), found = null) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The Connections wall: what each computer has set up - its tools, the servers Claude Code can
+// reach, and Codex's servers and plugins - read from the files the collector commits.
+//
+// The same rules as the usage meters, and for the same reasons: a reading with a moment attached,
+// one file per computer in .agent-team/status/connections/, only the first five fetched, nothing
+// over 64 KB fetched at all, missing, corrupt, undated and future files said to be unusable, and a
+// file older than eight hours shown with its age rather than as current. Every name is checked
+// again here and the output is BUILT from the keys the board knows, so a server's address, command
+// or settings - which the collector never writes - cannot come through even if somebody pushes them.
+//
+// Found is not proved. A server can be listed, even connected, and still never have read the
+// owner's own data back. "Proved" on this wall comes from the connections register alone, matched
+// by name (matchProved below); nothing in this file can set it.
+//
+// KEEP IN SYNC with scripts/lib/status/connections-schema.mjs in agent-team-template.
+// tests/fixtures/connections-parity.json is the shared contract, the same bytes in both repos, and
+// tests/found.test.mjs holds these constants to it - including `expectedShape`, the exact shape
+// this code must make from the contract's sample.
+export const FOUND_SCHEMA = 'agent-status/connections/v1'
+export const FOUND_FOLDER = '.agent-team/status/connections'
+export const FOUND_COMPUTER_SLUG = /^[a-z0-9-]{1,32}$/
+export const FOUND_STALE_AFTER_HOURS = 8
+export const FOUND_MAX_FILES = 5
+export const FOUND_MAX_BYTES = 65536
+export const FOUND_MAX_COMPUTERS = 3
+export const FOUND_STATUSES = ['found', 'not found', 'unavailable']
+export const FOUND_CAPS = { claudeServers: 100, codexServers: 50, codexPlugins: 60, tools: 12 }
+export const FOUND_TOOLS = ['Claude Code', 'Codex', 'Hermes', 'Node.js', 'Git', 'GitHub CLI', 'Claude app', 'ChatGPT app', 'Tailscale']
+// Every state comes with the words the wall shows for it: a state is said, never only coloured.
+export const FOUND_TOOL_STATES = { found: 'Found', 'not found': 'Not found', 'could not check': 'Could not check' }
+export const FOUND_VERSION = /^\d+(\.\d+){1,3}$/
+export const FOUND_MAX_VERSION_LENGTH = 32
+export const FOUND_SCOPES = { user: 'Your server', plugin: 'Plugin server', 'claude.ai': 'claude.ai connector', other: 'Other' }
+export const FOUND_TRANSPORTS = { local: 'Local program', web: 'Web service', unknown: 'Not known' }
+export const FOUND_SERVER_STATES = {
+  connected: 'Connected',
+  'needs sign-in': 'Needs sign-in',
+  failed: 'Failed',
+  'waiting for approval': 'Waiting for approval',
+  'not checked': 'Not checked',
+  'seen before': 'Seen before',
+  unknown: 'Unknown'
+}
+export const FOUND_LIVE_STATES = {
+  checked: 'Checked live',
+  'timed out': 'Live check took too long',
+  'could not run': 'Live check could not run',
+  'could not read': 'Live check answer not understood',
+  'program not found': 'Claude Code not found'
+}
+export const FOUND_CODEX_STATES = { found: 'Found', 'turned off': 'Turned off' }
+// How many the file may say it left out or did not list. Far past any real computer; a count past
+// it is not a count of anything.
+const FOUND_MAX_COUNT = 1e6
+
+// The connection-name rule, the contract's own. It replaces cleanUsageName's for connection names
+// only: `\S{24,}` refused `plugin:marketing:supermetrics` - 29 characters with no space - as if it
+// were a token. Here a long stretch is measured between separators, so a plugin's full name is a
+// name and a 40-character token is still not. Everything else is the same: the board's characters,
+// no @ or slash either way, no JWT opening, no key prefix, no Bearer, no uuid. The collector also
+// refuses the owner's username, computer name and home folder; the board cannot, because it does
+// not know whose computer it was.
+export const CONNECTION_NAME = {
+  characters: /^[\p{L}\p{N} .,'’()+&:_-]+$/u,
+  maxLength: 60,
+  never: ['@', '/', '\\', 'eyJ', 'sk-', 'bearer'],
+  neverIgnoresCase: true,
+  uuid: /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/,
+  segmentSeparators: ':._- ',
+  maxSegmentLength: 23
+}
+
+// Each character is compared one at a time, so nothing in the separator list is read as a range.
+function longestSegment(value) {
+  let longest = 0
+  let current = 0
+  for (const character of value) {
+    current = CONNECTION_NAME.segmentSeparators.includes(character) ? 0 : current + 1
+    longest = Math.max(longest, current)
+  }
+  return longest
+}
+
+export function isConnectionName(value) {
+  if (typeof value !== 'string' || !value || value.length > CONNECTION_NAME.maxLength) return false
+  if (value !== value.trim() || !CONNECTION_NAME.characters.test(value)) return false
+  const lower = value.toLowerCase()
+  if (CONNECTION_NAME.never.some((fragment) => lower.includes(fragment.toLowerCase()))) return false
+  if (CONNECTION_NAME.uuid.test(lower)) return false
+  return longestSegment(value) <= CONNECTION_NAME.maxSegmentLength
+}
+
+export function isFoundFile(path) {
+  const prefix = `${FOUND_FOLDER}/`
+  if (typeof path !== 'string' || !path.startsWith(prefix) || !path.endsWith('.json')) return false
+  return FOUND_COMPUTER_SLUG.test(path.slice(prefix.length, -'.json'.length))
+}
+
+const isFoundCount = (value) => Number.isInteger(value) && value >= 0 && value <= FOUND_MAX_COUNT
+// Own keys only: `toString` is not a state, however an object lookup would answer it.
+const wordFor = (words, value) => (typeof value === 'string' && Object.hasOwn(words, value) ? words[value] : null)
+
+// A block that found nothing carries its status and, when it is plainly a sentence, why.
+const noBlock = (status, why = null) => ({ status, why: why === null ? null : cleanUsageName(why) })
+
+// Shown whole or not at all, like a usage reading: a block whose own shape is wrong is not a list
+// the board can vouch for, so none of it is shown. One bad ENTRY is different - it is dropped and
+// counted in hidden, and the rest of the list stands, as the contract's rules say.
+function blockStatus(raw) {
+  if (!isPlainObject(raw) || raw.status === undefined || raw.status === 'not found') return noBlock('not found')
+  if (raw.status === 'unavailable') return noBlock('unavailable', raw.why ?? null)
+  if (raw.status !== 'found') return noBlock('unavailable')
+  return null
+}
+
+// Keeps the entries that pass, in the file's order and only up to the cap. A dropped entry is
+// counted in hidden; one past the cap is counted in more, so neither disappears without a word.
+function keepEntries(given, cap, shape, keyOf) {
+  const kept = []
+  const seen = new Set()
+  let hidden = 0
+  let more = 0
+  for (const raw of given) {
+    const entry = isPlainObject(raw) ? shape(raw) : null
+    if (!entry || seen.has(keyOf(entry))) {
+      hidden += 1
+      continue
+    }
+    seen.add(keyOf(entry))
+    if (kept.length < cap) kept.push(entry)
+    else more += 1
+  }
+  return { kept, hidden, more }
+}
+
+function claudeServer(raw) {
+  if (!isConnectionName(raw.name)) return null
+  const scopeLabel = wordFor(FOUND_SCOPES, raw.scope)
+  const transportLabel = wordFor(FOUND_TRANSPORTS, raw.transport)
+  const stateLabel = wordFor(FOUND_SERVER_STATES, raw.state)
+  if (!scopeLabel || !transportLabel || !stateLabel) return null
+  return { name: raw.name, scope: raw.scope, scopeLabel, transport: raw.transport, transportLabel, state: raw.state, stateLabel }
+}
+
+// Missing `enabled` is Found, as the contract says; anything but true, false or missing is not a
+// switch the board can read.
+function codexState(raw) {
+  if (raw.enabled === undefined || raw.enabled === true) return 'found'
+  return raw.enabled === false ? 'turned off' : null
+}
+
+function codexServer(raw) {
+  const state = codexState(raw)
+  if (!isConnectionName(raw.name) || !state) return null
+  return { name: raw.name, state, label: FOUND_CODEX_STATES[state] }
+}
+
+function codexPlugin(raw) {
+  const state = codexState(raw)
+  if (!isConnectionName(raw.name) || !isConnectionName(raw.from) || !state) return null
+  return { name: raw.name, from: raw.from, state, label: FOUND_CODEX_STATES[state] }
+}
+
+function foundClaude(raw) {
+  const missing = blockStatus(raw)
+  if (missing) return missing
+  if (!Object.hasOwn(FOUND_LIVE_STATES, raw.live) || !Array.isArray(raw.servers)) return noBlock('unavailable')
+  if (![raw.projectServers, raw.hidden, raw.more].every(isFoundCount)) return noBlock('unavailable')
+  const servers = keepEntries(raw.servers, FOUND_CAPS.claudeServers, claudeServer, (server) => server.name)
+  return {
+    status: 'found',
+    live: raw.live,
+    liveLabel: FOUND_LIVE_STATES[raw.live],
+    servers: servers.kept,
+    projectServers: raw.projectServers,
+    hidden: raw.hidden + servers.hidden,
+    more: raw.more + servers.more
+  }
+}
+
+function foundCodex(raw) {
+  const missing = blockStatus(raw)
+  if (missing) return missing
+  if (!Array.isArray(raw.servers) || !Array.isArray(raw.plugins)) return noBlock('unavailable')
+  if (![raw.hidden, raw.more].every(isFoundCount)) return noBlock('unavailable')
+  const servers = keepEntries(raw.servers, FOUND_CAPS.codexServers, codexServer, (server) => server.name)
+  // One plugin per name and source: `github` from two marketplaces is two plugins.
+  const plugins = keepEntries(raw.plugins, FOUND_CAPS.codexPlugins, codexPlugin, (plugin) => JSON.stringify([plugin.name, plugin.from]))
+  return {
+    status: 'found',
+    servers: servers.kept,
+    plugins: plugins.kept,
+    hidden: raw.hidden + servers.hidden + plugins.hidden,
+    more: raw.more + servers.more + plugins.more
+  }
+}
+
+// The tools are a fixed list of names, so one the board does not know is not shown and not
+// counted: there is no "hidden tools" sentence a person could act on. A version is only ever a
+// reading of a tool that was found, and only when it is plainly a version number.
+function foundTool(raw) {
+  const label = wordFor(FOUND_TOOL_STATES, raw.state)
+  if (!FOUND_TOOLS.includes(raw.name) || !label) return null
+  const version = raw.state === 'found' && typeof raw.version === 'string' &&
+    raw.version.length <= FOUND_MAX_VERSION_LENGTH && FOUND_VERSION.test(raw.version) ? raw.version : null
+  return { name: raw.name, state: raw.state, label, version }
+}
+
+function readFoundFile(body, now) {
+  if (typeof body !== 'string') return { usable: false, why: 'A connections file could not be fetched, or was too big to read.' }
+  if (Buffer.byteLength(body, 'utf8') > FOUND_MAX_BYTES) return { usable: false, why: 'A connections file was too big to read.' }
+  let parsed
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return { usable: false, why: 'A connections file could not be read.' }
+  }
+  if (!isPlainObject(parsed)) return { usable: false, why: 'A connections file could not be read.' }
+  if (parsed.schema !== FOUND_SCHEMA) return { usable: false, why: 'A connections file was written in a format this board does not know.' }
+  const takenMs = isoMs(parsed.takenAt)
+  if (!Number.isFinite(takenMs)) return { usable: false, why: 'A connections file does not say when it was taken.' }
+  if (takenMs > now) return { usable: false, why: 'A connections file is stamped in the future, so its age cannot be trusted.' }
+  const tools = Array.isArray(parsed.tools)
+    ? keepEntries(parsed.tools, FOUND_CAPS.tools, foundTool, (tool) => tool.name).kept
+    : []
+  return {
+    usable: true,
+    takenMs,
+    computer: {
+      computer: cleanUsageName(parsed.computer),
+      takenAt: new Date(takenMs).toISOString().replace('.000Z', 'Z'),
+      freshness: now - takenMs > FOUND_STALE_AFTER_HOURS * 3600_000 ? 'stale' : 'fresh',
+      tools,
+      claude: foundClaude(parsed.claude),
+      codex: foundCodex(parsed.codex)
+    }
+  }
+}
+
+// `found` is how many connections files the tree holds. Only the first five, in name order, are
+// read, and the rest are counted in `skipped`. Of the files that could be used, the newest three
+// are shown and the others counted in `notShown`: a wall per computer is already a long screen on
+// a phone, and nobody has more than three computers they set things up on.
+export function shapeFound(files, now = Date.now(), found = null) {
+  const given = Array.isArray(files) ? files : []
+  const total = Math.max(found ?? 0, given.length)
+  const toRead = [...given].sort((a, b) => String(a[0]).localeCompare(String(b[0]))).slice(0, FOUND_MAX_FILES)
+  const shaped = toRead.map(([, body]) => readFoundFile(body, now))
+  const readings = shaped.filter((reading) => reading.usable).sort((a, b) => b.takenMs - a.takenMs)
+  const base = {
+    read: toRead.length,
+    skipped: total - toRead.length,
+    unreadable: shaped.length - readings.length,
+    notShown: Math.max(0, readings.length - FOUND_MAX_COMPUTERS)
+  }
+  if (!toRead.length) return { status: 'none', why: 'Nothing has been found yet.', ...base, computers: [] }
+  if (!readings.length) return { status: 'unusable', why: shaped[0].why, ...base, computers: [] }
+  return { status: 'ok', why: null, ...base, computers: readings.slice(0, FOUND_MAX_COMPUTERS).map((reading) => reading.computer) }
+}
+
+// The name a register entry and a found tile are matched by: the last part of a plugin server's
+// `plugin:<plugin>:<server>`, a claude.ai connector without its `claude.ai ` prefix, and only the
+// letters and numbers, in lower case. So "Gmail" in the register badges "claude.ai Gmail", and
+// "Supermetrics" badges "plugin:marketing:supermetrics".
+function provedKey(name) {
+  if (typeof name !== 'string') return ''
+  const bare = name.replace(/^claude\.ai\s+/i, '').split(':').at(-1)
+  return bare.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+// Adds `proved` to every found server and plugin: true only when the register has a PROVED entry
+// - a verified date and a proof - with the same name or slug. Nothing the connections file says can
+// make it true. A new object; the shape shapeFound made, which the contract fixes, is left alone.
+export function matchProved(found, connections = []) {
+  if (!found || !Array.isArray(found.computers)) return found
+  const proved = new Set()
+  for (const entry of Array.isArray(connections) ? connections : []) {
+    if (entry?.proved !== true) continue
+    for (const key of [provedKey(entry.name), provedKey(entry.slug)]) if (key) proved.add(key)
+  }
+  const mark = (entry) => ({ ...entry, proved: proved.has(provedKey(entry.name)) })
+  return {
+    ...found,
+    computers: found.computers.map((computer) => ({
+      ...computer,
+      claude: computer.claude?.status === 'found'
+        ? { ...computer.claude, servers: computer.claude.servers.map(mark) }
+        : computer.claude,
+      codex: computer.codex?.status === 'found'
+        ? { ...computer.codex, servers: computer.codex.servers.map(mark), plugins: computer.codex.plugins.map(mark) }
+        : computer.codex
+    }))
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // What the owner pays: `subscriptions:` in stack.yml, written by /onboard or by hand, as
 // `{ name, service, price, currency, per }`.
 //
@@ -1512,8 +1808,11 @@ export default async function handler(request, response) {
     // all, and goes to shapeUsage with no body, to be counted as a file that could not be used.
     const usagePaths = paths.filter((path) => isUsageFile(path)).sort()
     const usageBody = async (path) => ((sizes[path] ?? 0) > USAGE_MAX_BYTES ? null : rawFile(settings, path))
+    // The Connections wall's files, on the same terms: five fetched, none the tree calls too big.
+    const foundPaths = paths.filter((path) => isFoundFile(path)).sort()
+    const foundBody = async (path) => ((sizes[path] ?? 0) > FOUND_MAX_BYTES ? null : rawFile(settings, path))
 
-    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles] =
+    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles, foundFiles] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
@@ -1530,7 +1829,8 @@ export default async function handler(request, response) {
         hasLedger ? rawFile(settings, 'ledger.yml') : null,
         hasProposals ? rawFile(settings, 'proposals.yml') : null,
         hasRoutineSnapshot ? rawFile(settings, ROUTINE_SNAPSHOT) : null,
-        Promise.all(usagePaths.slice(0, USAGE_MAX_FILES).map(async (path) => [path, await usageBody(path)]))
+        Promise.all(usagePaths.slice(0, USAGE_MAX_FILES).map(async (path) => [path, await usageBody(path)])),
+        Promise.all(foundPaths.slice(0, FOUND_MAX_FILES).map(async (path) => [path, await foundBody(path)]))
       ])
 
     const unparseable = []
@@ -1658,6 +1958,8 @@ export default async function handler(request, response) {
     // file that could not be used, not one of those past the first five.
     const usage = shapeUsage(usageFiles, now, usagePaths.length)
     const subscriptions = shapeSubscriptions(stackDoc, usage)
+    // Proved is matched in from the register here, after both are read, and from nowhere else.
+    const found = matchProved(shapeFound(foundFiles, now, foundPaths.length), connections)
     const hero = shapeHero(tiles, ledger)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, connections, verdicts: verdictPaths.length, onboarding, now })
 
@@ -1689,6 +1991,7 @@ export default async function handler(request, response) {
       hero,
       usage,
       subscriptions,
+      found,
       routines: {
         takenAt: snapshot.takenAt,
         usable: snapshot.usable,
