@@ -459,7 +459,8 @@ export function addFishBytes(tally, text) {
 // Saved after every reply, so a closed tab loses nothing; sent at hang-up and when the board opens.
 // One entry per conversation, updated as it goes. Kept to the newest MAX_OUTBOX_ITEMS, so a board
 // with no store - where the outbox IS the meter - cannot grow it for ever; the ones let go are
-// counted in `dropped`, so the card can say the total is short rather than quietly being so.
+// counted in `dropped`, by the month each happened in, so the card can say that month's total is
+// short rather than quietly being so - and a month nothing was let go from stays a known total.
 export const MAX_OUTBOX_ITEMS = 200
 const OUTBOX_BATCH = 20
 // A conversation still going is marked open, and is never reported: the board would count its counts
@@ -469,6 +470,20 @@ const LIVE_CALL_MS = 65 * 60_000
 const OUTBOX_TICKET = /^[A-Za-z0-9_-]{1,600}\.[A-Za-z0-9_-]{1,64}$/
 const OUTBOX_SID = /^[0-9a-f]{32}$/
 const OUTBOX_MODEL = /^[a-z0-9][a-z0-9.-]{0,39}$/
+const OUTBOX_MONTH = /^\d{4}-\d{2}$/
+// A year and a month of counts is all a card ever asks about.
+const DROPPED_MONTHS = 13
+
+// The dropped counts as stored, months the page could have written only, newest kept; then the
+// conversations in `gone` added, each to its own month.
+function droppedCounts(raw, gone = []) {
+  const counts = {}
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [month, count] of Object.entries(raw)) if (OUTBOX_MONTH.test(month) && wholeCount(count)) counts[month] = count
+  }
+  for (const item of gone) counts[item.at.slice(0, 7)] = (counts[item.at.slice(0, 7)] ?? 0) + 1
+  return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => b.localeCompare(a)).slice(0, DROPPED_MONTHS))
+}
 
 function outboxItem(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -501,7 +516,7 @@ export function readOutbox(stored) {
   }
   const items = Array.isArray(parsed?.items) ? parsed.items.map(outboxItem).filter(Boolean) : []
   const kept = items.slice(-MAX_OUTBOX_ITEMS)
-  return { version: 1, items: kept, dropped: wholeCount(parsed?.dropped) + (items.length - kept.length) }
+  return { version: 1, items: kept, dropped: droppedCounts(parsed?.dropped, items.slice(0, items.length - kept.length)) }
 }
 
 export function outboxPut(outbox, entry) {
@@ -512,7 +527,7 @@ export function outboxPut(outbox, entry) {
   if (at >= 0) items.splice(at, 0, item)
   else items.push(item)
   const kept = items.slice(-MAX_OUTBOX_ITEMS)
-  return { version: 1, items: kept, dropped: wholeCount(outbox.dropped) + (items.length - kept.length) }
+  return { version: 1, items: kept, dropped: droppedCounts(outbox.dropped, items.slice(0, items.length - kept.length)) }
 }
 
 // What a ticket says - its session, when it started, which model and which mouth - read, not checked:
@@ -552,13 +567,13 @@ export function outboxSettle(outbox, batch, answer) {
   for (const one of refused) {
     if (Number.isInteger(one?.at) && one.at >= 0 && one.at < batch.sids.length) gone.add(batch.sids[one.at])
   }
-  return { version: 1, items: outbox.items.filter((item) => !gone.has(item.sid)), dropped: wholeCount(outbox.dropped) }
+  return { version: 1, items: outbox.items.filter((item) => !gone.has(item.sid)), dropped: droppedCounts(outbox.dropped) }
 }
 
 // This device's own total for one month, priced by the table the server sent - what the meter shows
 // with no store, and the "not recorded yet" count with one.
 export function outboxSummary(outbox, prices, month) {
-  const summary = { conversations: 0, usd: 0, incomplete: [], fishBytes: {}, waiting: outbox.items.length, dropped: wholeCount(outbox.dropped) }
+  const summary = { conversations: 0, usd: 0, incomplete: [], fishBytes: {}, waiting: outbox.items.length, dropped: droppedCounts(outbox.dropped)[month] ?? 0 }
   if (!prices) summary.incomplete.push('no price table yet')
   let micros = 0
   for (const item of outbox.items) {

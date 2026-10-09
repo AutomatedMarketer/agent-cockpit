@@ -393,17 +393,28 @@ test('a conversation still going is never in a report; one a closed tab left ope
   assert.deepEqual(outboxBatch(stored, now).sids, [sid(5)])
 })
 
-test('an outbox that has to let its oldest conversations go keeps count of them, through storage and every report', () => {
+test('an outbox that has to let its oldest conversations go keeps count of them by month, through storage and every report', () => {
   let outbox = readOutbox(null)
-  assert.equal(outbox.dropped, 0)
+  assert.deepEqual(outbox.dropped, {})
   for (let n = 1; n <= MAX_OUTBOX_ITEMS + 5; n += 1) outbox = outboxPut(outbox, entry(n))
-  assert.equal(outbox.dropped, 5, 'conversations were let go without a word')
+  assert.deepEqual(outbox.dropped, { '2026-10': 5 }, 'conversations were let go without a word')
   const stored = readOutbox(JSON.stringify(outbox))
-  assert.equal(stored.dropped, 5)
-  assert.equal(readOutbox(JSON.stringify({ ...outbox, dropped: -3 })).dropped, 0)
+  assert.deepEqual(stored.dropped, { '2026-10': 5 })
+  assert.deepEqual(readOutbox(JSON.stringify({ ...outbox, dropped: { '2026-10': -3, nope: 4, '2026-09': 2 } })).dropped, { '2026-09': 2 })
+  assert.deepEqual(readOutbox(JSON.stringify({ ...outbox, dropped: 7 })).dropped, {}, 'a count with no month was kept')
   const batch = outboxBatch(stored)
-  assert.equal(outboxSettle(stored, batch, { accepted: batch.sids }).dropped, 5)
+  assert.deepEqual(outboxSettle(stored, batch, { accepted: batch.sids }).dropped, { '2026-10': 5 })
   assert.equal(outboxSummary(stored, null, '2026-10').dropped, 5)
+})
+
+test('a conversation let go in an earlier month never makes this month unknown', () => {
+  let outbox = readOutbox(null)
+  for (let n = 1; n <= MAX_OUTBOX_ITEMS + 3; n += 1) {
+    outbox = outboxPut(outbox, entry(n, { at: n <= 3 ? '2026-08-20T10:00:00.000Z' : '2026-10-09T12:00:00.000Z' }))
+  }
+  assert.deepEqual(outbox.dropped, { '2026-08': 3 }, 'the dropped conversations were not filed under their own month')
+  assert.equal(outboxSummary(outbox, null, '2026-08').dropped, 3)
+  assert.equal(outboxSummary(outbox, null, '2026-10').dropped, 0, 'August\'s drops were counted against October')
 })
 
 test('the usage tool never says $0 for a month it does not fully know, and says what is waiting or never kept', () => {

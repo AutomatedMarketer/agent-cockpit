@@ -257,7 +257,7 @@ test('when the picture caps leave the meter no writes at all, the card and the t
 })
 
 test('conversations the device had to let go are said, and the total is then only "at least"', async () => {
-  const stored = JSON.stringify({ version: 1, items: [entry(1)], dropped: 3 })
+  const stored = JSON.stringify({ version: 1, items: [entry(1)], dropped: { [thisMonth]: 3 } })
   const card = text(await cardWith(meterOn(), { [OUTBOX]: stored }))
   assert.match(card, /3 older conversations on this device were let go before the board could record them, so the real total is higher\./)
   assert.match(card, /This month at least \$1\.25 · 15 conversations/)
@@ -269,4 +269,11 @@ test('a month with talk it could not price never shows as $0', async () => {
   assert.doesNotMatch(card, /\$0\.00/, 'an unpriced month was shown as costing nothing')
   assert.match(card, /This month: cost not fully known · 2 conversations/)
   assert.match(card, /last one not fully known/)
+})
+
+test('conversations let go in an earlier month leave this month\'s total as it is - not "at least", no warning', async () => {
+  const stored = JSON.stringify({ version: 1, items: [entry(1)], dropped: { '2020-01': 3 } })
+  const card = text(await cardWith(meterOn(), { [OUTBOX]: stored }))
+  assert.match(card, /This month ≈ \$1\.25 · 15 conversations/)
+  assert.doesNotMatch(card, /let go/)
 })

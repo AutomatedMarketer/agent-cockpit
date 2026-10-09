@@ -336,6 +336,8 @@ with the page and date it was read from). **Your bill is at platform.openai.com.
   ride along with the next one, and the card says how many are waiting. Your pictures and names are
   never short of writes because of voice
 - **No picture store:** voice still works, and the meter shows this device's total only
+- Conversations still on your device are in the total too. If a report reaches the board but its answer
+  is lost on the way back, that conversation can be counted twice until the next report clears it
 - The meter is a meter, not a guard: anyone holding your keys could send it made-up counts. The hard
   spend limit is the guard
 
@@ -468,7 +470,7 @@ Locally:
 npm test
 ```
 
-1243 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1245 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
