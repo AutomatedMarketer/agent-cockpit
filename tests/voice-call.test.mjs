@@ -330,7 +330,7 @@ test('the page sends the offer to the board as JSON - the one way Vercel hands a
   assert.equal(sent.init.headers['Content-Type'], 'application/json')
   // And whether the echo guard will run here - a computer on headphones; the harness's window has no
   // fine pointer - which alone decides whether a transcript is asked for when captions are off.
-  assert.deepEqual(JSON.parse(sent.init.body), { sdp: SDP_OFFER, echoGuardHere: false, names: [], micDistance: 'near' })
+  assert.deepEqual(JSON.parse(sent.init.body), { sdp: SDP_OFFER, echoGuardHere: false, names: [], micDistance: 'near', timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone })
 })
 
 test('the outbox entry says the conversation is still going until the call ends', async () => {
@@ -888,4 +888,12 @@ test('the page hands the session the names on its board, and its microphone\'s d
   assert.equal(phone.micDistance, 'near')
   assert.equal((await sent({ media: { '(pointer: fine)': true } })).micDistance, 'far', 'a computer on its speakers asked for a close microphone')
   assert.equal((await sent({ media: { '(pointer: fine)': true }, storage: { 'agent-cockpit-voice-headphones': 'on' } })).micDistance, 'near')
+})
+
+test('the page sends this device\'s own time zone, and its tools answer in it', async () => {
+  const loaded = await page()
+  await loaded.exposed.voiceDeps().startCall(SDP_OFFER)
+  const sent = JSON.parse(loaded.requests.find((request) => request.url === '/api/voice-session').init.body)
+  assert.equal(sent.timeZone, Intl.DateTimeFormat().resolvedOptions().timeZone)
+  assert.equal(loaded.exposed.voiceDeps().view().timeZone, Intl.DateTimeFormat().resolvedOptions().timeZone)
 })

@@ -238,7 +238,7 @@ const fullBoard = {
   },
   hermes: { status: 'ok', computers: [{ computer: 'mac-mini', alive: 'running', aliveLabel: 'Running', gateway: { status: 'found' } }] }
 }
-const view = (data, extra = {}) => ({ data, names: { research: 'Scout' }, now: NOW, hermes: true, spend: { usd: 1.23, conversations: 14, incomplete: [] }, ...extra })
+const view = (data, extra = {}) => ({ data, names: { research: 'Scout' }, now: NOW, timeZone: 'UTC', hermes: true, spend: { usd: 1.23, conversations: 14, incomplete: [] }, ...extra })
 const small = (answer, label) => {
   const text = JSON.stringify(answer)
   assert.ok(text.length <= 4096, `${label}: ${text.length} bytes`)
@@ -252,7 +252,7 @@ test('the tools are the six the session offers, and answer from the board\'s own
   for (const name of VOICE_TOOL_NAMES) small(voiceToolAnswer(name, {}, view(fullBoard)), name)
 
   const team = voiceToolAnswer('team_status', {}, view(fullBoard))
-  assert.deepEqual(team.agents[0], { name: 'Scout', slug: 'research', state: 'working', lastRun: hours(-2) })
+  assert.deepEqual(team.agents[0], { name: 'Scout', slug: 'research', state: 'working', lastRun: 'Fri, Oct 9, 10:00 AM' })
   assert.equal(team.agents.length, 3)
 
   const due = voiceToolAnswer('whats_due', { hours: 24 }, view(fullBoard))
@@ -269,7 +269,7 @@ test('the tools are the six the session offers, and answer from the board\'s own
   const usage = voiceToolAnswer('usage', {}, view(fullBoard))
   assert.equal(usage.services[0].service, 'Claude')
   assert.equal(usage.services[0].unofficial, true)
-  assert.deepEqual(usage.services[0].windows[1], { label: 'Weekly', usedPercent: 74, resetsAt: hours(50) })
+  assert.deepEqual(usage.services[0].windows[1], { label: 'Weekly', usedPercent: 74, resetsAt: 'Sun, Oct 11, 2:00 PM' })
   assert.equal(usage.voiceSpend.estimate, true)
   assert.equal(usage.voiceSpend.thisMonthUsd, 1.23)
 
@@ -436,4 +436,29 @@ test('a job that was due and has not run yet is still due - overdue is not left 
   const overdue = { ...fullBoard, workflows: [{ slug: 'late', name: 'Late brief', nextRun: hours(-2) }, ...fullBoard.workflows] }
   const due = voiceToolAnswer('whats_due', { hours: 24 }, view(overdue))
   assert.deepEqual(due.due.map((job) => job.name), ['Late brief', 'Morning brief'])
+})
+
+/* ---------- local time ---------- */
+
+test('every tool answer carries the owner\'s time zone and local time, and says its times in it - never UTC', () => {
+  const where = { timeZone: 'America/New_York' }
+  for (const name of VOICE_TOOL_NAMES.filter((tool) => tool !== 'open_screen')) {
+    const answer = voiceToolAnswer(name, { hours: 24 }, view(fullBoard, where))
+    assert.equal(answer.timeZone, 'America/New_York', name)
+    assert.equal(answer.localNow, 'Fri, Oct 9, 8:00 AM', name)
+  }
+  const team = voiceToolAnswer('team_status', {}, view(fullBoard, where))
+  assert.equal(team.agents[0].lastRun, 'Fri, Oct 9, 6:00 AM')
+  const due = voiceToolAnswer('whats_due', { hours: 24 }, view(fullBoard, where))
+  assert.equal(due.due[0].at, 'Fri, Oct 9, 11:00 AM')
+  assert.doesNotMatch(JSON.stringify(due), /\d{4}-\d{2}-\d{2}T|Z"/, 'a UTC timestamp is still in the answer')
+})
+
+test('a time zone the device does not give, or one that is not real, is UTC - and the answer says so', () => {
+  // An offset such as +05:00 is a real time to Intl but not a zone: it never moves for summer time.
+  for (const timeZone of [undefined, '', 'Mars/Olympus_Mons', '../etc/passwd', 'America/New_York; drop', '+05:00', 42]) {
+    const answer = voiceToolAnswer('team_status', {}, view(fullBoard, { timeZone }))
+    assert.equal(answer.timeZone, 'UTC', String(timeZone))
+    assert.equal(answer.localNow, 'Fri, Oct 9, 12:00 PM')
+  }
 })

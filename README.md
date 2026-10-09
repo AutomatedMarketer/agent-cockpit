@@ -380,6 +380,7 @@ Fish Audio can speak the answers in a voice you pick from its library.
 |---|---|---|
 | Your voice, and what the assistant says back | **OpenAI**, straight from your browser | It hears you and answers. The call is started by the board's server, which adds the key - **no key ever reaches your browser** |
 | The board's answers to its questions (who is working, what is due, your plan limits) | **OpenAI** | So it can read them to you |
+| Your device's time zone, and the names on the board (the assistant's, yours, your agents') | **OpenAI** | So every time is said in your own time, never UTC, and the names are heard right |
 | The words of each answer, with Fish on | **Fish** | So it can speak them. Its free model may train on them |
 | Each conversation's token counts | **The board's picture store** | The meter |
 
@@ -485,7 +486,7 @@ Locally:
 npm test
 ```
 
-1298 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1303 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

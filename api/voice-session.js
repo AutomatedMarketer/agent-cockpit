@@ -68,7 +68,9 @@ function readOffer(request) {
     offer: sdp,
     echoGuardHere: body.echoGuardHere === true,
     names: Array.isArray(body.names) ? body.names.slice(0, 24) : [],
-    micDistance: body.micDistance === 'far' ? 'far' : 'near'
+    micDistance: body.micDistance === 'far' ? 'far' : 'near',
+    // The device's time zone, which sessionFor names in the instructions only if it is a real one.
+    timeZone: typeof body.timeZone === 'string' ? body.timeZone : null
   }
 }
 
@@ -147,7 +149,7 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
 
     const form = new FormData()
     form.set('sdp', read.offer)
-    form.set('session', JSON.stringify(sessionFor(config, name, { echoGuardHere: read.echoGuardHere, names: read.names, micDistance: read.micDistance })))
+    form.set('session', JSON.stringify(sessionFor(config, name, { echoGuardHere: read.echoGuardHere, names: read.names, micDistance: read.micDistance, timeZone: read.timeZone })))
     let upstream
     try {
       upstream = await fetch(CALLS_URL, {
