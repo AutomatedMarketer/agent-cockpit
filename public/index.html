@@ -5352,7 +5352,11 @@ function voiceDeps() {
     onEnd: () => { voiceSession = null },
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (id) => clearTimeout(id),
-    cancelOnBargeIn: VOICE_CANCEL_ON_BARGE_IN
+    cancelOnBargeIn: VOICE_CANCEL_ON_BARGE_IN,
+    fish: fishMouth({
+      speak: (body, signal) => fetch('/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),
+      now: () => Date.now()
+    })
   }
 }
 
@@ -5496,6 +5500,9 @@ function openVoice(deps, ui) {
     session.state = state
     ui.show(state, { words, live: !session.stopped })
   }
+  session.show = show
+  // Fish speaks only for a Fish session; with OpenAI's voice it is never asked anything.
+  const fish = () => (session.mouth === 'fish' ? deps.fish ?? null : null)
   show('connecting')
 
   // Both inside the tap itself: an iPhone allows the microphone and sound only from a person's tap.
@@ -5546,7 +5553,7 @@ function openVoice(deps, ui) {
     if (session.stopped) return
     session.stopped = true
     deps.clearTimeout(session.timer)
-    deps.stopSpeech?.(session)
+    deps.fish?.stop(session)
     try { session.channel?.close() } catch (error) { /* already closed */ }
     try { session.pc?.close() } catch (error) { /* already closed */ }
     for (const track of session.stream?.getTracks?.() ?? []) track.stop()
@@ -5587,7 +5594,7 @@ function openVoice(deps, ui) {
       send({ type: 'response.cancel' })
       send({ type: 'output_audio_buffer.clear' })
     }
-    deps.bargeIn?.(session, send)
+    fish()?.bargeIn(session, send)
   }
 
   function onEvent(event) {
@@ -5612,7 +5619,7 @@ function openVoice(deps, ui) {
         session.responding = true
         session.replyTurn = session.turns.current
         session.said = ''
-        deps.replyStarted?.(session)
+        fish()?.replyStarted(session)
         break
       case 'response.output_audio_transcript.delta':
       case 'response.output_text.delta':
@@ -5620,11 +5627,11 @@ function openVoice(deps, ui) {
         armIdle()
         session.said += event.delta
         ui.said(session.said)
-        if (event.type === 'response.output_text.delta') deps.replyText?.(session, event.delta)
+        if (event.type === 'response.output_text.delta') fish()?.replyText(session, event.delta)
         else if (session.state !== 'speaking') show('speaking')
         break
       case 'response.output_text.done':
-        deps.replyText?.(session, '', true)
+        fish()?.replyText(session, '', true)
         break
       case 'output_audio_buffer.started':
         armIdle()
@@ -5650,8 +5657,8 @@ function openVoice(deps, ui) {
         if (calls.length) {
           answerTools(calls)
           show('thinking')
-        } else if (session.mouth === 'fish') {
-          deps.replyDone?.(session, show)
+        } else if (fish()) {
+          fish().replyDone(session)
         } else if (session.state !== 'speaking') {
           show('listening')
         }
@@ -5729,6 +5736,127 @@ function openVoice(deps, ui) {
 
   connect().catch(fail)
   return { stop: (reason) => end(reason), session }
+}
+
+/* ---------- Talk to the board: Fish's voice ----------
+   Only when the owner has set up Fish. OpenAI then answers in text, and this cuts each reply into
+   pieces as it arrives (takeSpeakable: the first clause at once, then a sentence at a time), sends
+   each to /api/speak the moment it is cut, and plays them in the order they were cut, back to back,
+   through the AudioContext the tap started - decoded from the bytes, so no address is loaded and the
+   Content-Security-Policy stays as it is.
+
+   Talking over it stops it at once: every piece playing is stopped, every piece still coming is
+   aborted, the reply is cancelled, and anything that arrives for the old turn is dropped. A piece
+   Fish could not speak is skipped; its words are still on screen. While the person talks, one
+   warm-up keeps /api/speak ready - once a turn, once every 20 seconds at most.
+
+   `io.speak(body, signal)` is the request to /api/speak; `io.now()` the clock. Both handed in, so the
+   tests can answer each piece when they choose. */
+const FISH_WARM_EVERY_MS = 20_000
+
+function fishMouth(io) {
+  const stateOf = (session) => (session.fish ??= {
+    buffer: '', first: true, playhead: 0, nodes: new Set(), aborts: new Set(),
+    chain: Promise.resolve(), pending: 0, replyDone: false, warmTurn: -1, warmAt: -Infinity
+  })
+
+  // Listening again once the reply is finished, nothing is left to fetch and nothing is playing.
+  const settle = (session) => {
+    const fish = stateOf(session)
+    if (!session.stopped && fish.replyDone && !fish.pending && !fish.nodes.size && !session.responding) session.show('listening')
+  }
+
+  function stopAll(session) {
+    const fish = stateOf(session)
+    for (const node of fish.nodes) {
+      try { node.stop() } catch (error) { /* already stopped */ }
+    }
+    fish.nodes.clear()
+    for (const controller of fish.aborts) controller.abort()
+    fish.aborts.clear()
+    fish.playhead = 0
+    fish.buffer = ''
+  }
+
+  function speakPiece(session, piece, turn) {
+    const fish = stateOf(session)
+    // Counted as sent: Fish bills for the text it is given, in UTF-8 bytes.
+    session.tally = addFishBytes(session.tally, piece)
+    const controller = new AbortController()
+    fish.aborts.add(controller)
+    fish.pending += 1
+    const fetched = io.speak({ ticket: session.ticket, text: piece }, controller.signal)
+      .then((response) => (response?.ok ? response.arrayBuffer() : null))
+      .catch(() => null)
+      .finally(() => fish.aborts.delete(controller))
+    // Each piece waits for the one cut before it, so the order is the order they were cut in -
+    // and the first, with nothing before it, plays the moment it is decoded.
+    fish.chain = fish.chain.then(async () => {
+      const bytes = await fetched
+      if (!bytes || session.stopped || isStale(session.turns, turn)) return
+      let sound
+      try {
+        sound = await session.context.decodeAudioData(bytes)
+      } catch (error) {
+        return
+      }
+      if (session.stopped || isStale(session.turns, turn)) return
+      const node = session.context.createBufferSource()
+      node.buffer = sound
+      node.connect(session.context.destination)
+      const at = Math.max(session.context.currentTime, fish.playhead)
+      node.onended = () => {
+        fish.nodes.delete(node)
+        settle(session)
+      }
+      node.start(at)
+      fish.playhead = at + sound.duration
+      fish.nodes.add(node)
+      session.show('speaking')
+    }).finally(() => {
+      fish.pending -= 1
+      settle(session)
+    })
+  }
+
+  return {
+    replyStarted(session) {
+      const fish = stateOf(session)
+      fish.buffer = ''
+      fish.first = true
+      fish.replyDone = false
+    },
+    // More of the reply's text; `done` when there is no more to come.
+    replyText(session, delta, done = false) {
+      const fish = stateOf(session)
+      if (!session.context || isStale(session.turns, session.replyTurn)) return
+      fish.buffer += delta
+      for (;;) {
+        const { piece, rest } = takeSpeakable(fish.buffer, { first: fish.first, done })
+        fish.buffer = rest
+        if (!piece) break
+        fish.first = false
+        speakPiece(session, piece, session.replyTurn)
+      }
+    },
+    replyDone(session) {
+      stateOf(session).replyDone = true
+      settle(session)
+    },
+    bargeIn(session, send) {
+      stopAll(session)
+      if (session.responding) send({ type: 'response.cancel' })
+      const fish = stateOf(session)
+      if (session.ticket && fish.warmTurn !== session.turns.current && io.now() - fish.warmAt >= FISH_WARM_EVERY_MS) {
+        fish.warmTurn = session.turns.current
+        fish.warmAt = io.now()
+        io.speak({ ticket: session.ticket, warm: true }).catch(() => {})
+      }
+    },
+    stop(session) {
+      stopAll(session)
+    }
+  }
 }
 
 /* ---------- shell ---------- */
