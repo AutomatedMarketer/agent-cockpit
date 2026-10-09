@@ -406,3 +406,9 @@ test('the usage tool never says $0 for a month it does not fully know, and says 
   assert.equal(answer({ usd: 0.5, conversations: 3, incomplete: [], waitingOnDevice: 3, droppedOnDevice: 0, keptByBoard: false }).keptByBoard, false)
   assert.equal(answer(null), 'unknown')
 })
+
+test('a job that was due and has not run yet is still due - overdue is not left out', () => {
+  const overdue = { ...fullBoard, workflows: [{ slug: 'late', name: 'Late brief', nextRun: hours(-2) }, ...fullBoard.workflows] }
+  const due = voiceToolAnswer('whats_due', { hours: 24 }, view(overdue))
+  assert.deepEqual(due.due.map((job) => job.name), ['Late brief', 'Morning brief'])
+})

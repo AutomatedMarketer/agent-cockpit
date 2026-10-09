@@ -26,14 +26,15 @@ export async function page(brand = brandAnswer({ voice: VOICE_ON })) {
 }
 
 // A browser that does what the page asks and writes down every step.
-export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES } = {}) {
+export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false } = {}) {
   const log = []
   const timers = new Map()
   let nextTimer = 1
   const tracks = [{ kind: 'audio', stopped: false, stop() { this.stopped = true; log.push('track stopped') } }]
   const stream = { getTracks: () => tracks, getAudioTracks: () => tracks }
   const audio = { srcObject: undefined, removed: false, remove() { this.removed = true } }
-  const state = { pc: null, channel: null, context: null, constraints: null, saved: [], ended: [], opened: [], calls: [] }
+  // `decodes` holds a decode the test finishes itself, when holdDecode is on.
+  const state = { pc: null, channel: null, context: null, constraints: null, saved: [], ended: [], opened: [], calls: [], decodes: [] }
   const ticket = answer.ticket ?? ticketFor(answer.mouth ?? 'openai')
   class FakeConnection {
     constructor() { state.pc = this; this.closed = false; this.tracks = []; log.push('connection') }
@@ -66,6 +67,7 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     close() { this.closed = true }
     async decodeAudioData(bytes) {
       if (bytes?.broken) throw new Error('not audio')
+      if (holdDecode) await new Promise((resolve) => state.decodes.push(resolve))
       return { duration: 1.5, text: bytes?.text }
     }
     createBufferSource() {

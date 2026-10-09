@@ -249,3 +249,16 @@ test('GET says how many meter writes a day the picture caps leave - none at all 
   assert.equal(full.body.writesPerDay, 0)
   assert.equal(full.body.writesLeftToday, 0)
 })
+
+test('"last one" is the conversation that happened last, whatever order the reports arrive in', async () => {
+  const { post, get } = meter()
+  const newer = ticket({ ago: 60_000 })
+  const older = ticket({ ago: 3_600_000 })
+  const newerCounts = { ...DOC_COUNTS, audioOut: 1200 }
+  await post({ reports: [{ ticket: newer, counts: newerCounts }] })
+  await post({ reports: [{ ticket: older, counts: DOC_COUNTS }] })
+  assert.equal((await get()).body.last.usd, costOf(newerCounts, MINI, VOICE_PRICES).usd, 'an older conversation sent later became "last one"')
+  const { post: postBoth, get: getBoth } = meter()
+  await postBoth({ reports: [{ ticket: ticket({ ago: 60_000 }), counts: newerCounts }, { ticket: ticket({ ago: 3_600_000 }), counts: DOC_COUNTS }] })
+  assert.equal((await getBoth()).body.last.usd, costOf(newerCounts, MINI, VOICE_PRICES).usd)
+})

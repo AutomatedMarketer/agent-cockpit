@@ -157,3 +157,16 @@ test('a piece that had already arrived when the person talked over it is dropped
   await flush()
   assert.deepEqual(browser.state.context.started, [], 'a piece from the turn the person talked over was played')
 })
+
+test('a piece still being decoded when the person talks over it is dropped too', async () => {
+  const browser = await connected({ answer: { ticket: ticketFor('fish'), mouth: 'fish' }, holdDecode: true })
+  browser.emit({ type: 'response.created' })
+  text(browser, 'Three jobs are due today, and so on. ')
+  browser.speeches[0].answer()
+  await flush()
+  assert.equal(browser.state.decodes.length, 1, 'the piece is not being decoded')
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.state.decodes[0]()
+  await flush()
+  assert.deepEqual(browser.state.context.started, [], 'a piece decoded after the person talked over it was played')
+})
