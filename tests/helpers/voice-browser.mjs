@@ -26,7 +26,7 @@ export async function page(brand = brandAnswer({ voice: VOICE_ON })) {
 }
 
 // A browser that does what the page asks and writes down every step.
-export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false, finePointer = false } = {}) {
+export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false, finePointer = false, headphones = false } = {}) {
   const log = []
   const timers = new Map()
   let nextTimer = 1
@@ -120,6 +120,8 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     cancelOnBargeIn,
     // A mouse (a computer) or a finger (a phone), and the clock the echo guard reads.
     finePointer,
+    // "I'm on headphones", as this device remembers it.
+    headphones: () => headphones,
     now: () => clock.now
   }
   const ui = {

@@ -466,7 +466,7 @@ test('the reply plays the way OpenAI\'s WebRTC guide does it: an <audio> element
 // server started for it is cancelled, the turn is deleted so the model never sees it, and the reply
 // is asked for again once. Barge-in itself is untouched - it is still instant, on every device.
 
-const guarded = (options = {}) => connected({ answer: { echoGuard: true }, finePointer: true, ...options })
+const guarded = (options = {}) => connected({ answer: { echoGuard: true }, finePointer: true, headphones: true, ...options })
 async function heardItself(browser, transcript, { after = 1200, responseFirst = true } = {}) {
   browser.emit({ type: 'response.created' })
   browser.emit({ type: 'output_audio_buffer.started' })
@@ -504,7 +504,8 @@ test('the guard leaves real talking alone: three words or more, a turn after 1.5
     ['three words', guarded(), 'Wait, what about', {}],
     ['after 1.5 seconds', guarded(), 'Stop.', { after: 1600 }],
     ['on a phone', connected({ answer: { echoGuard: true }, finePointer: false }), 'Stop.', {}],
-    ['switched off', connected({ answer: { echoGuard: false }, finePointer: true }), 'Stop.', {}]
+    ['switched off', connected({ answer: { echoGuard: false }, finePointer: true, headphones: true }), 'Stop.', {}],
+    ['in speakers mode, where the microphone rests while it talks', connected({ answer: { echoGuard: true }, finePointer: true }), 'Stop.', {}]
   ]
   for (const [what, made, transcript, options] of cases) {
     const browser = await made
@@ -586,4 +587,118 @@ test('a turn early in a reply that turns out to be the person does restart the i
   assert.deepEqual(idleWait(), before, 'a turn not yet known to be the person restarted the idle wait')
   browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_real', transcript: 'Wait, which job?', usage: TRANSCRIPTION_USAGE })
   assert.notDeepEqual(idleWait(), before, 'the person talking did not restart the idle wait')
+})
+
+/* ---------- speakers mode: on a computer, the microphone rests while the reply plays ---------- */
+// Live test #2 (2026-10-09): on Nuno's PC the sound runs through Elgato Wave Link - a virtual
+// output to his speakers, and its own microphone input - and the browser's echo canceller cannot
+// reach through that. The assistant kept hearing itself ("There.", "Let's get going.", "That's
+// it.") and answering. So on a computer, unless the person says they are on headphones, the
+// microphone track is switched off from a reply's first sound until 300 ms after its last - nothing
+// is sent to OpenAI meanwhile - and a tap on the orb, Esc or Space interrupts instead of talking.
+
+const speakers = (options = {}) => connected({ finePointer: true, ...options })
+const mic = (browser) => browser.tracks.map((track) => track.enabled)
+const tailWait = (browser) => [...browser.timers.entries()].find(([, timer]) => timer.ms === 300)
+const endTail = (browser) => {
+  const [id, timer] = tailWait(browser) ?? assert.fail('nothing waits out the tail')
+  browser.timers.delete(id)
+  timer.fn()
+}
+const idleWaits = (browser) => [...browser.timers.values()].filter((timer) => timer.ms === 2 * 60_000).length
+
+test('on a computer the microphone rests from a reply\'s first sound until 300 ms after it stops', async () => {
+  const browser = await speakers()
+  browser.emit({ type: 'response.created' })
+  assert.notDeepEqual(mic(browser), [false], 'the microphone rested before anything was said')
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.deepEqual(mic(browser), [false], 'the microphone heard the reply')
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  assert.deepEqual(mic(browser), [false], 'the last of the reply could still echo')
+  assert.ok(tailWait(browser), 'nothing waits 300 ms before listening again')
+  endTail(browser)
+  assert.deepEqual(mic(browser), [true])
+})
+
+test('a reply cut short rests the same 300 ms, and one that starts inside the tail keeps it resting', async () => {
+  const browser = await speakers()
+  browser.emit({ type: 'output_audio_buffer.started' })
+  browser.emit({ type: 'output_audio_buffer.cleared' })
+  assert.deepEqual(mic(browser), [false])
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.equal(tailWait(browser), undefined, 'the first reply\'s tail would switch the microphone on during the second')
+  assert.deepEqual(mic(browser), [false])
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  endTail(browser)
+  assert.deepEqual(mic(browser), [true])
+})
+
+test('the interrupt - the orb, Esc or Space - stops the reply and switches the microphone on at once', async () => {
+  const browser = await speakers()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'A long answer' })
+  assert.equal(browser.call.interrupt(), true)
+  assert.deepEqual(browser.state.channel.sent, [{ type: 'response.cancel' }, { type: 'output_audio_buffer.clear' }])
+  assert.deepEqual(mic(browser), [true], 'the microphone stayed off after the interrupt')
+  assert.equal(tailWait(browser), undefined)
+  assert.equal(browser.lastState(), 'listening')
+  // The cut-off sound ending does not switch it off again.
+  browser.emit({ type: 'output_audio_buffer.cleared' })
+  assert.deepEqual(mic(browser), [true])
+  // With nothing being said there is nothing to interrupt: the orb and Esc go back to ending the call.
+  const quiet = await speakers()
+  assert.equal(quiet.call.interrupt(), false)
+  assert.deepEqual(quiet.state.channel.sent, [])
+})
+
+test('while it talks, the sheet says to tap the orb or press Space - not to talk over it', async () => {
+  const browser = await speakers()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.equal(browser.lastState(), 'speaking')
+  assert.match(browser.ui.shown.at(-1).words, /tap the orb or press Space to interrupt/)
+})
+
+test('the idle hang-up never counts the time the microphone rests', async () => {
+  const browser = await speakers()
+  assert.equal(idleWaits(browser), 1)
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.equal(idleWaits(browser), 0, 'a long reply could hang up the call while the person cannot talk')
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  assert.equal(idleWaits(browser), 0)
+  endTail(browser)
+  assert.equal(idleWaits(browser), 1, 'the wait did not start again when the microphone came back')
+})
+
+test('a tool round trip across the rest loses nothing: the outputs go, and the reply is asked for once', async () => {
+  const browser = await speakers()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  for (const call of TOOL_CALLS) browser.emit({ type: 'response.function_call_arguments.done', ...call })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: TOOL_CALLS } })
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  endTail(browser)
+  assert.deepEqual(browser.state.channel.sent.map((event) => event.type), ['conversation.item.create', 'conversation.item.create', 'response.create'])
+})
+
+test('phones, and computers on headphones, keep talk-over: the microphone never rests, and nothing is an interrupt', async () => {
+  for (const options of [{}, { finePointer: true, headphones: true }]) {
+    const browser = await connected(options)
+    browser.emit({ type: 'response.created' })
+    browser.emit({ type: 'output_audio_buffer.started' })
+    assert.ok(!mic(browser).includes(false), `${JSON.stringify(options)}: the microphone rested`)
+    assert.equal(browser.call.interrupt(), false)
+    assert.match(browser.ui.shown.at(-1).words ?? 'Speaking - talk to interrupt', /talk to interrupt/)
+  }
+})
+
+test('switching to headphones mid-reply lets the microphone listen at once', async () => {
+  const browser = await speakers()
+  browser.emit({ type: 'output_audio_buffer.started' })
+  browser.call.setSpeakersMode(false)
+  assert.deepEqual(mic(browser), [true])
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.deepEqual(mic(browser), [true], 'headphones mode still rested the microphone')
 })

@@ -5552,6 +5552,15 @@ const VOICE_OUTBOX_STORE = 'agent-cockpit-voice-outbox'
 // it can mistake, and the README says to use Stop or Esc there.
 const ECHO_WINDOW_MS = 1500
 const ECHO_MOST_WORDS = 2
+// Speakers mode. On a computer the reply's sound can come back into the microphone however the
+// browser cancels echo - live test #2 (2026-10-09) ran through Elgato Wave Link, a virtual output and
+// its own microphone input, which the echo canceller cannot reach, and the assistant kept answering
+// itself. So on a computer, unless the person says they are on headphones, the microphone track is
+// switched off from a reply's first sound until VOICE_MIC_TAIL_MS after its last - nothing goes to
+// OpenAI meanwhile - and the orb, Esc or Space interrupts instead of talking over it. Phones keep
+// talk-over: their echo cancelling is built for exactly this, and barge-in there stays instant.
+const VOICE_MIC_TAIL_MS = 300
+const VOICE_SPEAKING_TAP = 'Speaking - tap the orb or press Space to interrupt'
 // How long a reply held for the person's turn waits for that turn's own response before it is asked
 // for anyway, so a turn that never gets one cannot leave the tool outputs unanswered.
 const VOICE_REPLY_WAIT_MS = 1500
@@ -5582,14 +5591,59 @@ function openVoice(deps, ui) {
     mouth: 'openai', idleMinutes: 2, captions: true, responding: false, calls: new Map(), said: '',
     userSpeaking: false, replyOwed: false, replyRetries: 0, replyTimer: null,
     echoGuard: false, soundStartedAt: null, suspectTurn: false, echoRetryLeft: 1,
+    speakersMode: false, micMuted: false, soundPlaying: false, tailTimer: null,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
   const show = (state, words) => {
     session.state = state
-    ui.show(state, { words, live: !session.stopped })
+    ui.show(state, { words: words ?? (state === 'speaking' && session.speakersMode ? VOICE_SPEAKING_TAP : undefined), live: !session.stopped })
   }
+  // Decided now, at the tap: a computer, and not on headphones. The person can change it mid-call.
+  session.speakersMode = deps.finePointer === true && deps.headphones?.() !== true
   session.show = show
   session.armIdle = () => armIdle()
+
+  // The microphone, switched off at the track while a reply plays in speakers mode: nothing it hears
+  // is sent. The idle hang-up waits too - the person cannot talk while it rests, so that time is not
+  // their silence - and starts again when the microphone does.
+  const micTracks = () => session.stream?.getAudioTracks?.() ?? session.stream?.getTracks?.() ?? []
+  function restMic() {
+    deps.clearTimeout(session.tailTimer)
+    session.tailTimer = null
+    if (session.micMuted) return
+    session.micMuted = true
+    for (const track of micTracks()) track.enabled = false
+    deps.clearTimeout(session.timer)
+    session.timer = null
+  }
+  function wakeMic() {
+    deps.clearTimeout(session.tailTimer)
+    session.tailTimer = null
+    if (!session.micMuted) return
+    session.micMuted = false
+    for (const track of micTracks()) track.enabled = true
+    armIdle()
+  }
+  // A reply's sound has started (OpenAI's voice, or Fish's first piece) or ended.
+  session.soundStarted = () => {
+    session.soundStartedAt ??= deps.now()
+    session.soundPlaying = true
+    if (session.speakersMode) restMic()
+  }
+  session.soundEnded = ({ finished }) => {
+    session.soundStartedAt = null
+    session.soundPlaying = false
+    if (session.micMuted) {
+      // The tail: the last of the sound is still in the room for a moment.
+      deps.clearTimeout(session.tailTimer)
+      session.tailTimer = deps.setTimeout(() => {
+        session.tailTimer = null
+        if (!session.stopped) wakeMic()
+      }, VOICE_MIC_TAIL_MS)
+    } else if (finished) {
+      armIdle()
+    }
+  }
   // Fish speaks only for a Fish session; with OpenAI's voice it is never asked anything.
   const fish = () => (session.mouth === 'fish' ? deps.fish ?? null : null)
   show('connecting')
@@ -5649,6 +5703,7 @@ function openVoice(deps, ui) {
     session.stopped = true
     deps.clearTimeout(session.timer)
     deps.clearTimeout(session.replyTimer)
+    deps.clearTimeout(session.tailTimer)
     deps.fish?.stop(session)
     try { session.channel?.close() } catch (error) { /* already closed */ }
     try { session.pc?.close() } catch (error) { /* already closed */ }
@@ -5795,18 +5850,18 @@ function openVoice(deps, ui) {
         fish()?.replyText(session, '', true)
         break
       case 'output_audio_buffer.started':
-        session.soundStartedAt ??= deps.now()
+        session.soundStarted()
         show('speaking')
         break
-      // A reply's sound has ended: the echo clock stops, and the idle wait counts from here.
+      // A reply's sound has ended: the echo clock stops, and the idle wait counts from here (or from
+      // when the microphone comes back, in speakers mode).
       case 'output_audio_buffer.stopped':
-        session.soundStartedAt = null
-        armIdle()
+        session.soundEnded({ finished: true })
         if (!session.responding) show('listening')
         break
       // Cut short (talked over, or cancelled): the sound has ended, but nobody finished talking.
       case 'output_audio_buffer.cleared':
-        session.soundStartedAt = null
+        session.soundEnded({ finished: false })
         break
       case 'response.function_call_arguments.done':
         if (typeof event.call_id === 'string' && typeof event.name === 'string') session.calls.set(event.call_id, event)
@@ -5907,15 +5962,41 @@ function openVoice(deps, ui) {
     session.mouth = claims.mouth
     session.idleMinutes = Number.isInteger(answer.idleMinutes) && answer.idleMinutes >= 1 && answer.idleMinutes <= 10 ? answer.idleMinutes : 2
     session.captions = answer.captions !== false
-    session.echoGuard = answer.echoGuard === true && deps.finePointer === true
+    // The echo guard is for a computer in talk-over mode (headphones); in speakers mode the microphone
+    // rests while it talks, so there is no echo to guard - and the two never act on the same turn.
+    session.echoGuard = answer.echoGuard === true && deps.finePointer === true && !session.speakersMode
     if (typeof answer.name === 'string' && answer.name) ui.who(answer.name)
     if (!session.captions) ui.you('Captions are off on this board.')
     showCost()
     await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
   }
 
+  // The interrupt in speakers mode - the orb, Esc or Space. True when there was a reply to stop: it is
+  // cancelled, its sound cut (or Fish stopped), and the microphone switched on at once. False when
+  // nothing is being said, so the orb and Esc can go back to ending the call.
+  function interrupt() {
+    if (session.stopped || !session.speakersMode) return false
+    if (!session.responding && !session.soundPlaying && !session.micMuted) return false
+    newTurn(session.turns)
+    if (session.responding) send({ type: 'response.cancel' })
+    if (fish()) fish().stop(session)
+    else if (session.soundPlaying) send({ type: 'output_audio_buffer.clear' })
+    session.soundPlaying = false
+    session.soundStartedAt = null
+    wakeMic()
+    armIdle()
+    show('listening')
+    return true
+  }
+
+  // "I'm on headphones" pressed mid-call: talk-over from now on, the microphone listening at once.
+  function setSpeakersMode(on) {
+    session.speakersMode = on === true && deps.finePointer === true
+    if (!session.speakersMode) wakeMic()
+  }
+
   connect().catch(fail)
-  return { stop: (reason) => end(reason), session }
+  return { stop: (reason) => end(reason), interrupt, setSpeakersMode, session }
 }
 
 /* ---------- Talk to the board: Fish's voice ----------
@@ -5944,9 +6025,8 @@ function fishMouth(io) {
   const settle = (session) => {
     const fish = stateOf(session)
     if (!session.stopped && fish.replyDone && !fish.pending && !fish.nodes.size && !session.responding) {
-      // The reply's sound has ended: the echo clock stops, and the idle wait counts from here.
-      session.soundStartedAt = null
-      session.armIdle?.()
+      // The reply's sound has ended: as output_audio_buffer.stopped is for OpenAI's voice.
+      session.soundEnded?.({ finished: true })
       session.show('listening')
     }
   }
@@ -5997,8 +6077,8 @@ function fishMouth(io) {
       node.start(at)
       fish.playhead = at + sound.duration
       fish.nodes.add(node)
-      // Fish's sound has started: the echo guard's clock, as output_audio_buffer.started is for OpenAI's.
-      session.soundStartedAt ??= io.now()
+      // Fish's sound has started: as output_audio_buffer.started is for OpenAI's voice.
+      session.soundStarted?.()
       session.show('speaking')
     }).finally(() => {
       fish.pending -= 1
