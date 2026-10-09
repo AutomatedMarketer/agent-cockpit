@@ -153,7 +153,7 @@ test('the server hears the end of speech after 450 ms of quiet, and talking over
   const vad = sessionFor(voiceConfig(ON), '').audio.input.turn_detection
   assert.deepEqual(vad, {
     type: 'server_vad',
-    threshold: 0.5,
+    threshold: 0.6,
     prefix_padding_ms: 300,
     silence_duration_ms: 450,
     create_response: true,
@@ -295,7 +295,7 @@ test('the README tells the owner to set a hard spend limit, that an alert alone 
   assert.match(readme, /personal use only/i)
   assert.match(readme, /may (use what you send it to )?train/i)
   // Every setting voice reads is in the settings table.
-  for (const name of ['OPENAI_REALTIME_MODEL', 'OPENAI_VOICE', 'VOICE_IDLE_MINUTES', 'VOICE_CAPTIONS', 'FISH_API_KEY', 'FISH_VOICE_ID', 'FISH_MODEL']) {
+  for (const name of ['OPENAI_REALTIME_MODEL', 'OPENAI_VOICE', 'VOICE_IDLE_MINUTES', 'VOICE_CAPTIONS', 'VOICE_VAD_THRESHOLD', 'FISH_API_KEY', 'FISH_VOICE_ID', 'FISH_MODEL']) {
     assert.ok(readme.split(/\r?\n/).some((line) => line.startsWith(`| \`${name}\``)), `${name} is not in the settings table`)
   }
   // And "never sends anything" no longer pretends voice is not there.
@@ -303,4 +303,15 @@ test('the README tells the owner to set a hard spend limit, that an alert alone 
   assert.match(never, /OpenAI/)
   assert.match(never, /Fish/)
   assert.match(never, /voice/i)
+})
+
+test('VOICE_VAD_THRESHOLD sets how loud a sound must be to count as talking; 0.6 unless it says otherwise', () => {
+  const threshold = (value) => sessionFor(voiceConfig(value === undefined ? ON : { ...ON, VOICE_VAD_THRESHOLD: value }), '').audio.input.turn_detection.threshold
+  assert.equal(threshold(undefined), 0.6)
+  assert.equal(threshold('0.7'), 0.7)
+  assert.equal(threshold('0.5'), 0.5)
+  assert.equal(threshold(' 0.85 '), 0.85)
+  for (const wrong of ['', 'loud', '0', '1', '1.5', '-0.2', '0.05', '0.99', '0.6.1']) {
+    assert.equal(threshold(wrong), 0.6, `${JSON.stringify(wrong)} was used`)
+  }
 })

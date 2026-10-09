@@ -43,6 +43,15 @@ const FISH_VOICE_ID = /^[0-9a-f]{32}$/
 export const DEFAULT_IDLE_MINUTES = 2
 const IDLE_RANGE = { least: 1, most: 10 }
 
+// How loud a sound must be (0 to 1) for OpenAI's server to count it as the person talking - and so
+// to stop the reply. OpenAI's example uses 0.5. The live test on a desktop on speakers in a quiet
+// room (2026-10-09) heard the assistant's own voice as turns ("It happened.", "Adiós.") 1.3 to 1.5
+// seconds into its replies, which cut them off and set it answering itself. A modestly higher bar
+// lets less of its own voice through while a person talking at the device still clears it.
+// VOICE_VAD_THRESHOLD moves it, 0.1 to 0.95, for a room or a device that needs another.
+export const DEFAULT_VAD_THRESHOLD = 0.6
+const VAD_RANGE = { least: 0.1, most: 0.95 }
+
 // Short spoken answers. Audio counts as output tokens too, about 20 a second.
 export const MAX_REPLY_TOKENS = 300
 // One piece of a reply sent to Fish. The page cuts at sentences and clauses well under this; the
@@ -106,6 +115,10 @@ export function voiceConfig(env = {}) {
     ? Number(idle)
     : DEFAULT_IDLE_MINUTES
   const captions = !/^(off|false|0)$/i.test(setting(env.VOICE_CAPTIONS))
+  const vad = setting(env.VOICE_VAD_THRESHOLD)
+  const vadThreshold = /^0\.\d{1,2}$/.test(vad) && Number(vad) >= VAD_RANGE.least && Number(vad) <= VAD_RANGE.most
+    ? Number(vad)
+    : DEFAULT_VAD_THRESHOLD
   const fish = fishSetup(env)
   return {
     on: true,
@@ -114,6 +127,7 @@ export function voiceConfig(env = {}) {
     voice,
     idleMinutes,
     captions,
+    vadThreshold,
     fishModel: env.FISH_MODEL === FISH_PAID_MODEL ? FISH_PAID_MODEL : FISH_FREE_MODEL,
     ...(fish.ready ? { fishVoiceId: fish.voiceId } : {}),
     ...(fish.note ? { note: fish.note } : {})
@@ -230,7 +244,7 @@ export function sessionFor(config, name) {
         // cancels it - the two things that make it feel like a conversation.
         turn_detection: {
           type: 'server_vad',
-          threshold: 0.5,
+          threshold: config.vadThreshold ?? DEFAULT_VAD_THRESHOLD,
           prefix_padding_ms: 300,
           silence_duration_ms: 450,
           create_response: true,

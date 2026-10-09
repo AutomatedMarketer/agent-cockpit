@@ -438,3 +438,21 @@ test('a reply held for a turn that never gets a response of its own is asked for
   other.emit({ type: 'response.created' })
   assert.ok(![...other.timers.values()].some((timer) => timer.ms === 1500), 'the wait was left running after a response started')
 })
+
+test('the reply plays the way OpenAI\'s WebRTC guide does it: an <audio> element, autoplay, srcObject from ontrack, kept for the whole call', async () => {
+  // Chrome's echo canceller needs the call's sound to play from the call's own track; this is that.
+  const loaded = await page()
+  const audio = loaded.exposed.voiceDeps().createAudio()
+  assert.equal(audio.tagName, 'AUDIO')
+  assert.equal(audio.autoplay, true)
+  assert.equal(audio.attributes.playsinline, '')
+  assert.ok(loaded.node('voice-dock').children.includes(audio), 'the element is not in the page')
+  const browser = await connected()
+  const remote = { id: 'the call' }
+  browser.state.pc.ontrack({ track: { kind: 'audio' }, streams: [remote] })
+  browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE } })
+  assert.equal(browser.audio.srcObject, remote)
+  assert.equal(browser.audio.removed, false, 'the element went before the call ended')
+  browser.call.stop('stopped')
+  assert.equal(browser.audio.removed, true)
+})

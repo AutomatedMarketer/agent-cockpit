@@ -430,6 +430,7 @@ has no evidence for.
 | `OPENAI_VOICE` | OpenAI's voice: `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin` (the default) or `cedar` | No |
 | `VOICE_IDLE_MINUTES` | Minutes with nobody talking before a call hangs up, 1 to 10. Default `2` | No |
 | `VOICE_CAPTIONS` | `off` to stop showing - and paying for - what it heard you say. On unless set | No |
+| `VOICE_VAD_THRESHOLD` | How loud a sound must be to count as you talking, `0.1` to `0.95`. Default `0.6` - a little above OpenAI's example, because a computer on speakers heard its own voice as you talking. Raise it if it keeps cutting itself off; lower it if it misses you | No |
 | `FISH_API_KEY` | Your Fish Audio key, for a voice you choose. Mark it sensitive | For Fish |
 | `FISH_VOICE_ID` | The 32 letters and numbers in the voice's address on fish.audio | For Fish |
 | `FISH_MODEL` | Leave unset for Fish's free `s2.1-pro-free`. Only `s2.1-pro`, exactly, uses the paid model | No |
@@ -470,7 +471,7 @@ Locally:
 npm test
 ```
 
-1249 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1251 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -517,7 +518,7 @@ used only when you connect a picture store.
 | "The microphone is blocked for this board…" | You said no to the microphone. iPhone: **Settings → Safari → Microphone**. Chrome: the icon left of the address. Then tap again |
 | "OpenAI's spending limit for this key is reached…" | Your hard spend limit did its job. Raise it on platform.openai.com, or wait for next month |
 | "OpenAI did not accept OPENAI_API_KEY for voice…" | The key is wrong, or its project cannot use the realtime models. Check both in OpenAI, then in Vercel, and redeploy |
-| It stops talking as if you had interrupted, when you had not | Its own voice reached the microphone. Turn the volume down, or use headphones |
+| It stops talking as if you had interrupted, when you had not, or answers words nobody said | Its own voice reached the microphone. Turn the volume down or use headphones, or raise `VOICE_VAD_THRESHOLD` (say `0.7`) and redeploy |
 | Voice spend says **Incomplete** | A price the board has no source for yet. The total is lower than the truth; your bill at platform.openai.com is the real number |
 | Voice spend says conversations are **not recorded yet** | The board used today's spare store writes. They are kept on this device and recorded with your next conversation |
 | "The voice meter's file in the picture store is damaged…" | Vercel → **Storage** → your store → delete `agent-cockpit/voice-meter.json`. The meter starts again; nothing else is touched |
