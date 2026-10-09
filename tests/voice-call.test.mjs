@@ -456,3 +456,59 @@ test('the reply plays the way OpenAI\'s WebRTC guide does it: an <audio> element
   browser.call.stop('stopped')
   assert.equal(browser.audio.removed, true)
 })
+
+/* ---------- the echo guard: a computer on speakers hearing itself ---------- */
+// The live test (desktop, speakers, quiet room): 1.3 to 1.5 s into each reply the server heard the
+// assistant's own voice as a turn - "It happened.", "Still fight.", "Adiós." - cut the reply off and
+// answered it. On a computer (a mouse, not a finger), a turn that starts in the first 1.5 s of the
+// assistant's sound and turns out to be under 3 words is taken for its own voice: the response the
+// server started for it is cancelled, the turn is deleted so the model never sees it, and the reply
+// is asked for again once. Barge-in itself is untouched - it is still instant, on every device.
+
+const guarded = (options = {}) => connected({ answer: { echoGuard: true }, finePointer: true, ...options })
+async function heardItself(browser, transcript, { after = 1200, responseFirst = true } = {}) {
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  browser.clock.now += after
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [] } })
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.emit({ type: 'input_audio_buffer.committed' })
+  if (responseFirst) browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_echo', transcript, usage: TRANSCRIPTION_USAGE })
+}
+
+test('on a computer, a two-word turn 1.2 s into the reply is its own voice: cancelled, deleted, and the reply asked for again', async () => {
+  const browser = await guarded()
+  await heardItself(browser, 'It happened.')
+  assert.deepEqual(browser.state.channel.sent, [
+    { type: 'response.cancel' },
+    { type: 'output_audio_buffer.clear' },
+    { type: 'conversation.item.delete', item_id: 'item_echo' }
+  ])
+  assert.ok(!browser.ui.heard.includes('It happened.'), 'its own voice was shown as what the person said')
+  browser.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [] } })
+  assert.equal(browser.state.channel.sent.filter((event) => event.type === 'response.create').length, 1, 'the cut-off reply was not asked for again')
+  assert.equal(browser.state.saved.at(-1).counts.transcribeAudioIn, 17, 'the caption it paid for was not counted')
+})
+
+test('a turn the server has not answered yet is only deleted - nothing to cancel, nothing more to ask', async () => {
+  const browser = await guarded()
+  await heardItself(browser, 'Adiós.', { responseFirst: false })
+  assert.deepEqual(browser.state.channel.sent, [{ type: 'conversation.item.delete', item_id: 'item_echo' }])
+})
+
+test('the guard leaves real talking alone: three words or more, a turn after 1.5 s, a phone, or VOICE_ECHO_GUARD off', async () => {
+  const cases = [
+    ['three words', guarded(), 'Wait, what about', {}],
+    ['after 1.5 seconds', guarded(), 'Stop.', { after: 1600 }],
+    ['on a phone', connected({ answer: { echoGuard: true }, finePointer: false }), 'Stop.', {}],
+    ['switched off', connected({ answer: { echoGuard: false }, finePointer: true }), 'Stop.', {}]
+  ]
+  for (const [what, made, transcript, options] of cases) {
+    const browser = await made
+    await heardItself(browser, transcript, options)
+    assert.deepEqual(browser.state.channel.sent, [], `${what}: the person was taken for the assistant`)
+    assert.ok(browser.ui.heard.includes(transcript), `${what}: what the person said was hidden`)
+  }
+})

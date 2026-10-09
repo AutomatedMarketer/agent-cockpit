@@ -186,7 +186,8 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
       model: config.model,
       name,
       idleMinutes: config.idleMinutes,
-      captions: config.captions
+      captions: config.captions,
+      echoGuard: config.echoGuard
     })
   }
 }

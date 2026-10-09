@@ -338,3 +338,9 @@ test('the OpenAI key is never in any answer or any log, whatever OpenAI sends ba
   }
   assert.ok(!logged.some((line) => line.includes(OPENAI_KEY)), 'the key was written to a log')
 })
+
+test('the answer tells the page whether the echo guard is on', async (t) => {
+  stubOpenAI(t, answered())
+  assert.equal((await board().offer()).body.echoGuard, true)
+  assert.equal((await board({ env: { ...ENV, VOICE_ECHO_GUARD: 'off' } }).offer()).body.echoGuard, false)
+})

@@ -430,6 +430,7 @@ has no evidence for.
 | `OPENAI_VOICE` | OpenAI's voice: `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin` (the default) or `cedar` | No |
 | `VOICE_IDLE_MINUTES` | Minutes with nobody talking before a call hangs up, 1 to 10. Default `2` | No |
 | `VOICE_CAPTIONS` | `off` to stop showing - and paying for - what it heard you say. On unless set | No |
+| `VOICE_ECHO_GUARD` | `off` to stop a computer ignoring a turn of one or two words that starts in the first 1.5 seconds of a reply - which is how its own voice through its speakers sounds to it. Phones never use it. On unless set | No |
 | `VOICE_VAD_THRESHOLD` | How loud a sound must be to count as you talking, `0.1` to `0.95`. Default `0.6` - a little above OpenAI's example, because a computer on speakers heard its own voice as you talking. Raise it if it keeps cutting itself off; lower it if it misses you | No |
 | `FISH_API_KEY` | Your Fish Audio key, for a voice you choose. Mark it sensitive | For Fish |
 | `FISH_VOICE_ID` | The 32 letters and numbers in the voice's address on fish.audio | For Fish |
@@ -471,7 +472,7 @@ Locally:
 npm test
 ```
 
-1251 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1256 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

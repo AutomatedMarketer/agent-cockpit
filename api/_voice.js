@@ -115,6 +115,8 @@ export function voiceConfig(env = {}) {
     ? Number(idle)
     : DEFAULT_IDLE_MINUTES
   const captions = !/^(off|false|0)$/i.test(setting(env.VOICE_CAPTIONS))
+  // The page's echo guard (a computer hearing its own voice through its speakers), on unless switched off.
+  const echoGuard = !/^(off|false|0)$/i.test(setting(env.VOICE_ECHO_GUARD))
   const vad = setting(env.VOICE_VAD_THRESHOLD)
   const vadThreshold = /^0\.\d{1,2}$/.test(vad) && Number(vad) >= VAD_RANGE.least && Number(vad) <= VAD_RANGE.most
     ? Number(vad)
@@ -128,6 +130,7 @@ export function voiceConfig(env = {}) {
     idleMinutes,
     captions,
     vadThreshold,
+    echoGuard,
     fishModel: env.FISH_MODEL === FISH_PAID_MODEL ? FISH_PAID_MODEL : FISH_FREE_MODEL,
     ...(fish.ready ? { fishVoiceId: fish.voiceId } : {}),
     ...(fish.note ? { note: fish.note } : {})

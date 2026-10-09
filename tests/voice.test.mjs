@@ -315,3 +315,8 @@ test('VOICE_VAD_THRESHOLD sets how loud a sound must be to count as talking; 0.6
     assert.equal(threshold(wrong), 0.6, `${JSON.stringify(wrong)} was used`)
   }
 })
+
+test('the echo guard is on unless VOICE_ECHO_GUARD says off', () => {
+  assert.equal(voiceConfig(ON).echoGuard, true)
+  for (const off of ['off', 'false', '0', 'OFF']) assert.equal(voiceConfig({ ...ON, VOICE_ECHO_GUARD: off }).echoGuard, false, off)
+})

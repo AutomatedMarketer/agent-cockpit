@@ -5416,6 +5416,9 @@ function voiceDeps() {
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (id) => clearTimeout(id),
     cancelOnBargeIn: VOICE_CANCEL_ON_BARGE_IN,
+    // A mouse means a computer, where speakers and microphone sit together: the echo guard's ground.
+    finePointer: window.matchMedia?.('(pointer: fine)')?.matches === true,
+    now: () => Date.now(),
     fish: fishMouth({
       speak: (body, signal) => fetch('/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),
       now: () => Date.now()
@@ -5534,6 +5537,16 @@ const VOICE_NO_START = 'The call could not start in this browser, so tap the orb
 const VOICE_DROPPED = 'The call dropped, so tap the orb to start again.'
 const VOICE_UNHEARD = 'OpenAI could not answer that, so try asking again.'
 const VOICE_OUTBOX_STORE = 'agent-cockpit-voice-outbox'
+// The echo guard. On a computer on speakers, its own voice can reach the microphone however well the
+// browser cancels echo: the live test (desktop, quiet room, 2026-10-09) heard "It happened.", "Still
+// fight.", "Adios." 1.3 to 1.5 s into replies, which cut them off and set it answering itself. A
+// turn that starts within this long of the reply's sound, and turns out to be under ECHO_MOST_WORDS
+// words, is taken for that: the response started for it is cancelled, the turn deleted so the model
+// never sees it, and the reply asked for again. Only with a mouse (a computer), and only when
+// VOICE_ECHO_GUARD is not off. Barge-in is untouched - still instant, on every device - so a real
+// short "stop" in that first second and a half is the one thing it can mistake.
+const ECHO_WINDOW_MS = 1500
+const ECHO_MOST_WORDS = 2
 // How long a reply held for the person's turn waits for that turn's own response before it is asked
 // for anyway, so a turn that never gets one cannot leave the tool outputs unanswered.
 const VOICE_REPLY_WAIT_MS = 1500
@@ -5563,6 +5576,7 @@ function openVoice(deps, ui) {
     state: 'connecting', stopped: false, turns: { current: 0 }, tally: emptyTally(), claims: null, ticket: '',
     mouth: 'openai', idleMinutes: 2, captions: true, responding: false, calls: new Map(), said: '',
     userSpeaking: false, replyOwed: false, replyRetries: 0, replyTimer: null,
+    echoGuard: false, soundStartedAt: null, suspectTurn: false,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
   const show = (state, words) => {
@@ -5690,6 +5704,18 @@ function openVoice(deps, ui) {
     }, VOICE_REPLY_WAIT_MS)
   }
 
+  // The turn the echo guard took for the assistant's own voice: the response the server started for it
+  // stopped, the turn taken out of the conversation, and the reply it cut off asked for again, once.
+  function heardItself(itemId) {
+    if (session.responding) {
+      send({ type: 'response.cancel' })
+      send({ type: 'output_audio_buffer.clear' })
+      session.replyRetries = 1
+      session.replyOwed = true
+    }
+    if (typeof itemId === 'string' && itemId) send({ type: 'conversation.item.delete', item_id: itemId })
+  }
+
   // The person started talking: over a reply, that is a new turn. OpenAI cancels the reply and cuts
   // its sound by itself; the page just listens.
   function bargeIn() {
@@ -5707,6 +5733,9 @@ function openVoice(deps, ui) {
     switch (event.type) {
       case 'input_audio_buffer.speech_started':
         session.userSpeaking = true
+        // Early in the reply's sound: maybe its own voice. The words will say (the caption, below).
+        session.suspectTurn = session.echoGuard && session.soundStartedAt !== null &&
+          deps.now() - session.soundStartedAt < ECHO_WINDOW_MS
         armIdle()
         bargeIn()
         ui.you('')
@@ -5718,13 +5747,22 @@ function openVoice(deps, ui) {
         if (session.replyOwed && !session.responding) waitThenAsk()
         show('thinking')
         break
-      case 'conversation.item.input_audio_transcription.completed':
-        if (session.captions && typeof event.transcript === 'string') ui.you(event.transcript)
+      case 'conversation.item.input_audio_transcription.completed': {
         session.tally = addUsage(session.tally, event.usage, 'captions')
         saveTally()
+        const suspect = session.suspectTurn
+        session.suspectTurn = false
+        const words = typeof event.transcript === 'string' ? event.transcript.split(/\s+/).filter(Boolean).length : 0
+        if (suspect && words <= ECHO_MOST_WORDS) {
+          heardItself(event.item_id)
+          break
+        }
+        if (session.captions && typeof event.transcript === 'string') ui.you(event.transcript)
         break
+      }
       case 'response.created':
         session.responding = true
+        session.soundStartedAt = null
         // A response started: an owed reply now waits for it to finish, not for the clock.
         deps.clearTimeout(session.replyTimer)
         session.replyTimer = null
@@ -5745,6 +5783,7 @@ function openVoice(deps, ui) {
         fish()?.replyText(session, '', true)
         break
       case 'output_audio_buffer.started':
+        session.soundStartedAt ??= deps.now()
         armIdle()
         show('speaking')
         break
@@ -5851,6 +5890,7 @@ function openVoice(deps, ui) {
     session.mouth = claims.mouth
     session.idleMinutes = Number.isInteger(answer.idleMinutes) && answer.idleMinutes >= 1 && answer.idleMinutes <= 10 ? answer.idleMinutes : 2
     session.captions = answer.captions !== false
+    session.echoGuard = answer.echoGuard === true && deps.finePointer === true
     if (typeof answer.name === 'string' && answer.name) ui.who(answer.name)
     if (!session.captions) ui.you('Captions are off on this board.')
     showCost()
