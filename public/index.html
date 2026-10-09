@@ -5063,6 +5063,26 @@ function outboxPut(outbox, entry) {
   return { version: 1, items: items.slice(-MAX_OUTBOX_ITEMS) }
 }
 
+// What a ticket says - its session, when it started, which model and which mouth - read, not checked:
+// only the server can check one. The page needs these to file the conversation in its outbox. Null
+// for anything not shaped like a ticket.
+function ticketSays(ticket) {
+  if (typeof ticket !== 'string' || !OUTBOX_TICKET.test(ticket)) return null
+  let claims = null
+  try {
+    const body = ticket.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')
+    const bytes = Uint8Array.from(atob(body + '='.repeat((4 - (body.length % 4)) % 4)), (character) => character.charCodeAt(0))
+    claims = JSON.parse(new TextDecoder().decode(bytes))
+  } catch (error) {
+    return null
+  }
+  if (!claims || typeof claims !== 'object' || typeof claims.sid !== 'string' || !OUTBOX_SID.test(claims.sid)) return null
+  if (!Number.isInteger(claims.iat) || claims.iat < 0) return null
+  if ((claims.mouth !== 'openai' && claims.mouth !== 'fish') || typeof claims.model !== 'string' || !OUTBOX_MODEL.test(claims.model)) return null
+  const fishModel = claims.mouth === 'fish' && typeof claims.fishModel === 'string' && OUTBOX_MODEL.test(claims.fishModel) ? claims.fishModel : null
+  return { sid: claims.sid, iat: claims.iat, mouth: claims.mouth, model: claims.model, ...(fishModel ? { fishModel } : {}) }
+}
+
 // The next report to send: the oldest 20, and which session each one is, by position.
 function outboxBatch(outbox) {
   const items = outbox.items.slice(0, OUTBOX_BATCH)
@@ -5313,7 +5333,26 @@ function voiceDeps() {
   return {
     mediaDevices: typeof navigator === 'undefined' ? undefined : navigator.mediaDevices,
     RTCPeerConnection: window.RTCPeerConnection,
-    AudioContext: window.AudioContext ?? window.webkitAudioContext
+    AudioContext: window.AudioContext ?? window.webkitAudioContext,
+    // Kept in the dock, so it is in the page (an iPhone plays a call's sound more reliably from an
+    // element that is), and taken out again when the call ends.
+    createAudio() {
+      const audio = document.createElement('audio')
+      audio.autoplay = true
+      audio.setAttribute('playsinline', '')
+      el('voice-dock').appendChild(audio)
+      return audio
+    },
+    // The person tapped, so a missing edit key may be asked for - once, as every change asks.
+    startCall: (sdp) => storeWrite('/api/voice-session', sdp, 'application/sdp'),
+    view: () => ({ data, names: brand?.names ?? {}, now: Date.now(), hermes: hermesShown(), spend: null }),
+    openScreen: (screen) => { location.hash = `#${screen}` },
+    prices: () => voiceMeter?.prices ?? null,
+    saveOutbox: (entry) => writeStore(VOICE_OUTBOX_STORE, JSON.stringify(outboxPut(readOutbox(readStore(VOICE_OUTBOX_STORE)), entry))),
+    onEnd: () => { voiceSession = null },
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (id) => clearTimeout(id),
+    cancelOnBargeIn: VOICE_CANCEL_ON_BARGE_IN
   }
 }
 
@@ -5378,7 +5417,7 @@ function voiceTap(deps = voiceDeps()) {
     voiceUi.show('error', { words: VOICE_NO_MIC, live: false })
     return
   }
-  voiceUi.show('connecting', { live: false })
+  voiceSession = openVoice(deps, voiceUi)
 }
 
 // Stop ends a live call; once it has ended, the same button closes the sheet.
@@ -5402,6 +5441,295 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', () => {
   if (voiceSession) voiceSession.stop('hidden')
 })
+
+/* ---------- Talk to the board: the call ----------
+   Jack's flow, on a website: the tap opens the microphone (echo-cancel, noise-suppress) and the
+   sound; a WebRTC call is offered through /api/voice-session, which adds the key and the session
+   on the server; then the audio and the events go straight between this page and OpenAI. OpenAI's
+   own voice plays from the call's track through an <audio> element - no address is loaded, so the
+   Content-Security-Policy stays as it is. The server decides you stopped talking after 450 ms of
+   quiet; talking over a reply stops it.
+
+   openVoice takes everything it reaches for in `deps`, so tests/voice-call.test.mjs runs a whole call
+   against a fake browser. The page hands it voiceDeps(). */
+
+// Whether to cancel a reply and clear its sound ourselves when the person talks over it. OpenAI's
+// docs say it does both by itself over WebRTC (interrupt_response); this stays off unless the live
+// proof (A2) shows a lag, and the tests cover it both ways.
+const VOICE_CANCEL_ON_BARGE_IN = false
+
+const VOICE_MIC_BLOCKED = 'The microphone is blocked for this board, so it cannot hear you. On an iPhone: Settings > Safari > ' +
+  'Microphone, and allow it. In Chrome: tap the icon left of the address and allow the microphone. Then tap the orb again.'
+const VOICE_MIC_MISSING = 'No microphone was found, so connect or allow one, then tap the orb again.'
+const VOICE_NO_START = 'The call could not start in this browser, so tap the orb to try again.'
+const VOICE_DROPPED = 'The call dropped, so tap the orb to start again.'
+const VOICE_UNHEARD = 'OpenAI could not answer that, so try asking again.'
+const VOICE_OUTBOX_STORE = 'agent-cockpit-voice-outbox'
+
+// The voice meter as GET /api/voice-meter last said it, price table included; null until it answers.
+let voiceMeter = null
+
+// Why a call ended, in words.
+function voiceEndWords(reason, idleMinutes) {
+  if (reason === 'idle') {
+    return `Ended after ${plural(idleMinutes, 'minute')} with no talking, so nothing more is spent. Tap the orb to talk again.`
+  }
+  if (reason === 'hidden') return 'Ended because the board was put away. Tap the orb to talk again.'
+  if (reason === 'dropped') return VOICE_DROPPED
+  return voiceWords('ended')
+}
+
+// Money as the sheet and the card say it: never more exact than the estimate is.
+const voiceMoney = (usd) => (usd > 0 && usd < 0.01 ? 'under $0.01' : `$${usd.toFixed(2)}`)
+
+// A sentence of our own - the board's refusal, or one of the ones above - as opposed to an error a
+// browser threw, whose words are for developers.
+const voiceSaid = (words) => Object.assign(new Error(words), { said: true })
+
+function openVoice(deps, ui) {
+  const session = {
+    state: 'connecting', stopped: false, turns: { current: 0 }, tally: emptyTally(), claims: null, ticket: '',
+    mouth: 'openai', idleMinutes: 2, captions: true, responding: false, calls: new Map(), said: '',
+    timer: null, stream: null, pc: null, channel: null, audio: null, context: null
+  }
+  const show = (state, words) => {
+    session.state = state
+    ui.show(state, { words, live: !session.stopped })
+  }
+  show('connecting')
+
+  // Both inside the tap itself: an iPhone allows the microphone and sound only from a person's tap.
+  try {
+    session.context = deps.AudioContext ? new deps.AudioContext() : null
+    session.context?.resume?.()
+  } catch (error) {
+    session.context = null
+  }
+  const mic = deps.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+
+  const send = (event) => {
+    if (session.channel?.readyState === 'open') session.channel.send(JSON.stringify(event))
+  }
+
+  // No talking for idleMinutes - the person's or the assistant's - ends the call. Not a cap: a
+  // forgotten tab stops costing.
+  const armIdle = () => {
+    deps.clearTimeout(session.timer)
+    if (!session.stopped) session.timer = deps.setTimeout(() => end('idle'), session.idleMinutes * 60_000)
+  }
+
+  const saveTally = () => {
+    if (!session.claims || !Object.values(session.tally).some((value) => value > 0)) return
+    deps.saveOutbox({
+      ticket: session.ticket,
+      sid: session.claims.sid,
+      at: new Date(session.claims.iat).toISOString(),
+      model: session.claims.model,
+      mouth: session.claims.mouth,
+      ...(session.claims.fishModel ? { fishModel: session.claims.fishModel } : {}),
+      counts: session.tally
+    })
+  }
+
+  const showCost = () => {
+    const prices = deps.prices()
+    if (!prices || !session.claims) {
+      ui.cost('This conversation: no estimate yet, because the price table has not loaded.')
+      return
+    }
+    const cost = costOf(session.tally, { model: session.claims.model, transcribeModel: prices.transcribeModel, fishModel: session.claims.fishModel }, prices)
+    ui.cost(`This conversation ≈ ${voiceMoney(cost.usd)} (estimate${cost.incomplete.length ? ', incomplete' : ''})`)
+  }
+
+  // Everything that was opened, closed; the conversation's counts kept for the meter.
+  function end(reason) {
+    if (session.stopped) return
+    session.stopped = true
+    deps.clearTimeout(session.timer)
+    deps.stopSpeech?.(session)
+    try { session.channel?.close() } catch (error) { /* already closed */ }
+    try { session.pc?.close() } catch (error) { /* already closed */ }
+    for (const track of session.stream?.getTracks?.() ?? []) track.stop()
+    if (session.audio) {
+      session.audio.srcObject = null
+      session.audio.remove?.()
+    }
+    try { session.context?.close?.() } catch (error) { /* already closed */ }
+    saveTally()
+    show(reason === 'error' ? 'error' : 'ended', reason === 'error' ? session.failure : voiceEndWords(reason, session.idleMinutes))
+    deps.onEnd(reason)
+  }
+
+  function fail(error) {
+    if (session.stopped) return
+    session.failure = error?.said ? error.message : VOICE_NO_START
+    end('error')
+  }
+
+  // A tool the model asked for, answered from the board this page already has.
+  function answerTools(calls) {
+    for (const call of calls) {
+      let args = {}
+      try { args = JSON.parse(call.arguments || '{}') } catch (error) { args = {} }
+      const answer = voiceToolAnswer(call.name, args, deps.view())
+      if (answer.opened) deps.openScreen(answer.opened)
+      send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(answer) } })
+    }
+    send({ type: 'response.create' })
+  }
+
+  // The person started talking: over a reply, that is a new turn. OpenAI cancels the reply and cuts
+  // its sound by itself; the page just listens.
+  function bargeIn() {
+    newTurn(session.turns)
+    const replying = session.responding || session.state === 'speaking'
+    if (deps.cancelOnBargeIn && replying) {
+      send({ type: 'response.cancel' })
+      send({ type: 'output_audio_buffer.clear' })
+    }
+    deps.bargeIn?.(session, send)
+  }
+
+  function onEvent(event) {
+    if (session.stopped || !event || typeof event.type !== 'string') return
+    switch (event.type) {
+      case 'input_audio_buffer.speech_started':
+        armIdle()
+        bargeIn()
+        ui.you('')
+        show('listening')
+        break
+      case 'input_audio_buffer.speech_stopped':
+        armIdle()
+        show('thinking')
+        break
+      case 'conversation.item.input_audio_transcription.completed':
+        if (session.captions && typeof event.transcript === 'string') ui.you(event.transcript)
+        session.tally = addUsage(session.tally, event.usage, 'captions')
+        saveTally()
+        break
+      case 'response.created':
+        session.responding = true
+        session.replyTurn = session.turns.current
+        session.said = ''
+        deps.replyStarted?.(session)
+        break
+      case 'response.output_audio_transcript.delta':
+      case 'response.output_text.delta':
+        if (typeof event.delta !== 'string') break
+        armIdle()
+        session.said += event.delta
+        ui.said(session.said)
+        if (event.type === 'response.output_text.delta') deps.replyText?.(session, event.delta)
+        else if (session.state !== 'speaking') show('speaking')
+        break
+      case 'response.output_text.done':
+        deps.replyText?.(session, '', true)
+        break
+      case 'output_audio_buffer.started':
+        armIdle()
+        show('speaking')
+        break
+      case 'output_audio_buffer.stopped':
+        armIdle()
+        if (!session.responding) show('listening')
+        break
+      case 'response.function_call_arguments.done':
+        if (typeof event.call_id === 'string' && typeof event.name === 'string') session.calls.set(event.call_id, event)
+        break
+      case 'response.done': {
+        session.responding = false
+        session.tally = addUsage(session.tally, event.response?.usage, 'reply')
+        saveTally()
+        showCost()
+        for (const item of Array.isArray(event.response?.output) ? event.response.output : []) {
+          if (item?.type === 'function_call' && typeof item.call_id === 'string' && typeof item.name === 'string') session.calls.set(item.call_id, item)
+        }
+        const calls = [...session.calls.values()]
+        session.calls.clear()
+        if (calls.length) {
+          answerTools(calls)
+          show('thinking')
+        } else if (session.mouth === 'fish') {
+          deps.replyDone?.(session, show)
+        } else if (session.state !== 'speaking') {
+          show('listening')
+        }
+        break
+      }
+      case 'error':
+        // Cancelling a reply that had already finished is not worth a word.
+        if (event.error?.code === 'response_cancel_not_active') break
+        show('listening', VOICE_UNHEARD)
+        break
+      default:
+        break
+    }
+  }
+
+  async function connect() {
+    let stream
+    try {
+      stream = await mic
+    } catch (error) {
+      throw voiceSaid(error?.name === 'NotFoundError' || error?.name === 'OverconstrainedError' ? VOICE_MIC_MISSING : VOICE_MIC_BLOCKED)
+    }
+    session.stream = stream
+    if (session.stopped) {
+      for (const track of stream.getTracks()) track.stop()
+      return
+    }
+    const pc = new deps.RTCPeerConnection()
+    session.pc = pc
+    session.audio = deps.createAudio()
+    pc.ontrack = (event) => {
+      if (session.audio && !session.stopped) session.audio.srcObject = event.streams?.[0] ?? null
+    }
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') end('dropped')
+    }
+    for (const track of stream.getTracks()) pc.addTrack(track, stream)
+    // The events channel is made BEFORE the offer, so the offer carries it.
+    const channel = pc.createDataChannel('oai-events')
+    session.channel = channel
+    channel.onmessage = (message) => {
+      let event = null
+      try { event = JSON.parse(message.data) } catch (error) { event = null }
+      onEvent(event)
+    }
+    channel.onopen = () => {
+      if (session.stopped) return
+      show('listening')
+      armIdle()
+    }
+    channel.onclose = () => end('dropped')
+
+    const offer = await pc.createOffer()
+    await pc.setLocalDescription(offer)
+    if (session.stopped) return
+    let answer
+    try {
+      answer = await (await deps.startCall(offer.sdp)).json()
+    } catch (error) {
+      throw voiceSaid(error?.message || VOICE_NO_START)
+    }
+    if (session.stopped) return
+    const claims = ticketSays(answer?.ticket)
+    if (typeof answer?.sdp !== 'string' || !answer.sdp.startsWith('v=0') || !claims) throw voiceSaid(VOICE_NO_START)
+    session.ticket = answer.ticket
+    session.claims = claims
+    session.mouth = claims.mouth
+    session.idleMinutes = Number.isInteger(answer.idleMinutes) && answer.idleMinutes >= 1 && answer.idleMinutes <= 10 ? answer.idleMinutes : 2
+    session.captions = answer.captions !== false
+    if (typeof answer.name === 'string' && answer.name) ui.who(answer.name)
+    if (!session.captions) ui.you('Captions are off on this board.')
+    showCost()
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
+  }
+
+  connect().catch(fail)
+  return { stop: (reason) => end(reason), session }
+}
 
 /* ---------- shell ---------- */
 

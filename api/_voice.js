@@ -505,6 +505,26 @@ export function outboxPut(outbox, entry) {
   return { version: 1, items: items.slice(-MAX_OUTBOX_ITEMS) }
 }
 
+// What a ticket says - its session, when it started, which model and which mouth - read, not checked:
+// only the server can check one. The page needs these to file the conversation in its outbox. Null
+// for anything not shaped like a ticket.
+export function ticketSays(ticket) {
+  if (typeof ticket !== 'string' || !OUTBOX_TICKET.test(ticket)) return null
+  let claims = null
+  try {
+    const body = ticket.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')
+    const bytes = Uint8Array.from(atob(body + '='.repeat((4 - (body.length % 4)) % 4)), (character) => character.charCodeAt(0))
+    claims = JSON.parse(new TextDecoder().decode(bytes))
+  } catch (error) {
+    return null
+  }
+  if (!claims || typeof claims !== 'object' || typeof claims.sid !== 'string' || !OUTBOX_SID.test(claims.sid)) return null
+  if (!Number.isInteger(claims.iat) || claims.iat < 0) return null
+  if ((claims.mouth !== 'openai' && claims.mouth !== 'fish') || typeof claims.model !== 'string' || !OUTBOX_MODEL.test(claims.model)) return null
+  const fishModel = claims.mouth === 'fish' && typeof claims.fishModel === 'string' && OUTBOX_MODEL.test(claims.fishModel) ? claims.fishModel : null
+  return { sid: claims.sid, iat: claims.iat, mouth: claims.mouth, model: claims.model, ...(fishModel ? { fishModel } : {}) }
+}
+
 // The next report to send: the oldest 20, and which session each one is, by position.
 export function outboxBatch(outbox) {
   const items = outbox.items.slice(0, OUTBOX_BATCH)

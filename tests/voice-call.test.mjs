@@ -1,0 +1,417 @@
+// A whole voice call, run against a fake browser: a microphone, a WebRTC connection with its events
+// channel, an <audio> element and the clock are all handed in through openVoice's `deps`, the seam
+// the page fills with voiceDeps(). Nothing here can prove a real call works - that is the live proof
+// (T14) - but everything the page decides is decided here: what it asks for and in what order, what
+// state it says it is in, how it answers a tool, what it counts, and that everything it opened is
+// closed again.
+
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { loadPage, flush } from './helpers/page-harness.mjs'
+import { basePayload, brandAnswer, VOICE_ON } from './helpers/page-payload.mjs'
+import { SDP_OFFER, SDP_ANSWER, REPLY_USAGE, TRANSCRIPTION_USAGE, OPENAI_KEY } from './helpers/voice-fixtures.mjs'
+import { signTicket, newSessionId, ticketSays, voiceToolAnswer, costOf } from '../api/_voice.js'
+import { VOICE_PRICES } from '../api/_voice-prices.js'
+
+const NOW = Date.parse('2026-10-09T12:00:00Z')
+const ticketFor = (mouth = 'openai') =>
+  signTicket({ sid: newSessionId(), iat: NOW, mouth, model: 'gpt-realtime-2.1-mini', ...(mouth === 'fish' ? { fishModel: 's2.1-pro-free' } : {}) }, OPENAI_KEY)
+const PRICES = { ...structuredClone(VOICE_PRICES), transcribeModel: 'gpt-4o-mini-transcribe' }
+
+async function page() {
+  const given = {}
+  const loaded = loadPage({
+    fetch: async (url) => ({ ok: true, status: 200, json: async () => (url.startsWith('/api/brand') ? brandAnswer({ voice: VOICE_ON }) : url.startsWith('/api/state') ? basePayload() : {}) }),
+    expose: ['openVoice', 'voiceTap', 'voiceDeps', 'VOICE_MIC_BLOCKED', 'VOICE_UNHEARD'],
+    after: 'given.current = () => voiceSession',
+    given
+  })
+  await flush()
+  return { ...loaded, current: () => given.current() }
+}
+
+// A browser that does what the page asks and writes down every step.
+function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES } = {}) {
+  const log = []
+  const timers = new Map()
+  let nextTimer = 1
+  const tracks = [{ kind: 'audio', stopped: false, stop() { this.stopped = true; log.push('track stopped') } }]
+  const stream = { getTracks: () => tracks, getAudioTracks: () => tracks }
+  const audio = { srcObject: undefined, removed: false, remove() { this.removed = true } }
+  const state = { pc: null, channel: null, context: null, constraints: null, saved: [], ended: [], opened: [], calls: [] }
+  const ticket = answer.ticket ?? ticketFor(answer.mouth ?? 'openai')
+  class FakeConnection {
+    constructor() { state.pc = this; this.closed = false; this.tracks = []; log.push('connection') }
+    addTrack(track) { this.tracks.push(track); log.push('add track') }
+    createDataChannel(name) {
+      log.push(`channel ${name}`)
+      state.channel = {
+        name, readyState: 'connecting', sent: [], closed: false,
+        send(text) { this.sent.push(JSON.parse(text)) },
+        close() { this.closed = true; this.readyState = 'closed'; this.onclose?.() }
+      }
+      return state.channel
+    }
+    async createOffer() { log.push('offer'); return { type: 'offer', sdp: SDP_OFFER } }
+    async setLocalDescription() { log.push('local description') }
+    async setRemoteDescription(description) { this.remote = description; log.push('remote description') }
+    close() { this.closed = true; log.push('connection closed') }
+  }
+  class FakeAudioContext {
+    constructor() { state.context = this; this.closed = false; log.push('audio context') }
+    resume() { log.push('audio resumed') }
+    close() { this.closed = true }
+  }
+  const deps = {
+    mediaDevices: {
+      getUserMedia(constraints) {
+        state.constraints = constraints
+        log.push('microphone asked')
+        return micError ? Promise.reject(micError) : Promise.resolve(stream)
+      }
+    },
+    RTCPeerConnection: FakeConnection,
+    AudioContext: FakeAudioContext,
+    createAudio: () => { log.push('audio element'); return audio },
+    async startCall(sdp) {
+      state.calls.push(sdp)
+      log.push('call offered to the board')
+      if (refusal) throw new Error(refusal)
+      return { json: async () => ({ sdp: SDP_ANSWER, ticket, mouth: 'openai', model: 'gpt-realtime-2.1-mini', name: 'Penny', idleMinutes: 2, captions: true, ...answer }) }
+    },
+    view: () => ({ data: basePayload(), names: {}, now: NOW, hermes: false, spend: null }),
+    openScreen: (screen) => state.opened.push(screen),
+    prices: () => prices,
+    saveOutbox: (entry) => state.saved.push(structuredClone(entry)),
+    onEnd: (reason) => state.ended.push(reason),
+    setTimeout: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id },
+    clearTimeout: (id) => { timers.delete(id) },
+    cancelOnBargeIn
+  }
+  const ui = {
+    shown: [], heard: [], spoken: [], costs: [], names: [],
+    show(stateName, { words, live } = {}) { this.shown.push({ state: stateName, words, live }) },
+    you(text) { this.heard.push(text) },
+    said(text) { this.spoken.push(text) },
+    cost(text) { this.costs.push(text) },
+    who(name) { this.names.push(name) }
+  }
+  return {
+    deps, ui, log, tracks, audio, state, ticket, timers,
+    emit: (event) => state.channel.onmessage({ data: JSON.stringify(event) }),
+    open: () => { state.channel.readyState = 'open'; state.channel.onopen() },
+    lastState: () => ui.shown.at(-1)?.state,
+    fireTimer: () => { const [id, timer] = [...timers.entries()].at(-1); timers.delete(id); timer.fn() }
+  }
+}
+
+async function connected(options) {
+  const loaded = await page()
+  const browser = fakeBrowser(options)
+  const call = loaded.exposed.openVoice(browser.deps, browser.ui)
+  await flush()
+  browser.open()
+  return { ...browser, call, exposed: loaded.exposed }
+}
+
+/* ---------- starting ---------- */
+
+test('the tap asks for the microphone with echo-cancel and noise-suppress, and starts the sound, before anything waits', async () => {
+  const loaded = await page()
+  const browser = fakeBrowser()
+  loaded.exposed.openVoice(browser.deps, browser.ui)
+  // Synchronously, inside the tap: an iPhone allows neither from anything else.
+  assert.deepEqual(browser.log.slice(0, 3), ['audio context', 'audio resumed', 'microphone asked'])
+  assert.deepEqual(browser.state.constraints, { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
+  assert.deepEqual(browser.ui.shown[0], { state: 'connecting', words: undefined, live: true })
+})
+
+test('the events channel is made before the offer, and the offer goes to the board - never to OpenAI', async () => {
+  const browser = await connected()
+  const order = browser.log.filter((step) => !['audio context', 'audio resumed', 'microphone asked'].includes(step))
+  assert.deepEqual(order, ['connection', 'audio element', 'add track', 'channel oai-events', 'offer', 'local description', 'call offered to the board', 'remote description'])
+  assert.deepEqual(browser.state.calls, [SDP_OFFER])
+  assert.deepEqual(browser.state.pc.remote, { type: 'answer', sdp: SDP_ANSWER })
+  assert.equal(browser.lastState(), 'listening', 'an open call does not say it is listening')
+  assert.deepEqual(browser.ui.names, ['Penny'])
+})
+
+test('OpenAI\'s voice plays from the call\'s own sound track, in an <audio> element - no address, nothing for the CSP to allow', async () => {
+  const browser = await connected()
+  const remote = { id: 'remote stream' }
+  browser.state.pc.ontrack({ streams: [remote] })
+  assert.equal(browser.audio.srcObject, remote)
+})
+
+/* ---------- talking ---------- */
+
+test('the states follow the conversation: listening, thinking, speaking, and listening again', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  assert.equal(browser.lastState(), 'listening')
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  assert.equal(browser.lastState(), 'thinking')
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'Three jobs ' })
+  browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'are due.' })
+  assert.equal(browser.lastState(), 'speaking')
+  assert.deepEqual(browser.ui.spoken, ['Three jobs ', 'Three jobs are due.'])
+  browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE, output: [] } })
+  assert.equal(browser.lastState(), 'speaking', 'it said Listening while its voice was still playing')
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  assert.equal(browser.lastState(), 'listening')
+})
+
+test('what the person said appears from the caption, and the caption\'s cost is counted', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'What is due today?', usage: TRANSCRIPTION_USAGE })
+  assert.equal(browser.ui.heard.at(-1), 'What is due today?')
+  assert.equal(browser.state.saved.at(-1).counts.transcribeAudioIn, 17)
+})
+
+test('a tool call is answered from the board: its output, then one request for the reply', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.function_call_arguments.done', call_id: 'call_1', name: 'whats_due', arguments: '{"hours":24}' })
+  browser.emit({ type: 'response.function_call_arguments.done', call_id: 'call_2', name: 'open_screen', arguments: '{"screen":"connections"}' })
+  browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE, output: [{ type: 'function_call', call_id: 'call_1', name: 'whats_due', arguments: '{"hours":24}' }] } })
+  const sent = browser.state.channel.sent
+  assert.deepEqual(sent.map((event) => event.type), ['conversation.item.create', 'conversation.item.create', 'response.create'])
+  assert.deepEqual(sent[0].item, {
+    type: 'function_call_output',
+    call_id: 'call_1',
+    output: JSON.stringify(voiceToolAnswer('whats_due', { hours: 24 }, browser.deps.view()))
+  })
+  assert.deepEqual(JSON.parse(sent[1].item.output), { opened: 'connections' })
+  assert.deepEqual(browser.state.opened, ['connections'])
+  assert.equal(browser.lastState(), 'thinking')
+})
+
+test('a tool call with broken arguments, or a tool nobody defined, is still answered - with an error, not a guess', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.function_call_arguments.done', call_id: 'call_x', name: 'run_job', arguments: '{"slug":' })
+  browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE } })
+  const [output, again] = browser.state.channel.sent
+  assert.ok(JSON.parse(output.item.output).error)
+  assert.equal(again.type, 'response.create')
+  assert.deepEqual(browser.state.opened, [])
+})
+
+test('the outbox is written after every reply, with the counts so far, under the ticket\'s session', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE } })
+  browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE } })
+  assert.equal(browser.state.saved.length, 2)
+  const [first, second] = browser.state.saved
+  const claims = ticketSays(browser.ticket)
+  assert.equal(second.sid, claims.sid)
+  assert.equal(second.ticket, browser.ticket)
+  assert.equal(second.at, new Date(NOW).toISOString())
+  assert.equal(first.counts.audioOut, 91)
+  assert.equal(second.counts.audioOut, 182)
+  assert.equal(second.counts.cachedTextIn, 128)
+})
+
+test('the sheet shows a live estimate from the server\'s price table, and says when there is none', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE } })
+  const expected = costOf({ textIn: 55, cachedTextIn: 64, audioIn: 13, textOut: 30, audioOut: 91 }, { model: 'gpt-realtime-2.1-mini' }, VOICE_PRICES)
+  assert.ok(expected.usd < 0.01)
+  assert.equal(browser.ui.costs.at(-1), 'This conversation ≈ under $0.01 (estimate)')
+  const none = await connected({ prices: null })
+  none.emit({ type: 'response.done', response: { usage: REPLY_USAGE } })
+  assert.match(none.ui.costs.at(-1), /no estimate yet/)
+})
+
+test('an error event is said in our words and the call carries on; OpenAI\'s words are never shown', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'error', error: { code: 'server_error', message: 'Internal failure req_123' } })
+  assert.equal(browser.ui.shown.at(-1).words, browser.exposed.VOICE_UNHEARD)
+  assert.ok(!JSON.stringify(browser.ui).includes('req_123'))
+  assert.equal(browser.state.ended.length, 0)
+  const before = browser.ui.shown.length
+  browser.emit({ type: 'error', error: { code: 'response_cancel_not_active' } })
+  assert.equal(browser.ui.shown.length, before, 'cancelling a finished reply was reported as a problem')
+})
+
+/* ---------- talking over it ---------- */
+
+test('talking over a reply goes straight back to listening; OpenAI cancels it, so nothing is sent', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'A long answer' })
+  assert.equal(browser.lastState(), 'speaking')
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  assert.equal(browser.lastState(), 'listening')
+  assert.deepEqual(browser.state.channel.sent, [], 'something was sent that OpenAI does by itself')
+  assert.equal(browser.call.session.turns.current, 1, 'talking over a reply did not start a new turn')
+})
+
+test('with the barge-in flag on, talking over a reply also sends response.cancel and output_audio_buffer.clear', async () => {
+  const browser = await connected({ cancelOnBargeIn: true })
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'A long answer' })
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  assert.deepEqual(browser.state.channel.sent.map((event) => event.type), ['response.cancel', 'output_audio_buffer.clear'])
+  // With nothing being said, there is nothing to cancel.
+  const quiet = await connected({ cancelOnBargeIn: true })
+  quiet.emit({ type: 'input_audio_buffer.speech_started' })
+  assert.deepEqual(quiet.state.channel.sent, [])
+})
+
+/* ---------- ending ---------- */
+
+const everythingClosed = (browser) => {
+  assert.ok(browser.tracks.every((track) => track.stopped), 'the microphone was left on')
+  assert.equal(browser.state.pc.closed, true, 'the connection was left open')
+  assert.equal(browser.state.channel.closed, true, 'the events channel was left open')
+  assert.equal(browser.audio.srcObject, null, 'the sound was left playing')
+  assert.equal(browser.state.context.closed, true, 'the audio context was left running')
+  assert.equal(browser.timers.size, 0, 'a timer was left behind')
+}
+
+test('Stop closes everything it opened, once, and says it ended', async () => {
+  const browser = await connected()
+  browser.call.stop('stopped')
+  everythingClosed(browser)
+  assert.deepEqual(browser.state.ended, ['stopped'])
+  assert.deepEqual(browser.ui.shown.at(-1), { state: 'ended', words: 'Ended. Tap the orb to talk again.', live: false })
+  browser.call.stop('stopped')
+  assert.deepEqual(browser.state.ended, ['stopped'], 'a second Stop ended it twice')
+})
+
+test('no talking for the idle minutes hangs up - and talking, or the assistant talking, starts the wait again', async () => {
+  const browser = await connected({ answer: { idleMinutes: 3 } })
+  const waits = () => [...browser.timers.values()].map((timer) => timer.ms)
+  const waiting = () => [...browser.timers.keys()]
+  assert.deepEqual(waits(), [3 * 60_000])
+  for (const event of [
+    { type: 'input_audio_buffer.speech_started' },
+    { type: 'response.output_audio_transcript.delta', delta: 'Still talking' },
+    { type: 'output_audio_buffer.stopped' }
+  ]) {
+    const before = waiting()
+    browser.emit(event)
+    assert.deepEqual(waits(), [3 * 60_000], `${event.type} left two hang-ups waiting`)
+    assert.notDeepEqual(waiting(), before, `${event.type} did not start the wait again`)
+  }
+  browser.fireTimer()
+  everythingClosed(browser)
+  assert.deepEqual(browser.state.ended, ['idle'])
+  assert.match(browser.ui.shown.at(-1).words, /Ended after 3 minutes with no talking/)
+})
+
+test('a microphone that is blocked gets one sentence saying where to allow it, and nothing else starts', async () => {
+  const loaded = await page()
+  for (const name of ['NotAllowedError', 'SecurityError']) {
+    const browser = fakeBrowser({ micError: Object.assign(new Error('Permission denied by system'), { name }) })
+    loaded.exposed.openVoice(browser.deps, browser.ui)
+    await flush()
+    const last = browser.ui.shown.at(-1)
+    assert.equal(last.state, 'error')
+    assert.equal(last.words, loaded.exposed.VOICE_MIC_BLOCKED)
+    assert.match(last.words, /Settings > Safari > Microphone/)
+    assert.match(last.words, /Chrome/)
+    assert.equal(browser.state.pc, null, 'a call was started with no microphone')
+    assert.equal(browser.state.context.closed, true)
+    assert.deepEqual(browser.state.ended, ['error'])
+  }
+  const missing = fakeBrowser({ micError: Object.assign(new Error('x'), { name: 'NotFoundError' }) })
+  loaded.exposed.openVoice(missing.deps, missing.ui)
+  await flush()
+  assert.match(missing.ui.shown.at(-1).words, /No microphone was found/)
+})
+
+test('the board refusing the call shows its sentence and turns the microphone off', async () => {
+  const loaded = await page()
+  const sentence = 'OpenAI\'s spending limit for this key is reached, so voice is off until next month or until you raise it.'
+  const browser = fakeBrowser({ refusal: sentence })
+  loaded.exposed.openVoice(browser.deps, browser.ui)
+  await flush()
+  assert.deepEqual(browser.ui.shown.at(-1), { state: 'error', words: sentence, live: false })
+  assert.ok(browser.tracks.every((track) => track.stopped))
+  assert.equal(browser.state.pc.closed, true)
+})
+
+test('an answer that is not a call is refused rather than half-started', async () => {
+  const loaded = await page()
+  for (const answer of [{ sdp: 'nonsense' }, { ticket: 'not.a-ticket' }, { sdp: undefined }]) {
+    const browser = fakeBrowser({ answer })
+    loaded.exposed.openVoice(browser.deps, browser.ui)
+    await flush()
+    assert.equal(browser.ui.shown.at(-1).state, 'error', JSON.stringify(answer))
+    assert.equal(browser.state.pc.remote, undefined, 'an answer that is not one was applied')
+  }
+})
+
+test('Stop while it is still connecting leaves nothing running when the microphone arrives', async () => {
+  const loaded = await page()
+  let allow
+  const browser = fakeBrowser()
+  browser.deps.mediaDevices.getUserMedia = () => new Promise((resolve) => { allow = resolve })
+  const call = loaded.exposed.openVoice(browser.deps, browser.ui)
+  call.stop('stopped')
+  allow({ getTracks: () => browser.tracks })
+  await flush()
+  assert.ok(browser.tracks.every((track) => track.stopped), 'the microphone came on after Stop')
+  assert.equal(browser.state.pc, null)
+})
+
+test('a call that drops is said, and closed', async () => {
+  const browser = await connected()
+  browser.state.pc.connectionState = 'failed'
+  browser.state.pc.onconnectionstatechange()
+  everythingClosed(browser)
+  assert.deepEqual(browser.state.ended, ['dropped'])
+  assert.match(browser.ui.shown.at(-1).words, /dropped/)
+})
+
+/* ---------- the tap on the page ---------- */
+
+test('a tap on the page starts one call, and a second tap or its end lets it go', async () => {
+  const loaded = await page()
+  const browser = fakeBrowser()
+  // The tap is given the page's own dependencies, with the browser's parts swapped for fakes.
+  const deps = { ...loaded.exposed.voiceDeps(), ...browser.deps, onEnd: loaded.exposed.voiceDeps().onEnd }
+  loaded.exposed.voiceTap(deps)
+  const live = loaded.current()
+  assert.ok(live, 'the tap did not start a call')
+  loaded.exposed.voiceTap(deps)
+  assert.equal(loaded.current(), null, 'a second tap left the call running')
+  await flush()
+  assert.ok(browser.tracks.every((track) => track.stopped), 'the microphone came on after the second tap')
+  // A tap after that is a new call.
+  const next = fakeBrowser()
+  loaded.exposed.voiceTap({ ...deps, ...next.deps, onEnd: deps.onEnd })
+  assert.ok(loaded.current() && loaded.current() !== live)
+})
+
+/* ---------- reading a ticket ---------- */
+
+test('the page reads a ticket\'s session, time, model and mouth, and nothing that is not a ticket', () => {
+  const ticket = ticketFor('fish')
+  const said = ticketSays(ticket)
+  assert.match(said.sid, /^[0-9a-f]{32}$/)
+  assert.equal(said.iat, NOW)
+  assert.equal(said.mouth, 'fish')
+  assert.equal(said.fishModel, 's2.1-pro-free')
+  for (const wrong of ['', 'abc', 'a.b.c', null, 42, `${Buffer.from('{"sid":"x"}').toString('base64url')}.${'a'.repeat(43)}`]) {
+    assert.equal(ticketSays(wrong), null, String(wrong))
+  }
+})
+
+test('a browser error while starting is our sentence, never the browser\'s own words', async () => {
+  const loaded = await page()
+  const browser = fakeBrowser()
+  const Real = browser.deps.RTCPeerConnection
+  browser.deps.RTCPeerConnection = class extends Real {
+    async createOffer() { throw new Error('InvalidStateError: m-line 3 has no ice-ufrag (internal detail)') }
+  }
+  loaded.exposed.openVoice(browser.deps, browser.ui)
+  await flush()
+  const last = browser.ui.shown.at(-1)
+  assert.equal(last.state, 'error')
+  assert.match(last.words, /could not start in this browser/)
+  assert.ok(!last.words.includes('ice-ufrag'))
+  assert.ok(browser.tracks.every((track) => track.stopped))
+})
