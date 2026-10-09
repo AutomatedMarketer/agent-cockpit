@@ -37,7 +37,7 @@ function board({ voice = VOICE_ON, meter = meterOn(), report = () => ({ ok: true
     if (url.startsWith('/api/brand')) return { ok: true, status: 200, json: async () => brandAnswer({ voice }) }
     if (url.startsWith('/api/voice-meter') && init.method === 'POST') {
       posts.push(JSON.parse(init.body))
-      const { ok, status, answer } = report(JSON.parse(init.body))
+      const { ok, status, answer } = await report(JSON.parse(init.body))
       return { ok, status, json: async () => answer }
     }
     if (url.startsWith('/api/voice-meter')) return { ok: true, status: 200, json: async () => meter }
@@ -197,4 +197,38 @@ test('the usage tool hears this month\'s spend: the board\'s total, or this devi
   await flush(10)
   assert.equal(device.exposed.voiceSpendNow().conversations, 1)
   assert.equal(device.exposed.voiceDeps().view().spend.conversations, 1)
+})
+
+test('a report never carries a conversation that is still going - in this tab or another', async () => {
+  const live = entry(1, { open: true })
+  const { posts } = board({ storage: { [OUTBOX]: outboxOf(live, entry(2)) } })
+  await flush(10)
+  assert.equal(posts.length, 1)
+  assert.deepEqual(posts[0].reports.map((report) => report.ticket), ['body2.sig'])
+})
+
+test('a call that ends while a report is still out is reported once that one settles - never two at once', async () => {
+  const answers = []
+  const { page, posts } = board({
+    storage: { [OUTBOX]: outboxOf(entry(1)) },
+    report: (body) => new Promise((resolve) => answers.push(() => resolve({
+      ok: true, status: 200, answer: { store: true, accepted: body.reports.map((report) => sid(Number(report.ticket.slice(4, -4)))), kept: [], refused: [] }
+    })))
+  })
+  await flush(10)
+  assert.equal(posts.length, 1, 'the board-open report did not go')
+  // A short call ends while that report is still out.
+  page.storage.setItem(OUTBOX, outboxOf(entry(1), entry(2)))
+  page.exposed.voiceDeps().onEnd('stopped')
+  page.exposed.sendVoiceReports()
+  await flush(10)
+  assert.equal(posts.length, 1, 'a second report went while the first was still out')
+  answers[0]()
+  await flush(10)
+  assert.equal(posts.length, 2, 'the call that ended meanwhile was never reported')
+  assert.deepEqual(posts[1].reports.map((report) => report.ticket), ['body2.sig'])
+  answers[1]()
+  await flush(10)
+  assert.equal(posts.length, 2)
+  assert.deepEqual(JSON.parse(page.storage.getItem(OUTBOX)).items, [])
 })

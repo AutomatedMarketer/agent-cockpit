@@ -331,3 +331,12 @@ test('the page sends the offer to the board as JSON - the one way Vercel hands a
   assert.equal(sent.init.headers['Content-Type'], 'application/json')
   assert.deepEqual(JSON.parse(sent.init.body), { sdp: SDP_OFFER })
 })
+
+test('the outbox entry says the conversation is still going until the call ends', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE } })
+  assert.equal(browser.state.saved.at(-1).open, true, 'a live conversation could be reported half-counted')
+  browser.call.stop('stopped')
+  assert.equal(browser.state.saved.at(-1).open, false, 'an ended conversation is still marked as going')
+  assert.equal(browser.state.saved.at(-1).counts.audioOut, 91)
+})

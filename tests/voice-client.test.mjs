@@ -364,3 +364,17 @@ test('the page\'s inline script still parses with the voice helpers in it', () =
   const script = html.match(/<script>([\s\S]*)<\/script>/)[1]
   assert.doesNotThrow(() => new Function(script))
 })
+
+test('a conversation still going is never in a report; one a closed tab left open is, once no call could still be running', () => {
+  const now = Date.parse('2026-10-09T12:00:00Z')
+  const at = (minutesAgo) => new Date(now - minutesAgo * 60_000).toISOString()
+  let outbox = readOutbox(null)
+  outbox = outboxPut(outbox, entry(1, { at: at(5), open: true }))
+  outbox = outboxPut(outbox, entry(2, { at: at(20) }))
+  outbox = outboxPut(outbox, entry(3, { at: at(66), open: true }))
+  assert.equal(outbox.items[0].open, true, 'the outbox forgot which conversation is still going')
+  assert.deepEqual(outboxBatch(outbox, now).sids, [sid(2), sid(3)])
+  // Read back from storage, the mark stays - and only a true one counts.
+  const stored = readOutbox(JSON.stringify({ items: [entry(4, { at: at(1), open: true }), entry(5, { at: at(1), open: 'yes' })] }))
+  assert.deepEqual(outboxBatch(stored, now).sids, [sid(5)])
+})

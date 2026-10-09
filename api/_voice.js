@@ -461,6 +461,10 @@ export function addFishBytes(tally, text) {
 // with no store - where the outbox IS the meter - cannot grow it for ever.
 export const MAX_OUTBOX_ITEMS = 200
 const OUTBOX_BATCH = 20
+// A conversation still going is marked open, and is never reported: the board would count its counts
+// so far and then refuse the final ones as a session it already had. OpenAI ends every call at 60
+// minutes, so an entry still open after this was left by a tab that closed mid-call, and is reported.
+const LIVE_CALL_MS = 65 * 60_000
 const OUTBOX_TICKET = /^[A-Za-z0-9_-]{1,600}\.[A-Za-z0-9_-]{1,64}$/
 const OUTBOX_SID = /^[0-9a-f]{32}$/
 const OUTBOX_MODEL = /^[a-z0-9][a-z0-9.-]{0,39}$/
@@ -479,7 +483,10 @@ function outboxItem(raw) {
     counts[field] = value
   }
   const fishModel = raw.mouth === 'fish' && typeof raw.fishModel === 'string' && OUTBOX_MODEL.test(raw.fishModel) ? raw.fishModel : null
-  return { ticket: raw.ticket, sid: raw.sid, at: raw.at, model: raw.model, mouth: raw.mouth, ...(fishModel ? { fishModel } : {}), counts }
+  return {
+    ticket: raw.ticket, sid: raw.sid, at: raw.at, model: raw.model, mouth: raw.mouth,
+    ...(fishModel ? { fishModel } : {}), ...(raw.open === true ? { open: true } : {}), counts
+  }
 }
 
 // The outbox from what storage held (a string, or null), keeping only entries the page could have
@@ -525,9 +532,11 @@ export function ticketSays(ticket) {
   return { sid: claims.sid, iat: claims.iat, mouth: claims.mouth, model: claims.model, ...(fishModel ? { fishModel } : {}) }
 }
 
-// The next report to send: the oldest 20, and which session each one is, by position.
-export function outboxBatch(outbox) {
-  const items = outbox.items.slice(0, OUTBOX_BATCH)
+// The next report to send: the oldest 20 conversations that have ended, and which session each one
+// is, by position.
+export function outboxBatch(outbox, now = Date.now()) {
+  const ended = (item) => !item.open || now - Date.parse(item.at) >= LIVE_CALL_MS
+  const items = outbox.items.filter(ended).slice(0, OUTBOX_BATCH)
   return { reports: items.map((item) => ({ ticket: item.ticket, counts: item.counts })), sids: items.map((item) => item.sid) }
 }
 

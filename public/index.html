@@ -5028,6 +5028,10 @@ function addFishBytes(tally, text) {
 // with no store - where the outbox IS the meter - cannot grow it for ever.
 const MAX_OUTBOX_ITEMS = 200
 const OUTBOX_BATCH = 20
+// A conversation still going is marked open, and is never reported: the board would count its counts
+// so far and then refuse the final ones as a session it already had. OpenAI ends every call at 60
+// minutes, so an entry still open after this was left by a tab that closed mid-call, and is reported.
+const LIVE_CALL_MS = 65 * 60_000
 const OUTBOX_TICKET = /^[A-Za-z0-9_-]{1,600}\.[A-Za-z0-9_-]{1,64}$/
 const OUTBOX_SID = /^[0-9a-f]{32}$/
 const OUTBOX_MODEL = /^[a-z0-9][a-z0-9.-]{0,39}$/
@@ -5046,7 +5050,10 @@ function outboxItem(raw) {
     counts[field] = value
   }
   const fishModel = raw.mouth === 'fish' && typeof raw.fishModel === 'string' && OUTBOX_MODEL.test(raw.fishModel) ? raw.fishModel : null
-  return { ticket: raw.ticket, sid: raw.sid, at: raw.at, model: raw.model, mouth: raw.mouth, ...(fishModel ? { fishModel } : {}), counts }
+  return {
+    ticket: raw.ticket, sid: raw.sid, at: raw.at, model: raw.model, mouth: raw.mouth,
+    ...(fishModel ? { fishModel } : {}), ...(raw.open === true ? { open: true } : {}), counts
+  }
 }
 
 // The outbox from what storage held (a string, or null), keeping only entries the page could have
@@ -5092,9 +5099,11 @@ function ticketSays(ticket) {
   return { sid: claims.sid, iat: claims.iat, mouth: claims.mouth, model: claims.model, ...(fishModel ? { fishModel } : {}) }
 }
 
-// The next report to send: the oldest 20, and which session each one is, by position.
-function outboxBatch(outbox) {
-  const items = outbox.items.slice(0, OUTBOX_BATCH)
+// The next report to send: the oldest 20 conversations that have ended, and which session each one
+// is, by position.
+function outboxBatch(outbox, now = Date.now()) {
+  const ended = (item) => !item.open || now - Date.parse(item.at) >= LIVE_CALL_MS
+  const items = outbox.items.filter(ended).slice(0, OUTBOX_BATCH)
   return { reports: items.map((item) => ({ ticket: item.ticket, counts: item.counts })), sids: items.map((item) => item.sid) }
 }
 
@@ -5552,6 +5561,8 @@ function openVoice(deps, ui) {
       model: session.claims.model,
       mouth: session.claims.mouth,
       ...(session.claims.fishModel ? { fishModel: session.claims.fishModel } : {}),
+      // Still going until the call ends, so no report carries it half-counted.
+      open: !session.stopped,
       counts: session.tally
     })
   }
@@ -5891,6 +5902,8 @@ function fishMouth(io) {
    meter, for this device only. A report never asks for the edit key: nobody pressed anything. */
 
 let voiceReporting = false
+// A report asked for while one is out - a call ending as the board-open report goes - waits for it.
+let voiceReportAgain = false
 
 // This month's voice spend as the usage tool reads it out: the board's own total, or with no store,
 // this device's. Null when there is no meter to read.
@@ -5965,8 +5978,14 @@ function showVoiceSpend() {
 // One report: the oldest 20 conversations in the outbox. What the board counted, or says can never
 // count, leaves the outbox; everything else stays for next time. Never asks for a key.
 async function sendVoiceReports() {
-  if (voiceReporting || !voiceInfo.on) return
-  const batch = outboxBatch(readOutbox(readStore(VOICE_OUTBOX_STORE)))
+  if (!voiceInfo.on) return
+  // One report at a time: two at once would both carry the same conversations. One asked for now goes
+  // as soon as this one has settled, so a call that ends meanwhile is still reported.
+  if (voiceReporting) {
+    voiceReportAgain = true
+    return
+  }
+  const batch = outboxBatch(readOutbox(readStore(VOICE_OUTBOX_STORE)), Date.now())
   if (!batch.reports.length) return
   voiceReporting = true
   try {
@@ -5986,6 +6005,10 @@ async function sendVoiceReports() {
   } finally {
     voiceReporting = false
     showVoiceSpend()
+    if (voiceReportAgain) {
+      voiceReportAgain = false
+      sendVoiceReports()
+    }
   }
 }
 
