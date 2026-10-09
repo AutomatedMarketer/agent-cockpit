@@ -8,7 +8,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { flush } from './helpers/page-harness.mjs'
-import { basePayload } from './helpers/page-payload.mjs'
 import { SDP_OFFER, SDP_ANSWER, REPLY_USAGE, TRANSCRIPTION_USAGE } from './helpers/voice-fixtures.mjs'
 import { ticketSays, voiceToolAnswer, costOf } from '../api/_voice.js'
 import { VOICE_PRICES } from '../api/_voice-prices.js'
@@ -55,7 +54,7 @@ test('the states follow the conversation: listening, thinking, speaking, and lis
   browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'Three jobs ' })
   browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'are due.' })
   assert.equal(browser.lastState(), 'speaking')
-  assert.deepEqual(browser.ui.spoken, ['Three jobs ', 'Three jobs are due.'])
+  assert.deepEqual(browser.ui.spoken, ['', 'Three jobs ', 'Three jobs are due.'], 'the words are not shown as they arrive, after an empty start')
   browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE, output: [] } })
   assert.equal(browser.lastState(), 'speaking', 'it said Listening while its voice was still playing')
   browser.emit({ type: 'output_audio_buffer.stopped' })
@@ -314,4 +313,11 @@ test('a browser error while starting is our sentence, never the browser\'s own w
   assert.match(last.words, /could not start in this browser/)
   assert.ok(!last.words.includes('ice-ufrag'))
   assert.ok(browser.tracks.every((track) => track.stopped))
+})
+
+test('a new call starts with an empty sheet, never the last call\'s words or cost', async () => {
+  const loaded = await page()
+  const browser = fakeBrowser()
+  loaded.exposed.openVoice(browser.deps, browser.ui)
+  assert.deepEqual([browser.ui.heard[0], browser.ui.spoken[0], browser.ui.costs[0]], ['', '', ''])
 })

@@ -5517,6 +5517,10 @@ function openVoice(deps, ui) {
   // Fish speaks only for a Fish session; with OpenAI's voice it is never asked anything.
   const fish = () => (session.mouth === 'fish' ? deps.fish ?? null : null)
   show('connecting')
+  // A new call starts with an empty sheet: the last call's words and cost are not this one's.
+  ui.you('')
+  ui.said('')
+  ui.cost('')
 
   // Both inside the tap itself: an iPhone allows the microphone and sound only from a person's tap.
   try {
