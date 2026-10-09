@@ -227,10 +227,11 @@ export function instructionsFor(name) {
   ].join(' ')
 }
 
-// The session OpenAI is asked for, built from the config and the assistant's name and nothing the
-// page sent. Field names: developers.openai.com/api/docs/guides/realtime-webrtc and
+// The session OpenAI is asked for, built from the config and the assistant's name. The one thing the
+// page has a say in is `finePointer` - whether this device is a computer, where the echo guard runs -
+// and all it can do is turn the transcript the guard reads on: never the model, the voice, a price. Field names: developers.openai.com/api/docs/guides/realtime-webrtc and
 // realtime-conversations, read 2026-10-09.
-export function sessionFor(config, name) {
+export function sessionFor(config, name, { finePointer = false } = {}) {
   const fish = config.mouth === 'fish'
   return {
     type: 'realtime',
@@ -253,9 +254,9 @@ export function sessionFor(config, name) {
           create_response: true,
           interrupt_response: true
         },
-        // The echo guard reads the transcript of each turn, so it is asked for whenever the guard is
-        // on, captions or not; the page only shows it when captions are on.
-        ...(config.captions || config.echoGuard ? { transcription: { model: TRANSCRIBE_MODEL } } : {})
+        // Captions show the transcript; the echo guard reads it, and runs only on a computer. A phone
+        // with captions off asks for none, and pays for none.
+        ...(config.captions || (config.echoGuard && finePointer === true) ? { transcription: { model: TRANSCRIBE_MODEL } } : {})
       },
       ...(fish ? {} : { output: { voice: config.voice } })
     }

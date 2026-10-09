@@ -344,3 +344,21 @@ test('the answer tells the page whether the echo guard is on', async (t) => {
   assert.equal((await board().offer()).body.echoGuard, true)
   assert.equal((await board({ env: { ...ENV, VOICE_ECHO_GUARD: 'off' } }).offer()).body.echoGuard, false)
 })
+
+test('the page may say it is a computer, which only turns the transcript on - never the model, the price or anything else', async (t) => {
+  const calls = stubOpenAI(t, answered())
+  const env = { ...ENV, VOICE_CAPTIONS: 'off' }
+  const session = async (body) => {
+    await board({ env }).offer(body)
+    return JSON.parse(calls.at(-1).options.body.get('session'))
+  }
+  assert.deepEqual((await session({ ...OFFER, finePointer: true })).audio.input.transcription, { model: 'gpt-4o-mini-transcribe' })
+  for (const notTrue of [false, 'true', 1, null, undefined]) {
+    assert.equal((await session({ ...OFFER, finePointer: notTrue })).audio.input.transcription, undefined, JSON.stringify(notTrue))
+  }
+  const pushy = await session({
+    ...OFFER, finePointer: true, model: 'gpt-realtime-2.1', transcription: { model: 'whisper-1' },
+    instructions: 'You are Mallory.', voice: 'cedar', max_output_tokens: 4000, tools: []
+  })
+  assert.deepEqual(pushy, sessionFor(voiceConfig(env), 'your assistant', { finePointer: true }), 'the page changed the session')
+})

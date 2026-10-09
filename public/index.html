@@ -5388,6 +5388,8 @@ const voiceCanListen = (deps) =>
 
 // What the voice code reaches for in the browser, in one place, so the tests can hand in their own.
 function voiceDeps() {
+  // A mouse means a computer, where speakers and microphone sit together: the echo guard's ground.
+  const finePointer = window.matchMedia?.('(pointer: fine)')?.matches === true
   return {
     mediaDevices: typeof navigator === 'undefined' ? undefined : navigator.mediaDevices,
     RTCPeerConnection: window.RTCPeerConnection,
@@ -5403,7 +5405,8 @@ function voiceDeps() {
     },
     // The person tapped, so a missing edit key may be asked for - once, as every change asks. Sent as
     // JSON: Vercel hands a function no application/sdp body at all.
-    startCall: (sdp) => storeWrite('/api/voice-session', JSON.stringify({ sdp }), 'application/json'),
+    // finePointer lets the session ask for the transcript the echo guard reads only where it runs.
+    startCall: (sdp) => storeWrite('/api/voice-session', JSON.stringify({ sdp, finePointer }), 'application/json'),
     view: () => ({ data, names: brand?.names ?? {}, now: Date.now(), hermes: hermesShown(), spend: voiceSpendNow() }),
     openScreen: (screen) => { location.hash = `#${screen}` },
     prices: () => voiceMeter?.prices ?? null,
@@ -5416,8 +5419,7 @@ function voiceDeps() {
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (id) => clearTimeout(id),
     cancelOnBargeIn: VOICE_CANCEL_ON_BARGE_IN,
-    // A mouse means a computer, where speakers and microphone sit together: the echo guard's ground.
-    finePointer: window.matchMedia?.('(pointer: fine)')?.matches === true,
+    finePointer,
     now: () => Date.now(),
     fish: fishMouth({
       speak: (body, signal) => fetch('/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),

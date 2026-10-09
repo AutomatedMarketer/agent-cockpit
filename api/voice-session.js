@@ -54,11 +54,14 @@ const timedOut = (error) => error?.name === 'TimeoutError' || error?.name === 'A
 // arrives as nothing at all, on a stream that is already empty. JSON is parsed for us, and it is a
 // type a cross-site form cannot send without the browser asking first (see writeGate).
 function readOffer(request) {
-  const sdp = readJsonBody(request)?.sdp
+  const body = readJsonBody(request)
+  const sdp = body?.sdp
   if (typeof sdp !== 'string') return { error: SAY.notOffer, status: 400 }
   if (Buffer.byteLength(sdp, 'utf8') > MAX_OFFER_BYTES) return { error: SAY.tooBig, status: 413 }
-  // Every session description starts with its version line.
-  return /^v=0\r?\n/.test(sdp) ? { offer: sdp } : { error: SAY.notOffer, status: 400 }
+  // Every session description starts with its version line. Beside it, the one other thing read:
+  // whether the page is on a computer - exactly true, or it is not - which can only turn the echo
+  // guard's transcript on (sessionFor). Anything else in the body is not read at all.
+  return /^v=0\r?\n/.test(sdp) ? { offer: sdp, finePointer: body.finePointer === true } : { error: SAY.notOffer, status: 400 }
 }
 
 // The assistant's name from the store's cached copy, or '' - which the session calls "your
@@ -136,7 +139,7 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
 
     const form = new FormData()
     form.set('sdp', read.offer)
-    form.set('session', JSON.stringify(sessionFor(config, name)))
+    form.set('session', JSON.stringify(sessionFor(config, name, { finePointer: read.finePointer })))
     let upstream
     try {
       upstream = await fetch(CALLS_URL, {

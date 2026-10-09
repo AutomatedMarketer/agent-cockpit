@@ -198,3 +198,18 @@ test('with Fish, the echo clock starts when the first piece plays, and stops whe
   thanks.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_thanks', transcript: 'Thanks' })
   assert.ok(!thanks.state.channel.sent.some((event) => event.type === 'conversation.item.delete'), '"Thanks" after Fish finished was taken for an echo')
 })
+
+test('when a Fish reply has finished playing, the idle wait starts again from there', async () => {
+  const browser = await fish()
+  const idleWait = () => [...browser.timers.entries()].filter(([, timer]) => timer.ms === 2 * 60_000).map(([id]) => id)
+  browser.emit({ type: 'response.created' })
+  text(browser, 'Three jobs are due today.')
+  browser.emit({ type: 'response.output_text.done' })
+  browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE } })
+  browser.speeches[0].answer()
+  await flush()
+  const before = idleWait()
+  browser.state.context.started[0].onended()
+  assert.notDeepEqual(idleWait(), before, 'the idle wait did not restart when Fish finished speaking')
+  assert.equal(idleWait().length, 1)
+})
