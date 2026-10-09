@@ -1269,6 +1269,13 @@
   .voice-said { display: block; overflow-wrap: anywhere; }
   .voice-cost, .voice-mouth { margin: 0 0 .5rem; font-size: .8125rem; color: var(--muted); }
   .voice-stop { margin-top: .25rem; }
+  /* Voice spend, in Today's Usage section under Subscriptions. "estimate" is a chip in plain view. */
+  .voice-spend { margin-top: .75rem; padding: .9rem 1.05rem; }
+  .voice-spend .title { margin: 0 0 .4rem; }
+  .voice-spend-total { margin: 0 0 .35rem; font-size: .9375rem; }
+  .voice-spend-line { margin: 0 0 .35rem; font-size: .8125rem; }
+  .voice-spend-warn { margin: 0 0 .35rem; font-size: .8125rem; color: var(--warn); }
+  .voice-spend-note { margin: .5rem 0 0; font-size: .75rem; color: var(--muted); }
   /* From 1024px the sheet is docked beside the orb at a reading width. */
   @media (min-width: 64rem) {
     .voice-sheet { width: 22rem; }
@@ -2444,7 +2451,9 @@ function renderToday() {
       <a href="https://claude.ai/settings/usage" rel="noreferrer noopener">claude.ai usage page</a> —
       the dashboard links there rather than guessing.</p></div>` +
     // Under it, what the owner says they pay - the one thing on this section the repo can source.
-    subscriptionsHtml(data.subscriptions)
+    subscriptionsHtml(data.subscriptions) +
+    // And what talking to the board has cost, while voice is on.
+    voiceSpendHtml()
 }
 
 /* ---------- Team ---------- */
@@ -5345,11 +5354,15 @@ function voiceDeps() {
     },
     // The person tapped, so a missing edit key may be asked for - once, as every change asks.
     startCall: (sdp) => storeWrite('/api/voice-session', sdp, 'application/sdp'),
-    view: () => ({ data, names: brand?.names ?? {}, now: Date.now(), hermes: hermesShown(), spend: null }),
+    view: () => ({ data, names: brand?.names ?? {}, now: Date.now(), hermes: hermesShown(), spend: voiceSpendNow() }),
     openScreen: (screen) => { location.hash = `#${screen}` },
     prices: () => voiceMeter?.prices ?? null,
     saveOutbox: (entry) => writeStore(VOICE_OUTBOX_STORE, JSON.stringify(outboxPut(readOutbox(readStore(VOICE_OUTBOX_STORE)), entry))),
-    onEnd: () => { voiceSession = null },
+    // The call is over: let it go, and report it - the one report a conversation sends.
+    onEnd: () => {
+      voiceSession = null
+      sendVoiceReports()
+    },
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (id) => clearTimeout(id),
     cancelOnBargeIn: VOICE_CANCEL_ON_BARGE_IN,
@@ -5859,6 +5872,131 @@ function fishMouth(io) {
   }
 }
 
+/* ---------- Talk to the board: the voice spend meter ----------
+   There is no cap on voice - the owner's choice - so this is how they see what it costs: a Voice
+   spend card in Today's Usage section, beside Plan limits and Subscriptions, drawn only while voice
+   is on. It is an ESTIMATE - OpenAI's own token counts for each reply times the prices
+   /api/voice-meter sends, with the date they were checked - and says so in plain view, never behind
+   a Why?: that is what the number is. The bill is at platform.openai.com.
+
+   Each conversation is kept in this device's outbox until the board has recorded it: sent once when
+   a call ends, and once when the board opens with something still in it. Never more often - the
+   meter shares the picture store's writes. The board may keep some for later (the day's meter writes
+   are used up); they stay, and the card says how many. With no picture store, the outbox is the
+   meter, for this device only. A report never asks for the edit key: nobody pressed anything. */
+
+let voiceReporting = false
+
+// This month's voice spend as the usage tool reads it out: the board's own total, or with no store,
+// this device's. Null when there is no meter to read.
+function voiceSpendNow() {
+  if (voiceMeter?.store === true && isRecord(voiceMeter.thisMonth)) {
+    const month = voiceMeter.thisMonth
+    return { usd: Number(month.usd) || 0, conversations: allowanceCount(month.conversations), incomplete: Array.isArray(month.incomplete) ? month.incomplete : [] }
+  }
+  if (voiceMeter?.store === false) {
+    const device = outboxSummary(readOutbox(readStore(VOICE_OUTBOX_STORE)), voiceMeter.prices ?? null, new Date().toISOString().slice(0, 7))
+    return { usd: device.usd, conversations: device.conversations, incomplete: device.incomplete }
+  }
+  return null
+}
+
+const voiceApprox = (usd) => (usd > 0 && usd < 0.01 ? 'under $0.01' : `≈ $${usd.toFixed(2)}`)
+
+// Fish's share, in characters (Fish counts bytes; most letters are one), and whether it was free.
+function voiceFishHtml(fishBytes) {
+  const parts = Object.entries(isRecord(fishBytes) ? fishBytes : {})
+    .filter(([, bytes]) => Number.isInteger(bytes) && bytes > 0)
+    .map(([model, bytes]) => `about ${bytes.toLocaleString('en-US')} characters (${model === 's2.1-pro-free' ? 'free model, $0' : `${escapeHtml(model)}, priced in the total`})`)
+  return parts.length ? `<p class="voice-spend-line">Fish: ${parts.join('; ')}</p>` : ''
+}
+
+function voiceSpendInnerHtml() {
+  const head = '<p class="title">Voice spend</p>'
+  const outbox = readOutbox(readStore(VOICE_OUTBOX_STORE))
+  const checked = typeof voiceMeter?.prices?.checked === 'string' ? voiceMeter.prices.checked : ''
+  const estimate = `<p class="voice-spend-note"><span class="chip">estimate</span> From OpenAI&rsquo;s own token counts
+    &times; prices ${checked ? `checked ${escapeHtml(checked)}` : 'not loaded yet'}. Your bill is at
+    <a href="https://platform.openai.com/usage" rel="noreferrer noopener">platform.openai.com</a>.</p>`
+  const waiting = outbox.items.length
+    ? `<p class="voice-spend-line">${plural(outbox.items.length, 'conversation')} on this device not recorded yet.</p>`
+    : ''
+  const incompleteHtml = (labels) => (Array.isArray(labels) && labels.length
+    ? `<p class="voice-spend-warn">Incomplete: no price yet for ${labels.map((label) => escapeHtml(label)).join(', ')}, so the real cost is higher.</p>`
+    : '')
+
+  if (!voiceMeter) return `${head}<p class="voice-spend-line">Reading the voice meter&hellip;</p>${waiting}${estimate}`
+  if (voiceMeter.damaged === true) {
+    return `${head}<p class="voice-spend-warn">${escapeHtml(typeof voiceMeter.why === 'string' ? voiceMeter.why : 'The voice meter could not be read.')}</p>${waiting}${estimate}`
+  }
+  if (voiceMeter.store === false) {
+    const device = outboxSummary(outbox, voiceMeter.prices ?? null, new Date().toISOString().slice(0, 7))
+    const total = device.conversations
+      ? `<p class="voice-spend-total"><b>This month ${voiceApprox(device.usd)}</b> &middot; ${plural(device.conversations, 'conversation')}</p>`
+      : '<p class="voice-spend-line">No conversations yet this month.</p>'
+    return `${head}${total}<p class="voice-spend-line">This device only &mdash; connect a picture store to keep one total across your devices.</p>` +
+      `${voiceFishHtml(device.fishBytes)}${incompleteHtml(device.incomplete.filter((label) => label !== 'no price table yet'))}${estimate}`
+  }
+  const month = isRecord(voiceMeter.thisMonth) ? voiceMeter.thisMonth : {}
+  const conversations = allowanceCount(month.conversations)
+  const usd = Number(month.usd) || 0
+  const last = isRecord(voiceMeter.last) && typeof voiceMeter.last.usd === 'number' ? ` &middot; last one ${voiceApprox(voiceMeter.last.usd)}` : ''
+  const total = conversations
+    ? `<p class="voice-spend-total"><b>This month ${voiceApprox(usd)}</b> &middot; ${plural(conversations, 'conversation')}${last}</p>`
+    : '<p class="voice-spend-line">No conversations yet this month.</p>'
+  return `${head}${total}${voiceFishHtml(month.fishBytes)}${incompleteHtml(month.incomplete)}${waiting}${estimate}`
+}
+
+// The card in Today's Usage section. Drawn only while voice is on, so with voice off Today is the
+// board it always was.
+const voiceSpendHtml = () => (voiceInfo.on ? `<section class="panel card voice-spend" id="voice-spend">${voiceSpendInnerHtml()}</section>` : '')
+
+// The card again, in place, once the meter has answered or a report has gone - nothing else redrawn.
+function showVoiceSpend() {
+  const card = el('voice-spend')
+  if (card && voiceInfo.on) card.innerHTML = voiceSpendInnerHtml()
+}
+
+// One report: the oldest 20 conversations in the outbox. What the board counted, or says can never
+// count, leaves the outbox; everything else stays for next time. Never asks for a key.
+async function sendVoiceReports() {
+  if (voiceReporting || !voiceInfo.on) return
+  const batch = outboxBatch(readOutbox(readStore(VOICE_OUTBOX_STORE)))
+  if (!batch.reports.length) return
+  voiceReporting = true
+  try {
+    const response = await fetch('/api/voice-meter', {
+      method: 'POST',
+      headers: writeHeaders('application/json'),
+      body: JSON.stringify({ reports: batch.reports })
+    })
+    const answer = await answerOf(response)
+    if (response.ok) {
+      // Read again: a call may have added to the outbox while this was out.
+      writeStore(VOICE_OUTBOX_STORE, JSON.stringify(outboxSettle(readOutbox(readStore(VOICE_OUTBOX_STORE)), batch, answer)))
+      if (isRecord(answer.meter)) voiceMeter = answer.meter
+    }
+  } catch (error) {
+    // Nothing is lost: the conversations stay in the outbox, and the card says how many.
+  } finally {
+    voiceReporting = false
+    showVoiceSpend()
+  }
+}
+
+// When the board opens with voice on: the meter, then anything this device has not reported yet.
+async function loadVoiceMeter() {
+  if (!voiceInfo.on) return
+  try {
+    const result = await apiGet('/api/voice-meter')
+    voiceMeter = result.ok && isRecord(result.payload) ? result.payload : voiceMeter
+  } catch (error) {
+    /* the card keeps saying it is reading the meter */
+  }
+  showVoiceSpend()
+  await sendVoiceReports()
+}
+
 /* ---------- shell ---------- */
 
 // Hermes is a screen only for somebody who has Hermes, so it is not in TITLES: every screen there
@@ -6036,6 +6174,7 @@ async function boot() {
   data = result.payload
   useBrand(brandAnswer)
   render()
+  loadVoiceMeter()
 }
 
 boot()
