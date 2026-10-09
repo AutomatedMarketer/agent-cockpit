@@ -1234,8 +1234,11 @@
     display: flex; flex-direction: column; align-items: flex-end; gap: .6rem; pointer-events: none;
   }
   .voice-dock > * { pointer-events: auto; }
-  /* Room at the end of the page, so the orb never sits over the last thing on it. */
+  /* Room at the end of the page, so the orb never sits over the last thing on it - and, while the
+     sheet is open, room for the sheet as well (its tallest, the orb under it and the home bar), so
+     the Voice spend card and the footer can still be scrolled clear of it during a call. */
   .voice-on .wrap { padding-bottom: 5.5rem; }
+  .voice-open .wrap { padding-bottom: calc(min(60vh, 28rem) + 6rem + env(safe-area-inset-bottom, 0px)); }
   .voice-orb {
     width: 3.5rem; height: 3.5rem; min-width: 2.75rem; min-height: 2.75rem; padding: 0; flex: none;
     display: grid; place-items: center; border-radius: 50%; cursor: pointer;
@@ -5409,6 +5412,7 @@ function renderVoiceDock() {
   document.body.classList.toggle('voice-on', voiceInfo.on)
   if (voiceSession) return
   if (!voiceInfo.on) {
+    document.body.classList.remove('voice-open')
     dock.hidden = true
     dock.innerHTML = ''
     return
@@ -5425,6 +5429,7 @@ const voiceUi = {
     orb.dataset.state = state
     orb.setAttribute('aria-pressed', String(live))
     el('voice-sheet').hidden = state === 'idle' && !live
+    document.body.classList.toggle('voice-open', !el('voice-sheet').hidden)
     el('voice-state').textContent = words ?? voiceWords(state)
     el('voice-stop').textContent = live ? 'Stop' : 'Close'
   },

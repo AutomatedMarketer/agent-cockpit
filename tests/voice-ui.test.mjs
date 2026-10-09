@@ -276,3 +276,23 @@ test('with voice on, the footer no longer says nothing on the page comes from an
   const off = await boot(brandAnswer({ voice: { on: false, why: 'No key.' } }))
   assert.match(off.node('foot').textContent, /^Read from your repo .*\. Nothing on this page comes from anywhere else\.$/)
 })
+
+test('while the sheet is open, the page can scroll its last content clear of it', async () => {
+  // The sheet can be min(60vh, 28rem) tall over the bottom of the screen; without room the Voice
+  // spend card and the footer would sit under it with no way to scroll them out.
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { expose: ['voiceUi'] })
+  const body = page.node('body')
+  page.exposed.voiceUi.show('speaking', { live: true })
+  assert.ok(body.classList.contains('voice-open'), 'nothing tells the page the sheet is open')
+  page.exposed.voiceUi.show('idle', { live: false })
+  assert.ok(!body.classList.contains('voice-open'), 'the room stays after the sheet is closed')
+  page.exposed.voiceUi.show('error', { words: 'x', live: false })
+  assert.ok(body.classList.contains('voice-open'), 'an error in the sheet can cover the page end')
+
+  const sheetHeight = valuesOf('.voice-sheet')['max-height']
+  const room = rules.filter((rule) => rule.selector === '.voice-open .wrap' && !rule.inMedia).map(declared)
+  assert.equal(room.length, 1, 'there is no room made for the open sheet')
+  assert.ok(room[0]['padding-bottom'].includes(sheetHeight), `the room (${room[0]['padding-bottom']}) is not the sheet's height (${sheetHeight}) plus the orb`)
+  assert.match(room[0]['padding-bottom'], /\+ [\d.]+rem/, 'the room leaves out the orb under the sheet')
+  assert.match(room[0]['padding-bottom'], /safe-area-inset-bottom/)
+})
