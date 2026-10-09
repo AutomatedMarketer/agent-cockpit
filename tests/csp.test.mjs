@@ -55,8 +55,31 @@ test('pictures may come from memory, and still from nowhere outside the site', (
 })
 
 test('the page can still only talk to its own site', () => {
-  // The store and OpenAI are reached by the board's own functions, never by the page.
+  // The store and OpenAI are reached by the board's own functions, never by a request from the
+  // page. (The voice call's sound is WebRTC, which connect-src does not govern - see below.)
   assert.deepEqual(policy()['connect-src'], ["'self'"])
+})
+
+test('talking to the board needed no change to the policy, and the page still requests nothing from another site', () => {
+  // The call is started by /api/voice-session, on this site, which adds the key; after that the
+  // sound and the events go between the browser and OpenAI over WebRTC, which connect-src does not
+  // govern (proved in a real browser on a preview, not here). OpenAI's voice plays from the call's
+  // own track (srcObject) and Fish's from decoded bytes: neither loads an address, so neither needs
+  // media-src, and nothing needs an ephemeral key on the page.
+  const directives = policy()
+  assert.deepEqual(directives['connect-src'], ["'self'"])
+  assert.equal(directives['media-src'], undefined, 'a media source was added for voice')
+  for (const sources of Object.values(directives)) {
+    for (const source of sources) assert.doesNotMatch(source, /openai|fish\.audio|wss:/i, `${source} was let into the policy`)
+  }
+  const page = readFileSync(new URL('public/index.html', ROOT), 'utf8')
+  assert.doesNotMatch(page, /api\.openai\.com|api\.fish\.audio|wss:\/\//, 'the page addresses OpenAI or Fish itself')
+  assert.doesNotMatch(page, /\bek_|client_secrets/, 'the page asks for an ephemeral key')
+  for (const path of ['/api/voice-session', '/api/speak', '/api/voice-meter']) {
+    assert.ok(page.includes(`'${path}'`), `the page does not reach ${path} on its own site`)
+  }
+  // Nothing new needs longer than the default to run, so vercel.json is untouched by voice.
+  assert.deepEqual(Object.keys(config.functions ?? {}), ['api/generate.js'])
 })
 
 test('the other security headers are unchanged', () => {

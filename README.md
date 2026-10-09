@@ -181,8 +181,8 @@ all from the board itself, on a phone or a laptop, and it shows at once.
 | **The Today and Team banners** (the small **Personalise** button) | The banner picture: choose one, make one, or go back to the default |
 | **Make it yours** (in the Team banner) | Your assistant's name, and the art style every picture made from words follows. The default style is shown, with **Back to the default** |
 
-**Your assistant's name is kept, but nothing uses it yet.** It is saved now so the voice assistant
-can answer to it when that arrives; until then it changes nothing on the board.
+**Your assistant's name** is the name the voice assistant answers to - see
+[Talk to your board](#talk-to-your-board). With none, it is "your assistant".
 
 **Names never break anything.** A name changes what you *see*. Jobs, task cards and routines still
 find the agent by its slug (`research`, `content`), which stays on the card, smaller, under the name.
@@ -275,6 +275,104 @@ there, because anyone with the URL could otherwise spend your OpenAI money.
 
 ---
 
+## Talk to your board
+
+Tap the round button at the bottom right - on any screen, on your phone or a laptop - and ask. *"What
+is due today?"*, *"How's the team?"*, *"Open connections"*, *"How much Claude have I used?"* It answers
+out loud from what the board already shows, and you can talk over it to stop it.
+
+| | |
+|---|---|
+| **What it can do** | Read the board to you: who is working, what is due and gone quiet, the task board, plan limits and voice spend, your connections and Hermes. Open a screen |
+| **What it cannot do yet** | Run a job, add a task or change anything. Ask and it says to use the Run button. When it can, you will confirm each one yourself, on a card - never its own words, or anything it read |
+| **Its name** | The assistant's name from **Make it yours**, or "your assistant" |
+| **Its voice** | OpenAI's own voice by default. Fish, for a voice you choose, is an optional upgrade (below) |
+| **While you talk** | The panel above the button says what it heard, what it is saying, and what this conversation has cost so far |
+| **It hangs up** | After 2 minutes with nobody talking (`VOICE_IDLE_MINUTES`), when you tap **Stop** or press Esc, or when you leave the tab |
+
+### Switch it on
+
+Set `OPENAI_API_KEY` in Vercel - the same key **Make it** uses - and redeploy. The button appears. On
+a board open to everyone (`PUBLIC_DASHBOARD=true`) voice also needs `EDIT_KEY`, or anyone with the
+address could spend your OpenAI money. Voice does **not** need the picture store.
+
+The first tap asks your browser for the microphone. If you said no by mistake: on an iPhone,
+**Settings → Safari → Microphone**; in Chrome, tap the icon left of the address.
+
+### Set a hard spend limit on your OpenAI project - do this first
+
+**The board does not cap voice.** There is no daily limit; there is a meter (below). What stops the
+spending is a **hard spend limit** on the OpenAI project that holds `OPENAI_API_KEY`:
+
+1. platform.openai.com → your project → **Settings** → **Limits**
+2. **Spend** → **Edit spend limit** → a monthly amount you are happy to lose
+3. Turn on **hard-limit enforcement** → **Save**
+4. Add an alert a little below it too, so you hear first
+
+**An alert alone does not stop anything** - it only emails you. With the hard limit on, OpenAI
+refuses new requests once it is reached, and the board says *"OpenAI's spending limit for this key is
+reached, so voice is off until next month or until you raise it."* OpenAI's own docs say the limit is
+**not instantaneous**, so spending can go slightly over it, and they do not say what happens to a call
+already running when it trips. If your dashboard has no hard-limit switch, keep voice off until you
+have another way to cap that key.
+
+### What it costs, and the meter
+
+You pay OpenAI for each conversation by how much sound goes in and out (OpenAI counts it in tokens) -
+and every reply re-reads the whole conversation so far, so a long talk costs more per minute than a
+short one. Hang up when you
+are done (it does after 2 minutes of nobody talking anyway).
+
+The **Voice spend** card on Today, under Plan limits and Subscriptions, shows this month's total, how
+many conversations, and the last one. It is an **estimate**, and says so: OpenAI's own token counts
+for each reply, times the prices the board keeps in one table (`api/_voice-prices.js`, each price
+with the page and date it was read from). **Your bill is at platform.openai.com.**
+
+- A price the board has no source for is never counted as $0: the card says **Incomplete** and names it
+- Each conversation is counted on your device as it happens, and recorded by the board once, when it
+  ends - or the next time the board opens, if the tab closed first. Nothing is lost if a tab dies
+- The board records voice in the picture store's own file, using **only the writes the picture caps
+  leave over** (5 a day at the defaults). When those are used, conversations wait on the device and
+  ride along with the next one, and the card says how many are waiting. Your pictures and names are
+  never short of writes because of voice
+- **No picture store:** voice still works, and the meter shows this device's total only
+- The meter is a meter, not a guard: anyone holding your keys could send it made-up counts. The hard
+  spend limit is the guard
+
+### Fish, for a voice you choose (optional)
+
+Fish Audio can speak the answers in a voice you pick from its library.
+
+1. A Fish account → **API key** → set it as `FISH_API_KEY` in Vercel (**Production** and **Preview**,
+   marked sensitive)
+2. Pick a voice on fish.audio → the 32 letters and numbers in its address → `FISH_VOICE_ID`
+3. Redeploy. **Make it yours** says *"Speaking with your Fish voice."*
+
+**What to know first:**
+
+- The board uses Fish's **free model, `s2.1-pro-free`**, unless you set `FISH_MODEL=s2.1-pro` exactly.
+  Fish bills a request that does not name the free model as the paid one, so the board names it on
+  every request
+- The free model is free **until 30 November 2026**, under fair use, and **Fish may use what you send
+  it to train its model**
+- Free-plan voices are for **personal use only**. Using one for a business needs a paid Fish plan
+- With Fish, OpenAI answers in text and Fish speaks it, a sentence at a time, so the first words can
+  take a moment longer
+
+### What goes where
+
+| What | Goes to | Why |
+|---|---|---|
+| Your voice, and what the assistant says back | **OpenAI**, straight from your browser | It hears you and answers. The call is started by the board's server, which adds the key - **no key ever reaches your browser** |
+| The board's answers to its questions (who is working, what is due, your plan limits) | **OpenAI** | So it can read them to you |
+| The words of each answer, with Fish on | **Fish** | So it can speak them. Its free model may train on them |
+| Each conversation's token counts | **The board's picture store** | The meter |
+
+Everything else stays where it was. The page's security policy did not change: the call itself is
+browser-to-OpenAI audio, and the page only ever talks to its own site.
+
+---
+
 ## The two things this board refuses to do
 
 These are the reason anything else on it is worth believing.
@@ -324,9 +422,16 @@ has no evidence for.
 | `FIRE_KEY` | A password for firing jobs, sent as `x-fire-key` | For buttons |
 | `PUBLIC_FIRE` | `true` to drop `FIRE_KEY` for requests from your own page. **Read the warning below first** | No |
 | `BLOB_...` | Set **by Vercel** when you connect a private Blob store. You never type these. See [Make it yours](#make-it-yours) | To personalise |
-| `OPENAI_API_KEY` | Your OpenAI key, for **Make it** - the same one the voice assistant uses | For pictures from words |
+| `OPENAI_API_KEY` | Your OpenAI key, for **Make it** and for [talking to the board](#talk-to-your-board). **Set a hard spend limit on its project first** | For pictures from words and voice |
 | `OPENAI_IMAGE_MODEL` | The image model. Leave unset for `gpt-image-1-mini` | No |
-| `EDIT_KEY` | A password for changing names and pictures, sent as `x-edit-key`. **Required if `PUBLIC_DASHBOARD=true`** | If public |
+| `OPENAI_REALTIME_MODEL` | The voice model: `gpt-realtime-2.1-mini` (the default) or `gpt-realtime-2.1`. Anything else turns voice off and says why | No |
+| `OPENAI_VOICE` | OpenAI's voice: `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin` (the default) or `cedar` | No |
+| `VOICE_IDLE_MINUTES` | Minutes with nobody talking before a call hangs up, 1 to 10. Default `2` | No |
+| `VOICE_CAPTIONS` | `off` to stop showing - and paying for - what it heard you say. On unless set | No |
+| `FISH_API_KEY` | Your Fish Audio key, for a voice you choose. Mark it sensitive | For Fish |
+| `FISH_VOICE_ID` | The 32 letters and numbers in the voice's address on fish.audio | For Fish |
+| `FISH_MODEL` | Leave unset for Fish's free `s2.1-pro-free`. Only `s2.1-pro`, exactly, uses the paid model | No |
+| `EDIT_KEY` | A password for changing names and pictures, sent as `x-edit-key`. **Required if `PUBLIC_DASHBOARD=true`** - for changes, and for voice | If public |
 | `WRITE_DAILY_CAP` | Changes a day (names, uploads, resets). Default `20`, at most `27`. Held under [the store's free limit](#the-picture-stores-free-limit-and-why-the-caps-are-where-they-are) | No |
 | `GENERATE_DAILY_CAP` | Pictures from words a day. Default `10`. Gets whatever the changes leave of the same limit | No |
 | `VERCEL_BLOB_RETRIES` | How often the Blob library retries a failed write. Its own default is `10`; set `2`, because a retry can count against the store's free limit | Recommended |
@@ -363,7 +468,7 @@ Locally:
 npm test
 ```
 
-1221 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1223 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -405,6 +510,16 @@ used only when you connect a picture store.
 | **Make it** is missing, with a sentence about `OPENAI_API_KEY` | Set `OPENAI_API_KEY` in Vercel and redeploy. Choosing your own picture works without it |
 | An iPhone photo "could not be opened here" | It is a HEIC photo and this browser cannot read those. Save it as a JPEG first (or take a screenshot of it), then choose that |
 | The board keeps asking for the edit key | The key typed is not the `EDIT_KEY` set in Vercel. A wrong key is never kept |
+| There is no round button at the bottom right | Voice is off: `OPENAI_API_KEY` is not set, the board is open to everyone with no `EDIT_KEY`, or `OPENAI_REALTIME_MODEL` or `OPENAI_VOICE` names something the board does not know. With a picture store, **Make it yours** says which. Redeploy after fixing |
+| The button is grey: "This browser cannot use a microphone…" | This browser gives the page no microphone or no WebRTC. Use Safari on an iPhone, or Chrome |
+| "The microphone is blocked for this board…" | You said no to the microphone. iPhone: **Settings → Safari → Microphone**. Chrome: the icon left of the address. Then tap again |
+| "OpenAI's spending limit for this key is reached…" | Your hard spend limit did its job. Raise it on platform.openai.com, or wait for next month |
+| "OpenAI did not accept OPENAI_API_KEY for voice…" | The key is wrong, or its project cannot use the realtime models. Check both in OpenAI, then in Vercel, and redeploy |
+| It stops talking as if you had interrupted, when you had not | Its own voice reached the microphone. Turn the volume down, or use headphones |
+| Voice spend says **Incomplete** | A price the board has no source for yet. The total is lower than the truth; your bill at platform.openai.com is the real number |
+| Voice spend says conversations are **not recorded yet** | The board used today's spare store writes. They are kept on this device and recorded with your next conversation |
+| "The voice meter's file in the picture store is damaged…" | Vercel → **Storage** → your store → delete `agent-cockpit/voice-meter.json`. The meter starts again; nothing else is touched |
+| With Fish on, some sentences are not spoken | Fish did not answer in time for that piece, so it was skipped; its words are still in the panel. If none are spoken, check `FISH_API_KEY` and `FISH_VOICE_ID` |
 
 ---
 
@@ -413,8 +528,15 @@ used only when you connect a picture store.
 - **Write to your repo.** Every button is a *dispatch*: an agent session makes the change and
   commits it. A broken board cannot corrupt your team. Its only write power is over its own picture
   store - names and pictures, nothing else
-- **Send anything.** It has no email, no publishing, no outbound anything. The one exception is
-  yours to switch on: with `OPENAI_API_KEY` set, **Make it** sends the description you typed to OpenAI
+- **Send anything you did not ask it to.** It has no email and no publishing. What does leave is yours
+  to switch on, with `OPENAI_API_KEY`: **Make it** sends the description you typed to OpenAI, and
+  **talking to the board** sends your voice, and the board's answers to its questions, to OpenAI -
+  plus, with Fish on, the words of each answer to Fish, whose free model may train on them. See
+  [What goes where](#what-goes-where)
+- **Put a key on the page.** The OpenAI and Fish keys stay on the server. A voice call is started by
+  the board's own function, which adds the key; not even a short-lived key reaches your browser
+- **Cap your voice spending for you.** It meters it, as an estimate. The hard spend limit on your OpenAI
+  project is what stops it
 - **Show you somebody else's data.** It reads one repo, the one you named
 - **Guess.** Where it does not know, it says it does not know
 
@@ -448,6 +570,16 @@ The Hermes card too: `tests/fixtures/hermes-parity.json` is shared byte for byte
 file within five minutes of the check. A yes/no flag in the file is never read, and nothing Hermes
 keeps beside the fields read - its command line, its addresses, chat titles, memory - can reach the
 page.
+
+Voice is OpenAI's "unified" call: the page makes a WebRTC offer and sends it to `/api/voice-session`
+on its own site; that function adds the key and the whole session (model, instructions, the six
+read-only tools, when it decides you stopped talking) and passes the offer to OpenAI; OpenAI's answer
+comes back the same way, and from then on the sound and the events go straight between the browser
+and OpenAI. So the page's Content-Security-Policy is exactly what it was: `connect-src 'self'`, and the
+call's sound is WebRTC, which that does not govern. Every voice answer from the board is
+`Cache-Control: private, no-store`. A signed ticket ties the later Fish requests and meter reports to
+a session the board opened. The helpers the page runs live in `api/_voice.js` too, word for word, and
+`tests/voice-client.test.mjs` holds the two copies together.
 
 ---
 

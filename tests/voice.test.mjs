@@ -278,3 +278,29 @@ test('the voice helpers never read process.env: each rule is decided by the env 
   const source = readFileSync(new URL('../api/_voice.js', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /process\.env/)
 })
+
+/* ---------- what the README promises ---------- */
+
+test('the README tells the owner to set a hard spend limit, that an alert alone stops nothing, and what goes where', () => {
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+  assert.match(readme, /## Talk to your board/)
+  assert.match(readme, /does \*\*not\*\* need the picture store|does not need the picture store/i)
+  assert.match(readme, /hard spend limit/i)
+  assert.match(readme, /hard-limit enforcement/)
+  assert.match(readme, /An alert alone does not stop anything/i)
+  assert.match(readme, /not instantaneous/i)
+  assert.match(readme, /The board does not cap voice/i)
+  assert.match(readme, /\*\*estimate\*\*/)
+  assert.match(readme, /30 November 2026/)
+  assert.match(readme, /personal use only/i)
+  assert.match(readme, /may (use what you send it to )?train/i)
+  // Every setting voice reads is in the settings table.
+  for (const name of ['OPENAI_REALTIME_MODEL', 'OPENAI_VOICE', 'VOICE_IDLE_MINUTES', 'VOICE_CAPTIONS', 'FISH_API_KEY', 'FISH_VOICE_ID', 'FISH_MODEL']) {
+    assert.ok(readme.split(/\r?\n/).some((line) => line.startsWith(`| \`${name}\``)), `${name} is not in the settings table`)
+  }
+  // And "never sends anything" no longer pretends voice is not there.
+  const never = readme.slice(readme.indexOf('## What it will never do'), readme.indexOf('## Under the hood'))
+  assert.match(never, /OpenAI/)
+  assert.match(never, /Fish/)
+  assert.match(never, /voice/i)
+})
