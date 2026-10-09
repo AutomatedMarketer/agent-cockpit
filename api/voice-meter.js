@@ -27,6 +27,7 @@ import {
   failureAnswer,
   usageDay,
   meterWritesLeft,
+  meterWritesPerDay,
   spendMeterWrite
 } from './_picture-store.js'
 import { readTicket, costOf, METER_TICKET_MS, TRANSCRIBE_MODEL, MAX_REPLY_TOKENS } from './_voice.js'
@@ -109,6 +110,8 @@ function meterView(meter, { env, now }) {
       ? { at: last.at, usd: last.micros / 1e6, incomplete: last.incomplete, model: last.model, mouth: last.mouth, fishBytes: last.fishBytes }
       : null,
     writesLeftToday: meterWritesLeft(meter, env, usageDay(now)),
+    // Zero when the picture caps use the whole budget: then the board never keeps voice at all.
+    writesPerDay: meterWritesPerDay(env),
     prices: pricesView()
   }
 }

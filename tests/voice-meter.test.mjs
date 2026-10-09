@@ -242,3 +242,10 @@ test('GET is behind the view key; POST is behind the write gate; both refuse bef
   assert.equal(other.statusCode, 405)
   noCache(other, 'a PUT')
 })
+
+test('GET says how many meter writes a day the picture caps leave - none at all when they use the whole budget', async () => {
+  assert.equal((await meter().get()).body.writesPerDay, 5)
+  const full = await meter({ env: { ...ENV, WRITE_DAILY_CAP: '27' } }).get()
+  assert.equal(full.body.writesPerDay, 0)
+  assert.equal(full.body.writesLeftToday, 0)
+})

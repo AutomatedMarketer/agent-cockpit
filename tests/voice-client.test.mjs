@@ -378,3 +378,31 @@ test('a conversation still going is never in a report; one a closed tab left ope
   const stored = readOutbox(JSON.stringify({ items: [entry(4, { at: at(1), open: true }), entry(5, { at: at(1), open: 'yes' })] }))
   assert.deepEqual(outboxBatch(stored, now).sids, [sid(5)])
 })
+
+test('an outbox that has to let its oldest conversations go keeps count of them, through storage and every report', () => {
+  let outbox = readOutbox(null)
+  assert.equal(outbox.dropped, 0)
+  for (let n = 1; n <= MAX_OUTBOX_ITEMS + 5; n += 1) outbox = outboxPut(outbox, entry(n))
+  assert.equal(outbox.dropped, 5, 'conversations were let go without a word')
+  const stored = readOutbox(JSON.stringify(outbox))
+  assert.equal(stored.dropped, 5)
+  assert.equal(readOutbox(JSON.stringify({ ...outbox, dropped: -3 })).dropped, 0)
+  const batch = outboxBatch(stored)
+  assert.equal(outboxSettle(stored, batch, { accepted: batch.sids }).dropped, 5)
+  assert.equal(outboxSummary(stored, null, '2026-10').dropped, 5)
+})
+
+test('the usage tool never says $0 for a month it does not fully know, and says what is waiting or never kept', () => {
+  const answer = (spend) => voiceToolAnswer('usage', {}, view({ usage: { status: 'none' } }, { spend })).voiceSpend
+  const known = answer({ usd: 1.23, conversations: 14, incomplete: [], waitingOnDevice: 2, droppedOnDevice: 0, keptByBoard: true })
+  assert.deepEqual(known, { estimate: true, complete: true, thisMonthUsd: 1.23, conversations: 14, waitingOnDevice: 2, droppedOnDevice: 0, keptByBoard: true })
+  const unpriced = answer({ usd: 0, conversations: 2, incomplete: ['gpt-realtime-2.1-mini audio out'], waitingOnDevice: 0, droppedOnDevice: 0, keptByBoard: true })
+  assert.equal(unpriced.complete, false)
+  assert.equal(unpriced.thisMonthUsd, 'unknown', 'a month with unpriced talk was read out as $0')
+  const dropped = answer({ usd: 0.5, conversations: 3, incomplete: [], waitingOnDevice: 0, droppedOnDevice: 4, keptByBoard: true })
+  assert.equal(dropped.complete, false)
+  assert.equal(dropped.thisMonthUsdAtLeast, 0.5)
+  assert.equal(dropped.thisMonthUsd, undefined)
+  assert.equal(answer({ usd: 0.5, conversations: 3, incomplete: [], waitingOnDevice: 3, droppedOnDevice: 0, keptByBoard: false }).keptByBoard, false)
+  assert.equal(answer(null), 'unknown')
+})

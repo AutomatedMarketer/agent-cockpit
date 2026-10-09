@@ -69,8 +69,10 @@ test('every state of the meter has its own words, and none of them is a zero it 
     /Incomplete: no price yet for gpt-realtime-2.1-mini audio out, so the real cost is higher\./)
   assert.match(text(await cardWith(meterOn({ thisMonth: { fishBytes: { 's2.1-pro-free': 8200 } } }))), /Fish: about 8,200 characters \(free model, \$0\)/)
   assert.match(text(await cardWith({ store: true, damaged: true, why: 'The voice meter\'s file is damaged: delete it.', prices: PRICES })), /The voice meter's file is damaged: delete it\./)
+  // Waiting conversations are in the total, and said: 14 recorded at $1.23, and 3 here at $0.024 each.
   const waiting = text(await cardWith(meterOn(), { [OUTBOX]: outboxOf(entry(1), entry(2), entry(3)) }))
-  assert.match(waiting, /3 conversations on this device not recorded yet\./)
+  assert.match(waiting, /This month ≈ \$1\.30 · 17 conversations · last one ≈ \$0\.08/)
+  assert.match(waiting, /Including 3 on this device not recorded yet\./)
   const device = text(await cardWith({ store: false, why: 'No store.', prices: PRICES }, { [OUTBOX]: outboxOf(entry(1), entry(2)) }))
   assert.match(device, /This month ≈ \$0\.05 · 2 conversations/)
   assert.match(device, /This device only — connect a picture store to keep one total across your devices\./)
@@ -150,7 +152,9 @@ test('when the board opens with conversations waiting, it reports them once, and
   assert.deepEqual(Object.keys(posts[0].reports[0]).sort(), ['counts', 'ticket'], 'a report carries more than its ticket and counts')
   const left = JSON.parse(page.storage.getItem(OUTBOX)).items.map((item) => item.sid)
   assert.deepEqual(left, [sid(2)], 'the outbox kept something counted, or lost something kept')
-  assert.equal(page.exposed.voiceSpendNow().conversations, 15, 'the card did not take the meter the report came back with')
+  // 15 the board now has, from the meter the report came back with, and the 1 still waiting here.
+  assert.equal(page.exposed.voiceSpendNow().conversations, 16, 'the card did not take the meter the report came back with')
+  assert.equal(page.exposed.voiceSpendNow().waitingOnDevice, 1)
 })
 
 test('with nothing waiting, opening the board sends no report at all', async () => {
@@ -192,7 +196,7 @@ test('with voice off, the meter is never asked and nothing is reported', async (
 test('the usage tool hears this month\'s spend: the board\'s total, or this device\'s with no store', async () => {
   const { page } = board()
   await flush(10)
-  assert.deepEqual(page.exposed.voiceSpendNow(), { usd: 1.23, conversations: 14, incomplete: [] })
+  assert.deepEqual(page.exposed.voiceSpendNow(), { usd: 1.23, conversations: 14, incomplete: [], waitingOnDevice: 0, droppedOnDevice: 0, keptByBoard: true })
   const { page: device } = board({ meter: { store: false, prices: PRICES }, storage: { [OUTBOX]: outboxOf(entry(1)) } })
   await flush(10)
   assert.equal(device.exposed.voiceSpendNow().conversations, 1)
@@ -231,4 +235,38 @@ test('a call that ends while a report is still out is reported once that one set
   await flush(10)
   assert.equal(posts.length, 2)
   assert.deepEqual(JSON.parse(page.storage.getItem(OUTBOX)).items, [])
+})
+
+test('conversations still waiting on this device are in what the usage tool hears', async () => {
+  const { page } = board({ storage: { [OUTBOX]: outboxOf(entry(1), entry(2, { open: true })) }, report: () => new Promise(() => {}) })
+  await flush(10)
+  const spend = page.exposed.voiceSpendNow()
+  assert.equal(spend.conversations, 16)
+  assert.equal(spend.waitingOnDevice, 2)
+  assert.equal(Math.round(spend.usd * 1000), 1278)
+})
+
+test('when the picture caps leave the meter no writes at all, the card and the tool say the board never keeps voice', async () => {
+  const meter = meterOn({ top: { writesPerDay: 0, writesLeftToday: 0 }, thisMonth: { conversations: 0, usd: 0 }, last: null })
+  const { page } = board({ meter, storage: { [OUTBOX]: outboxOf(entry(1)) }, report: () => new Promise(() => {}) })
+  await flush(10)
+  const card = text(page.exposed.voiceSpendInnerHtml())
+  assert.match(card, /The picture caps use every store write the board has a day, so voice is only counted on each device, never kept by the board\./)
+  assert.match(card, /WRITE_DAILY_CAP/)
+  assert.equal(page.exposed.voiceSpendNow().keptByBoard, false)
+})
+
+test('conversations the device had to let go are said, and the total is then only "at least"', async () => {
+  const stored = JSON.stringify({ version: 1, items: [entry(1)], dropped: 3 })
+  const card = text(await cardWith(meterOn(), { [OUTBOX]: stored }))
+  assert.match(card, /3 older conversations on this device were let go before the board could record them, so the real total is higher\./)
+  assert.match(card, /This month at least \$1\.25 · 15 conversations/)
+  assert.doesNotMatch(card, /This month ≈/)
+})
+
+test('a month with talk it could not price never shows as $0', async () => {
+  const card = text(await cardWith(meterOn({ thisMonth: { usd: 0, conversations: 2, incomplete: ['gpt-realtime-2.1-mini audio out'] }, last: { usd: 0, incomplete: ['gpt-realtime-2.1-mini audio out'] } })))
+  assert.doesNotMatch(card, /\$0\.00/, 'an unpriced month was shown as costing nothing')
+  assert.match(card, /This month: cost not fully known · 2 conversations/)
+  assert.match(card, /last one not fully known/)
 })

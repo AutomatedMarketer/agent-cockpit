@@ -458,7 +458,8 @@ export function addFishBytes(tally, text) {
 // --- the outbox: conversations on this device not yet recorded by the board ---
 // Saved after every reply, so a closed tab loses nothing; sent at hang-up and when the board opens.
 // One entry per conversation, updated as it goes. Kept to the newest MAX_OUTBOX_ITEMS, so a board
-// with no store - where the outbox IS the meter - cannot grow it for ever.
+// with no store - where the outbox IS the meter - cannot grow it for ever; the ones let go are
+// counted in `dropped`, so the card can say the total is short rather than quietly being so.
 export const MAX_OUTBOX_ITEMS = 200
 const OUTBOX_BATCH = 20
 // A conversation still going is marked open, and is never reported: the board would count its counts
@@ -499,7 +500,8 @@ export function readOutbox(stored) {
     parsed = null
   }
   const items = Array.isArray(parsed?.items) ? parsed.items.map(outboxItem).filter(Boolean) : []
-  return { version: 1, items: items.slice(-MAX_OUTBOX_ITEMS) }
+  const kept = items.slice(-MAX_OUTBOX_ITEMS)
+  return { version: 1, items: kept, dropped: wholeCount(parsed?.dropped) + (items.length - kept.length) }
 }
 
 export function outboxPut(outbox, entry) {
@@ -509,7 +511,8 @@ export function outboxPut(outbox, entry) {
   const at = outbox.items.findIndex((kept) => kept.sid === item.sid)
   if (at >= 0) items.splice(at, 0, item)
   else items.push(item)
-  return { version: 1, items: items.slice(-MAX_OUTBOX_ITEMS) }
+  const kept = items.slice(-MAX_OUTBOX_ITEMS)
+  return { version: 1, items: kept, dropped: wholeCount(outbox.dropped) + (items.length - kept.length) }
 }
 
 // What a ticket says - its session, when it started, which model and which mouth - read, not checked:
@@ -549,13 +552,13 @@ export function outboxSettle(outbox, batch, answer) {
   for (const one of refused) {
     if (Number.isInteger(one?.at) && one.at >= 0 && one.at < batch.sids.length) gone.add(batch.sids[one.at])
   }
-  return { version: 1, items: outbox.items.filter((item) => !gone.has(item.sid)) }
+  return { version: 1, items: outbox.items.filter((item) => !gone.has(item.sid)), dropped: wholeCount(outbox.dropped) }
 }
 
 // This device's own total for one month, priced by the table the server sent - what the meter shows
 // with no store, and the "not recorded yet" count with one.
 export function outboxSummary(outbox, prices, month) {
-  const summary = { conversations: 0, usd: 0, incomplete: [], fishBytes: {}, waiting: outbox.items.length }
+  const summary = { conversations: 0, usd: 0, incomplete: [], fishBytes: {}, waiting: outbox.items.length, dropped: wholeCount(outbox.dropped) }
   if (!prices) summary.incomplete.push('no price table yet')
   let micros = 0
   for (const item of outbox.items) {
@@ -645,10 +648,26 @@ function taskBoard({ data }) {
   }
 }
 
+// This month's voice spend as the model may say it. A month it does not fully know - a price it has
+// no source for, or conversations a device let go - is never a plain number: "at least" when there
+// is one, "unknown" when it would be $0.
+function voiceSpendSaid(spend) {
+  if (!spend || typeof spend.usd !== 'number') return 'unknown'
+  const complete = !(Array.isArray(spend.incomplete) && spend.incomplete.length) && !wholeCount(spend.droppedOnDevice)
+  const usd = Math.round(spend.usd * 100) / 100
+  return {
+    estimate: true,
+    complete,
+    ...(complete ? { thisMonthUsd: usd } : usd > 0 ? { thisMonthUsdAtLeast: usd } : { thisMonthUsd: 'unknown' }),
+    conversations: wholeCount(spend.conversations),
+    waitingOnDevice: wholeCount(spend.waitingOnDevice),
+    droppedOnDevice: wholeCount(spend.droppedOnDevice),
+    keptByBoard: spend.keptByBoard !== false
+  }
+}
+
 function usageNow({ data, spend }) {
-  const voiceSpend = spend && typeof spend.usd === 'number'
-    ? { estimate: true, thisMonthUsd: spend.usd, conversations: wholeCount(spend.conversations), incomplete: Array.isArray(spend.incomplete) && spend.incomplete.length > 0 }
-    : 'unknown'
+  const voiceSpend = voiceSpendSaid(spend)
   const usage = data?.usage
   if (!usage || usage.status !== 'ok') return { status: 'unknown', voiceSpend }
   const services = [['claude', 'Claude'], ['codex', 'Codex']]
