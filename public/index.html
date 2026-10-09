@@ -5505,8 +5505,8 @@ const voiceUi = {
 // A tap on the orb: ends a live call, or starts one. A browser that cannot listen is told why.
 function voiceTap(deps = voiceDeps()) {
   if (voiceSession) {
-    // In speakers mode a tap while it talks interrupts; otherwise it ends the call, as always.
-    if (voiceSession.interrupt?.()) return
+    // In speakers mode a tap while it talks - or just after - interrupts; otherwise it ends the call.
+    if (voiceSession.handlesTap ? voiceSession.handlesTap() : voiceSession.interrupt?.()) return
     voiceSession.stop('stopped')
     return
   }
@@ -5542,14 +5542,25 @@ document.addEventListener('click', (event) => {
   else if (target?.closest?.('#voice-stop')) voiceStopPressed()
   else if (target?.closest?.('#voice-headphones')) toggleHeadphones()
 })
+// Space on the orb itself: a browser focuses the orb when it is clicked, and would then press it with
+// Space - a tap, which can end the call. Space is the interrupt and never ends a call, so on the orb
+// the browser's press is stopped, both on the way down and up.
+const voiceOrbIn = (target) => Boolean(target?.closest?.('#voice-orb'))
 document.addEventListener('keydown', (event) => {
   if (!voiceSession) return
-  // Esc interrupts a reply in speakers mode, and otherwise ends the call. Space only interrupts.
+  // Esc interrupts a reply in speakers mode (or just after one), and otherwise ends the call.
+  // Space only ever interrupts.
   if (event?.key === 'Escape') {
-    if (!voiceSession.interrupt?.()) voiceSession.stop('stopped')
+    if (!(voiceSession.handlesTap ? voiceSession.handlesTap() : voiceSession.interrupt?.())) voiceSession.stop('stopped')
+  } else if (event?.key === ' ' && voiceOrbIn(event.target)) {
+    event.preventDefault?.()
+    voiceSession.interrupt?.()
   } else if (event?.key === ' ' && !voiceTypingIn(event.target)) {
     if (voiceSession.interrupt?.()) event.preventDefault?.()
   }
+})
+document.addEventListener('keyup', (event) => {
+  if (voiceSession && event?.key === ' ' && voiceOrbIn(event.target)) event.preventDefault?.()
 })
 // A call never carries on where nobody can see it: a hidden tab, or one being closed, ends it.
 document.addEventListener('visibilitychange', () => {
@@ -5603,6 +5614,15 @@ const ECHO_MOST_WORDS = 2
 // OpenAI meanwhile - and the orb, Esc or Space interrupts instead of talking over it. Phones keep
 // talk-over: their echo cancelling is built for exactly this, and barge-in there stays instant.
 const VOICE_MIC_TAIL_MS = 300
+// After a reply ends (or is interrupted), a tap on the orb or Esc is still taken as an interrupt for
+// this long, not as a hang-up: people react in about 400 ms, so "stop" pressed as the reply finishes
+// must not end the call. Only Stop, or the orb or Esc after this, ends it. Space never does.
+const VOICE_TAP_GRACE_MS = 1500
+// The longest the microphone rests with no new sound before it comes back by itself. A reply is at
+// most 300 output tokens - about 15 s of OpenAI's voice at ~20 audio tokens a second - and a Fish
+// piece is a sentence, and every new sound starts this again; 30 s without one means the event that
+// ends the sound was lost, and the person must not be left unable to talk.
+const VOICE_MIC_MAX_REST_MS = 30_000
 const VOICE_SPEAKING_TAP = 'Speaking - tap the orb or press Space to interrupt'
 // How long a reply held for the person's turn waits for that turn's own response before it is asked
 // for anyway, so a turn that never gets one cannot leave the tool outputs unanswered.
@@ -5634,10 +5654,17 @@ function openVoice(deps, ui) {
     mouth: 'openai', idleMinutes: 2, captions: true, responding: false, calls: new Map(), said: '',
     userSpeaking: false, replyOwed: false, replyRetries: 0, replyTimer: null,
     echoGuard: false, soundStartedAt: null, suspectTurn: false, echoRetryLeft: 1,
-    speakersMode: false, micMuted: false, soundPlaying: false, tailTimer: null,
+    speakersMode: false, micMuted: false, soundPlaying: false, tailTimer: null, restTimer: null,
+    soundEndedAt: null, listenPending: null,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
   const show = (state, words) => {
+    // "Listening" only when the microphone is on: while it rests, it is said when it comes back.
+    if (state === 'listening' && session.micMuted && !session.stopped) {
+      session.listenPending = { words }
+      return
+    }
+    session.listenPending = null
     session.state = state
     ui.show(state, { words: words ?? (state === 'speaking' && session.speakersMode ? VOICE_SPEAKING_TAP : undefined), live: !session.stopped })
   }
@@ -5661,20 +5688,36 @@ function openVoice(deps, ui) {
   }
   function wakeMic() {
     deps.clearTimeout(session.tailTimer)
+    deps.clearTimeout(session.restTimer)
     session.tailTimer = null
+    session.restTimer = null
     if (!session.micMuted) return
     session.micMuted = false
     for (const track of micTracks()) track.enabled = true
     armIdle()
+    // Listening, now that it is: what was put off while it rested, or a reply's end that never came.
+    if (session.listenPending || (session.state === 'speaking' && !session.soundPlaying)) show('listening', session.listenPending?.words)
   }
   // A reply's sound has started (OpenAI's voice, or Fish's first piece) or ended.
   session.soundStarted = () => {
     session.soundStartedAt ??= deps.now()
     session.soundPlaying = true
-    if (session.speakersMode) restMic()
+    if (!session.speakersMode) return
+    restMic()
+    // Every new sound starts the safety wait again; past it, the microphone comes back by itself.
+    deps.clearTimeout(session.restTimer)
+    session.restTimer = deps.setTimeout(() => {
+      session.restTimer = null
+      if (session.stopped) return
+      // The sound's end was never heard: take it as ended.
+      session.soundPlaying = false
+      session.soundStartedAt = null
+      wakeMic()
+    }, VOICE_MIC_MAX_REST_MS)
   }
   session.soundEnded = ({ finished }) => {
     session.soundStartedAt = null
+    session.soundEndedAt = deps.now()
     session.soundPlaying = false
     if (session.micMuted) {
       // The tail: the last of the sound is still in the room for a moment.
@@ -5747,6 +5790,7 @@ function openVoice(deps, ui) {
     deps.clearTimeout(session.timer)
     deps.clearTimeout(session.replyTimer)
     deps.clearTimeout(session.tailTimer)
+    deps.clearTimeout(session.restTimer)
     deps.fish?.stop(session)
     try { session.channel?.close() } catch (error) { /* already closed */ }
     try { session.pc?.close() } catch (error) { /* already closed */ }
@@ -6026,6 +6070,7 @@ function openVoice(deps, ui) {
     else if (session.soundPlaying) send({ type: 'output_audio_buffer.clear' })
     session.soundPlaying = false
     session.soundStartedAt = null
+    session.soundEndedAt = deps.now()
     wakeMic()
     armIdle()
     show('listening')
@@ -6038,8 +6083,16 @@ function openVoice(deps, ui) {
     if (!session.speakersMode) wakeMic()
   }
 
+  // What a tap on the orb, or Esc, means in speakers mode: an interrupt while a reply plays, and for
+  // VOICE_TAP_GRACE_MS after one ends - a late "stop" does nothing rather than hang up. True when the
+  // tap is taken; false means it ends the call, as it always has.
+  function handlesTap() {
+    if (interrupt()) return true
+    return session.speakersMode && session.soundEndedAt !== null && deps.now() - session.soundEndedAt < VOICE_TAP_GRACE_MS
+  }
+
   connect().catch(fail)
-  return { stop: (reason) => end(reason), interrupt, setSpeakersMode, session }
+  return { stop: (reason) => end(reason), interrupt, handlesTap, setSpeakersMode, session }
 }
 
 /* ---------- Talk to the board: Fish's voice ----------

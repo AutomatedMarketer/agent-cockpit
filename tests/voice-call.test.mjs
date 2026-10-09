@@ -702,3 +702,79 @@ test('switching to headphones mid-reply lets the microphone listen at once', asy
   browser.emit({ type: 'output_audio_buffer.started' })
   assert.deepEqual(mic(browser), [true], 'headphones mode still rested the microphone')
 })
+
+test('for 1.5 s after a reply ends, a tap is taken as a late interrupt - never a hang-up', async () => {
+  const browser = await speakers()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  endTail(browser)
+  browser.clock.now += 400 // a person reacting
+  assert.equal(browser.call.handlesTap(), true, 'a tap 400 ms after the reply ended would hang up')
+  assert.deepEqual(browser.state.channel.sent, [], 'a late tap sent something')
+  assert.deepEqual(browser.state.ended, [])
+  browser.clock.now += 1200
+  assert.equal(browser.call.handlesTap(), false, 'long after the reply, the orb no longer ends the call')
+  // An interrupt starts the same window, so a double tap does not hang up either.
+  const twice = await speakers()
+  twice.emit({ type: 'response.created' })
+  twice.emit({ type: 'output_audio_buffer.started' })
+  assert.equal(twice.call.handlesTap(), true)
+  twice.clock.now += 300
+  assert.equal(twice.call.handlesTap(), true, 'the second tap of a double tap hung up')
+})
+
+test('"Listening" shows only when the microphone is on: not during the tail, and as soon as it comes back', async () => {
+  const browser = await speakers()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  assert.notEqual(browser.lastState(), 'listening', 'it said Listening with the microphone off')
+  endTail(browser)
+  assert.equal(browser.lastState(), 'listening')
+})
+
+test('a microphone rested 30 s with no new sound comes back on by itself, and the idle wait with it', async () => {
+  // A reply is at most 300 output tokens - about 15 s of OpenAI's voice - and a Fish piece is a
+  // sentence; 30 s with no new sound means the end of the sound was lost, not that it is still talking.
+  const browser = await speakers()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  const safety = () => [...browser.timers.entries()].find(([, timer]) => timer.ms === 30_000)
+  assert.ok(safety(), 'nothing brings a stuck microphone back')
+  const [id, timer] = safety()
+  browser.timers.delete(id)
+  timer.fn()
+  assert.deepEqual(mic(browser), [true])
+  assert.equal(idleWaits(browser), 1)
+  assert.equal(browser.lastState(), 'listening')
+  // More sound while rested starts the 30 s again.
+  const longer = await speakers()
+  longer.emit({ type: 'output_audio_buffer.started' })
+  const first = [...longer.timers.entries()].find(([, entry]) => entry.ms === 30_000)[0]
+  longer.emit({ type: 'output_audio_buffer.started' })
+  assert.ok(!longer.timers.has(first), 'the first safety wait was left running')
+})
+
+test('hanging up during the tail leaves no timer behind and the microphone off', async () => {
+  const browser = await speakers()
+  browser.emit({ type: 'output_audio_buffer.started' })
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  assert.ok(tailWait(browser))
+  browser.call.stop('stopped')
+  assert.equal(browser.timers.size, 0, 'a timer outlived the call')
+  assert.ok(browser.tracks.every((track) => track.stopped))
+})
+
+test('a double tap - an interrupt, then a second tap as the cancelled reply finishes - does not hang up', async () => {
+  const browser = await speakers()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.equal(browser.call.handlesTap(), true)
+  browser.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [] } })
+  browser.clock.now += 300
+  assert.equal(browser.call.handlesTap(), true, 'the second tap of a double tap hung up')
+  assert.deepEqual(browser.state.ended, [])
+})

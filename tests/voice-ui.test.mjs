@@ -388,3 +388,29 @@ test('every class the computer\'s sheet adds is one the stylesheet styles', asyn
     assert.ok(rules.some((rule) => new RegExp(`\\.${name}(?![\\w-])`).test(rule.selector)), `class "${name}" has no rule`)
   }
 })
+
+test('Space on the focused orb never ends the call: it interrupts a reply, and otherwise does nothing', async () => {
+  const session = (replying) => ({ stopped: [], interrupted: 0, interrupt() { if (replying) this.interrupted += 1; return replying }, handlesTap() { return this.interrupt() }, stop(reason) { this.stopped.push(reason) } })
+  const fire = (page, type, event) => { for (const listener of page.documentListeners.filter((entry) => entry.type === type)) listener.handler(event) }
+  const orb = { tagName: 'BUTTON', closest: (selector) => (selector === '#voice-orb' ? orb : null) }
+  for (const replying of [true, false]) {
+    const one = session(replying)
+    const page = await boot(brandAnswer({ voice: VOICE_ON }), { after: 'voiceSession = given.session', given: { session: one } })
+    let prevented = 0
+    const press = { key: ' ', target: orb, preventDefault: () => { prevented += 1 } }
+    fire(page, 'keydown', press)
+    fire(page, 'keyup', press)
+    assert.equal(prevented, 2, 'the browser was left to press the orb with Space')
+    assert.equal(one.interrupted, replying ? 1 : 0)
+    assert.deepEqual(one.stopped, [], 'Space on the orb ended the call')
+  }
+})
+
+test('a tap or Esc the call takes as a late interrupt does not end it', async () => {
+  const late = { stopped: [], handlesTap: () => true, interrupt: () => false, stop(reason) { this.stopped.push(reason) } }
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { after: 'voiceSession = given.session', given: { session: late } })
+  const orb = { closest: (selector) => (selector === '#voice-orb' ? orb : null) }
+  for (const listener of page.documentListeners.filter((entry) => entry.type === 'click')) listener.handler({ target: orb })
+  for (const listener of page.documentListeners.filter((entry) => entry.type === 'keydown')) listener.handler({ key: 'Escape' })
+  assert.deepEqual(late.stopped, [])
+})
