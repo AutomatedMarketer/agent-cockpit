@@ -179,14 +179,13 @@ test('Stop closes everything it opened, once, and says it ended', async () => {
   assert.deepEqual(browser.state.ended, ['stopped'], 'a second Stop ended it twice')
 })
 
-test('no talking for the idle minutes hangs up - and talking, or the assistant talking, starts the wait again', async () => {
+test('no talking for the idle minutes hangs up - the person talking, or a reply finishing, starts the wait again', async () => {
   const browser = await connected({ answer: { idleMinutes: 3 } })
   const waits = () => [...browser.timers.values()].map((timer) => timer.ms)
   const waiting = () => [...browser.timers.keys()]
   assert.deepEqual(waits(), [3 * 60_000])
   for (const event of [
     { type: 'input_audio_buffer.speech_started' },
-    { type: 'response.output_audio_transcript.delta', delta: 'Still talking' },
     { type: 'output_audio_buffer.stopped' }
   ]) {
     const before = waiting()
@@ -511,4 +510,78 @@ test('the guard leaves real talking alone: three words or more, a turn after 1.5
     assert.deepEqual(browser.state.channel.sent, [], `${what}: the person was taken for the assistant`)
     assert.ok(browser.ui.heard.includes(transcript), `${what}: what the person said was hidden`)
   }
+})
+
+test('five echoes in a row: the cut-off reply is asked for again once, every echo is deleted, and none restarts the idle wait', async () => {
+  const browser = await guarded()
+  const idleWait = () => [...browser.timers.entries()].filter(([, timer]) => timer.ms === 2 * 60_000).map(([id]) => id)
+  // A real question first: nothing is playing, so it is the person.
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_q', transcript: 'What is due today?', usage: TRANSCRIPTION_USAGE })
+  const waiting = idleWait()
+  for (let echo = 1; echo <= 5; echo += 1) {
+    browser.emit({ type: 'response.created' })
+    browser.emit({ type: 'output_audio_buffer.started' })
+    browser.clock.now += 1200
+    browser.emit({ type: 'input_audio_buffer.speech_started' })
+    browser.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [] } })
+    browser.emit({ type: 'output_audio_buffer.cleared' })
+    browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+    browser.emit({ type: 'response.created' })
+    browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: `item_echo_${echo}`, transcript: 'It happened.', usage: TRANSCRIPTION_USAGE })
+    browser.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [] } })
+    browser.clock.now += 5000
+  }
+  const sent = browser.state.channel.sent
+  assert.equal(sent.filter((event) => event.type === 'response.create').length, 1, 'an echo was answered by asking for the reply again more than once')
+  assert.deepEqual(sent.filter((event) => event.type === 'conversation.item.delete').map((event) => event.item_id),
+    ['item_echo_1', 'item_echo_2', 'item_echo_3', 'item_echo_4', 'item_echo_5'])
+  assert.deepEqual(idleWait(), waiting, 'an echo restarted the idle hang-up')
+  // A real question again allows one more.
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_q2', transcript: 'And tomorrow?', usage: TRANSCRIPTION_USAGE })
+  assert.notDeepEqual(idleWait(), waiting, 'a real question did not restart the idle wait')
+  await heardItself(browser, 'It happened.')
+  browser.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [] } })
+  assert.equal(browser.state.channel.sent.filter((event) => event.type === 'response.create').length, 2)
+})
+
+test('the echo clock starts again with each new reply', async () => {
+  const browser = await guarded()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  browser.clock.now += 10_000
+  // A second reply, ten seconds later: an echo 1.2 s into IT is still an echo.
+  await heardItself(browser, 'It happened.')
+  assert.ok(browser.state.channel.sent.some((event) => event.type === 'conversation.item.delete'), 'the clock still counted from the first reply')
+})
+
+test('a word right after a short reply has finished is the person, not an echo', async () => {
+  const browser = await guarded()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  browser.clock.now += 800
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  browser.clock.now += 300
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_thanks', transcript: 'Thanks', usage: TRANSCRIPTION_USAGE })
+  assert.deepEqual(browser.state.channel.sent, [], '"Thanks" after the reply ended was taken for an echo')
+  assert.ok(browser.ui.heard.includes('Thanks'))
+})
+
+test('a turn early in a reply that turns out to be the person does restart the idle wait, once its words show it', async () => {
+  const browser = await guarded()
+  const idleWait = () => [...browser.timers.entries()].filter(([, timer]) => timer.ms === 2 * 60_000).map(([id]) => id)
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  browser.clock.now += 1000
+  const before = idleWait()
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  assert.deepEqual(idleWait(), before, 'a turn not yet known to be the person restarted the idle wait')
+  browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_real', transcript: 'Wait, which job?', usage: TRANSCRIPTION_USAGE })
+  assert.notDeepEqual(idleWait(), before, 'the person talking did not restart the idle wait')
 })

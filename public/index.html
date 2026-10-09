@@ -5542,9 +5542,12 @@ const VOICE_OUTBOX_STORE = 'agent-cockpit-voice-outbox'
 // fight.", "Adios." 1.3 to 1.5 s into replies, which cut them off and set it answering itself. A
 // turn that starts within this long of the reply's sound, and turns out to be under ECHO_MOST_WORDS
 // words, is taken for that: the response started for it is cancelled, the turn deleted so the model
-// never sees it, and the reply asked for again. Only with a mouse (a computer), and only when
-// VOICE_ECHO_GUARD is not off. Barge-in is untouched - still instant, on every device - so a real
-// short "stop" in that first second and a half is the one thing it can mistake.
+// never sees it, and the reply asked for again - once per real question, so an echo that keeps
+// coming cannot keep paying for replies. Echo turns never restart the idle hang-up. The clock starts
+// when a reply's sound starts (OpenAI's voice, or Fish's first piece) and stops when it ends. Only
+// with a mouse (a computer), and only when VOICE_ECHO_GUARD is not off. Barge-in is untouched - still
+// instant, on every device - so a real short "stop" in that first second and a half is the one thing
+// it can mistake, and the README says to use Stop or Esc there.
 const ECHO_WINDOW_MS = 1500
 const ECHO_MOST_WORDS = 2
 // How long a reply held for the person's turn waits for that turn's own response before it is asked
@@ -5576,7 +5579,7 @@ function openVoice(deps, ui) {
     state: 'connecting', stopped: false, turns: { current: 0 }, tally: emptyTally(), claims: null, ticket: '',
     mouth: 'openai', idleMinutes: 2, captions: true, responding: false, calls: new Map(), said: '',
     userSpeaking: false, replyOwed: false, replyRetries: 0, replyTimer: null,
-    echoGuard: false, soundStartedAt: null, suspectTurn: false,
+    echoGuard: false, soundStartedAt: null, suspectTurn: false, echoRetryLeft: 1,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
   const show = (state, words) => {
@@ -5584,6 +5587,7 @@ function openVoice(deps, ui) {
     ui.show(state, { words, live: !session.stopped })
   }
   session.show = show
+  session.armIdle = () => armIdle()
   // Fish speaks only for a Fish session; with OpenAI's voice it is never asked anything.
   const fish = () => (session.mouth === 'fish' ? deps.fish ?? null : null)
   show('connecting')
@@ -5710,8 +5714,11 @@ function openVoice(deps, ui) {
     if (session.responding) {
       send({ type: 'response.cancel' })
       send({ type: 'output_audio_buffer.clear' })
-      session.replyRetries = 1
-      session.replyOwed = true
+      if (session.echoRetryLeft > 0) {
+        session.echoRetryLeft = 0
+        session.replyRetries = 1
+        session.replyOwed = true
+      }
     }
     if (typeof itemId === 'string' && itemId) send({ type: 'conversation.item.delete', item_id: itemId })
   }
@@ -5733,17 +5740,18 @@ function openVoice(deps, ui) {
     switch (event.type) {
       case 'input_audio_buffer.speech_started':
         session.userSpeaking = true
-        // Early in the reply's sound: maybe its own voice. The words will say (the caption, below).
+        // Early in the reply's sound: maybe its own voice. The words will say (the caption, below),
+        // and until they do it does not count as the person talking for the idle hang-up.
         session.suspectTurn = session.echoGuard && session.soundStartedAt !== null &&
           deps.now() - session.soundStartedAt < ECHO_WINDOW_MS
-        armIdle()
+        if (!session.suspectTurn) armIdle()
         bargeIn()
         ui.you('')
         show('listening')
         break
       case 'input_audio_buffer.speech_stopped':
         session.userSpeaking = false
-        armIdle()
+        if (!session.suspectTurn) armIdle()
         if (session.replyOwed && !session.responding) waitThenAsk()
         show('thinking')
         break
@@ -5757,6 +5765,9 @@ function openVoice(deps, ui) {
           heardItself(event.item_id)
           break
         }
+        // A real turn: a new question, so an echo may cut its reply short once more.
+        session.echoRetryLeft = 1
+        if (suspect) armIdle()
         if (session.captions && typeof event.transcript === 'string') ui.you(event.transcript)
         break
       }
@@ -5773,7 +5784,6 @@ function openVoice(deps, ui) {
       case 'response.output_audio_transcript.delta':
       case 'response.output_text.delta':
         if (typeof event.delta !== 'string') break
-        armIdle()
         session.said += event.delta
         ui.said(session.said)
         if (event.type === 'response.output_text.delta') fish()?.replyText(session, event.delta)
@@ -5784,12 +5794,17 @@ function openVoice(deps, ui) {
         break
       case 'output_audio_buffer.started':
         session.soundStartedAt ??= deps.now()
-        armIdle()
         show('speaking')
         break
+      // A reply's sound has ended: the echo clock stops, and the idle wait counts from here.
       case 'output_audio_buffer.stopped':
+        session.soundStartedAt = null
         armIdle()
         if (!session.responding) show('listening')
+        break
+      // Cut short (talked over, or cancelled): the sound has ended, but nobody finished talking.
+      case 'output_audio_buffer.cleared':
+        session.soundStartedAt = null
         break
       case 'response.function_call_arguments.done':
         if (typeof event.call_id === 'string' && typeof event.name === 'string') session.calls.set(event.call_id, event)
@@ -5926,7 +5941,12 @@ function fishMouth(io) {
   // Listening again once the reply is finished, nothing is left to fetch and nothing is playing.
   const settle = (session) => {
     const fish = stateOf(session)
-    if (!session.stopped && fish.replyDone && !fish.pending && !fish.nodes.size && !session.responding) session.show('listening')
+    if (!session.stopped && fish.replyDone && !fish.pending && !fish.nodes.size && !session.responding) {
+      // The reply's sound has ended: the echo clock stops, and the idle wait counts from here.
+      session.soundStartedAt = null
+      session.armIdle?.()
+      session.show('listening')
+    }
   }
 
   function stopAll(session) {
@@ -5975,6 +5995,8 @@ function fishMouth(io) {
       node.start(at)
       fish.playhead = at + sound.duration
       fish.nodes.add(node)
+      // Fish's sound has started: the echo guard's clock, as output_audio_buffer.started is for OpenAI's.
+      session.soundStartedAt ??= io.now()
       session.show('speaking')
     }).finally(() => {
       fish.pending -= 1

@@ -170,3 +170,31 @@ test('a piece still being decoded when the person talks over it is dropped too',
   await flush()
   assert.deepEqual(browser.state.context.started, [], 'a piece decoded after the person talked over it was played')
 })
+
+test('with Fish, the echo clock starts when the first piece plays, and stops when the last one ends', async () => {
+  const echoing = await connected({ answer: { ticket: ticketFor('fish'), mouth: 'fish', echoGuard: true }, finePointer: true })
+  echoing.emit({ type: 'response.created' })
+  text(echoing, 'Three jobs are due today, and one has gone quiet. ')
+  echoing.speeches[0].answer()
+  await flush()
+  echoing.clock.now += 1200
+  echoing.emit({ type: 'input_audio_buffer.speech_started' })
+  echoing.emit({ type: 'input_audio_buffer.speech_stopped' })
+  echoing.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_echo', transcript: 'It happened.' })
+  assert.ok(echoing.state.channel.sent.some((event) => event.type === 'conversation.item.delete'), 'Fish\'s own voice was never taken for an echo')
+
+  const thanks = await connected({ answer: { ticket: ticketFor('fish'), mouth: 'fish', echoGuard: true }, finePointer: true })
+  thanks.emit({ type: 'response.created' })
+  text(thanks, 'Done.')
+  thanks.emit({ type: 'response.output_text.done' })
+  thanks.emit({ type: 'response.done', response: { usage: REPLY_USAGE } })
+  thanks.speeches[0].answer()
+  await flush()
+  thanks.clock.now += 700
+  thanks.state.context.started[0].onended()
+  thanks.clock.now += 300
+  thanks.emit({ type: 'input_audio_buffer.speech_started' })
+  thanks.emit({ type: 'input_audio_buffer.speech_stopped' })
+  thanks.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_thanks', transcript: 'Thanks' })
+  assert.ok(!thanks.state.channel.sent.some((event) => event.type === 'conversation.item.delete'), '"Thanks" after Fish finished was taken for an echo')
+})

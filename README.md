@@ -429,8 +429,8 @@ has no evidence for.
 | `OPENAI_REALTIME_MODEL` | The voice model: `gpt-realtime-2.1-mini` (the default) or `gpt-realtime-2.1`. Anything else turns voice off and says why | No |
 | `OPENAI_VOICE` | OpenAI's voice: `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin` (the default) or `cedar` | No |
 | `VOICE_IDLE_MINUTES` | Minutes with nobody talking before a call hangs up, 1 to 10. Default `2` | No |
-| `VOICE_CAPTIONS` | `off` to stop showing - and paying for - what it heard you say. On unless set | No |
-| `VOICE_ECHO_GUARD` | `off` to stop a computer ignoring a turn of one or two words that starts in the first 1.5 seconds of a reply - which is how its own voice through its speakers sounds to it. Phones never use it. On unless set | No |
+| `VOICE_CAPTIONS` | `off` to stop showing what it heard you say. It is still transcribed, and paid for, while `VOICE_ECHO_GUARD` is on, because the guard reads it. On unless set | No |
+| `VOICE_ECHO_GUARD` | On a computer, a turn of one or two words in the first 1.5 seconds of a reply is treated as the assistant's own voice coming back through the speakers: it is ignored and the reply resumes (once per question). So to stop it right at the start, use **Stop** or Esc rather than saying "stop". The guard reads a transcript of what it hears, so that is always on with it: about $0.002 to $0.003 a minute of your talking (gpt-4o-mini-transcribe: 600 audio tokens a minute at $1.25 a million, plus the words at $5 a million; OpenAI's own estimate is $0.003). Phones never use it. `off` to switch it off. On unless set | No |
 | `VOICE_VAD_THRESHOLD` | How loud a sound must be to count as you talking, `0.1` to `0.95`. Default `0.6` - a little above OpenAI's example, because a computer on speakers heard its own voice as you talking. Raise it if it keeps cutting itself off; lower it if it misses you | No |
 | `FISH_API_KEY` | Your Fish Audio key, for a voice you choose. Mark it sensitive | For Fish |
 | `FISH_VOICE_ID` | The 32 letters and numbers in the voice's address on fish.audio | For Fish |
@@ -472,7 +472,7 @@ Locally:
 npm test
 ```
 
-1256 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1262 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

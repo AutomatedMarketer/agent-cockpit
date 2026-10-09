@@ -161,11 +161,11 @@ test('the server hears the end of speech after 450 ms of quiet, and talking over
   })
 })
 
-test('replies are kept short, and captions ask for a transcript only when they are on', () => {
+test('replies are kept short, and a transcript is asked for only when captions or the echo guard need one', () => {
   const session = sessionFor(voiceConfig(ON), '')
   assert.equal(session.max_output_tokens, 300)
   assert.equal(session.audio.input.transcription.model, 'gpt-4o-mini-transcribe')
-  assert.equal(sessionFor(voiceConfig({ ...ON, VOICE_CAPTIONS: 'off' }), '').audio.input.transcription, undefined)
+  assert.equal(sessionFor(voiceConfig({ ...ON, VOICE_CAPTIONS: 'off', VOICE_ECHO_GUARD: 'off' }), '').audio.input.transcription, undefined)
 })
 
 test('the assistant\'s name is plain and capped; with none, or one the board would not keep, it is "your assistant"', () => {
@@ -319,4 +319,14 @@ test('VOICE_VAD_THRESHOLD sets how loud a sound must be to count as talking; 0.6
 test('the echo guard is on unless VOICE_ECHO_GUARD says off', () => {
   assert.equal(voiceConfig(ON).echoGuard, true)
   for (const off of ['off', 'false', '0', 'OFF']) assert.equal(voiceConfig({ ...ON, VOICE_ECHO_GUARD: off }).echoGuard, false, off)
+})
+
+test('with the echo guard on, the session always asks for a transcript of what it hears - captions or not', () => {
+  const transcription = (env) => sessionFor(voiceConfig({ ...ON, ...env }), '').audio.input.transcription
+  assert.deepEqual(transcription({ VOICE_CAPTIONS: 'off' }), { model: 'gpt-4o-mini-transcribe' })
+  assert.equal(transcription({ VOICE_CAPTIONS: 'off', VOICE_ECHO_GUARD: 'off' }), undefined)
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+  assert.match(readme, /treated as the assistant's own voice/i)
+  assert.match(readme, /use \*\*Stop\*\* or Esc/i)
+  assert.match(readme, /a minute of your talking/i)
 })

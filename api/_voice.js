@@ -253,7 +253,9 @@ export function sessionFor(config, name) {
           create_response: true,
           interrupt_response: true
         },
-        ...(config.captions ? { transcription: { model: TRANSCRIBE_MODEL } } : {})
+        // The echo guard reads the transcript of each turn, so it is asked for whenever the guard is
+        // on, captions or not; the page only shows it when captions are on.
+        ...(config.captions || config.echoGuard ? { transcription: { model: TRANSCRIBE_MODEL } } : {})
       },
       ...(fish ? {} : { output: { voice: config.voice } })
     }
