@@ -5312,12 +5312,15 @@ function voiceToolAnswer(name, args, view) {
 }
 
 // --- the owner's yes ---
-// THE hook every later action goes through (voice orders, Phase 11): only a real tap by the person -
-// a click the browser itself marks as trusted - says yes. Never the model's words, a tool's result, a
-// page or an email the team read, or a click a script made. The owner's own spoken "yes" will come
-// through here too, from the transcript of THEIR audio only, and is not accepted yet.
-function confirmsYes(signal) {
-  return Boolean(signal) && typeof signal === 'object' && signal.kind === 'tap' && signal.trusted === true
+// THE hook every later action goes through (voice orders, Phase 11). Only the person's own click on
+// the card, or Enter or Space on it, says yes: a real Event that the browser itself marks isTrusted.
+// Never the model's words, a tool's result, a page or an email the team read, a click a script made
+// (isTrusted is false on those), or an object merely shaped like an event. The owner's own spoken
+// "yes" will come through here too, from the transcript of THEIR audio only, and is not accepted yet.
+function confirmsYes(event) {
+  if (typeof Event !== 'function' || !(event instanceof Event) || event.isTrusted !== true) return false
+  if (event.type === 'click') return true
+  return event.type === 'keydown' && (event.key === 'Enter' || event.key === ' ')
 }
 
 // voice-page:end
