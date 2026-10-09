@@ -108,3 +108,10 @@ test('a missing file is a 404 with a plain message', async () => {
   const response = await call({ path: 'wiki/missing.md' })
   assert.equal(response.statusCode, 404)
 })
+
+test('a file is never kept by a shared cache, because it sits behind the view key', async () => {
+  // A CDN cache keys on the URL, not the x-view-key header: a shared copy made for the owner
+  // was served to anyone without a key for up to six minutes (found live 2026-10-09).
+  const response = await call({ path: 'wiki/INDEX.md' }, { 'wiki/INDEX.md': '# Index\n' })
+  assert.equal(response.headers['Cache-Control'], 'private, no-store')
+})

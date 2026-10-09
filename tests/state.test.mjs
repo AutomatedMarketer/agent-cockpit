@@ -1424,3 +1424,11 @@ test('a Hermes file the tree says is over 64 KB is not used, and only five are f
   assert.equal(many.hermes.skipped, 1)
   assert.equal(many.hermes.computers.length, 3)
 })
+
+test('the board data is never kept by a shared cache, because it sits behind the view key', async () => {
+  // A CDN cache keys on the URL, not the x-view-key header: a shared copy made for the owner
+  // was served to anyone without a key for up to six minutes (found live 2026-10-09).
+  const response = await run()
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.headers['Cache-Control'], 'private, no-store')
+})

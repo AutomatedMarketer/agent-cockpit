@@ -55,6 +55,8 @@ export default async function handler(request, response) {
   }
 
   const content = (await upstream.text()).slice(0, MAX_BYTES)
-  response.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
+  // Never a shared cache: a CDN keys on the URL, not the view key, so a copy made for the owner
+  // would be served to anyone without one.
+  response.setHeader('Cache-Control', 'private, no-store')
   response.status(200).json({ path, content })
 }

@@ -2194,11 +2194,10 @@ export default async function handler(request, response) {
     const hero = shapeHero(tiles, ledger)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, connections, verdicts: verdictPaths.length, onboarding, now })
 
-    // A CDN cache in front of a board that reads GitHub. `generatedAt` below is stamped from the
-    // `now` captured at the top of this handler, so it is baked into the body BEFORE the cache
-    // sees it: somebody served a stale copy reads a truthful "N min ago" rather than a fresh-
-    // looking timestamp on old data. The staleness is disclosed, which is what makes it fine.
-    response.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
+    // Never a shared cache: this answer sits behind the view key, and a CDN keys its copy on the
+    // URL, not the x-view-key header. A shared copy made for the owner was served to anyone
+    // without a key for up to six minutes (found live 2026-10-09).
+    response.setHeader('Cache-Control', 'private, no-store')
     response.status(200).json({
       repo: { owner, repo, branch, url: `https://github.com/${owner}/${repo}` },
       agents: agents.sort((a, b) => a.slug.localeCompare(b.slug)),
