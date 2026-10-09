@@ -337,6 +337,129 @@ export async function refuseIfSpent(pictures, charge) {
   charge(settings)
 }
 
+// --- the voice spend meter's file ----------------------------------------------------------------
+// The voice assistant has no cap (the owner's choice); it has a meter instead. The page adds up
+// OpenAI's own token counts for each conversation and reports them once, at hang-up; the server
+// prices them and keeps the totals here - its OWN file, never settings.json, so a meter save never
+// fights a picture save for the same file, and a meter that fails never blocks a picture change.
+//
+// It spends from the same monthly allowance as the pictures, so it is held to what the picture caps
+// leave over: ADVANCED_OPS_PER_DAY less the most the caps can spend, 5 writes a day at the defaults
+// (55 - (2 x 20 + 10)). Counted inside this file, by the save that uses it, so counting costs no
+// extra operation. When the day's are used up a report stays in the device's outbox and rides along
+// with the next accepted one - one write carries up to 20 conversations - so nothing is lost, only
+// recorded later. The picture caps are not touched. As with settings.json, a save that collides
+// with another instance's is tried once more, and that extra put is not counted (see THE BUDGET).
+
+export const METER_PATH = `${ROOT}/voice-meter.json`
+// Thirteen months, so this month can always be set beside the same month last year.
+const METER_MONTHS = 13
+// The session ids already counted in a month, so a report sent twice is counted once. A report is
+// good for 35 days, so a few hundred a month is far more than one board's conversations.
+const METER_SIDS_PER_MONTH = 500
+const METER_MAX_INCOMPLETE = 20
+const METER_MAX_FISH_MODELS = 4
+// 13 months of 500 ids is about 230 KB; the rest is small.
+const METER_MAX_BYTES = 512 * 1024
+
+const METER_DAMAGED =
+  'The voice meter\'s file in the picture store is damaged or too big, so nothing was counted: to ' +
+  'start the meter again, delete agent-cockpit/voice-meter.json in the store (Vercel, Storage).'
+const METER_SPENT =
+  'The voice meter has used the store writes it may have today, so this conversation is kept on ' +
+  'this device and recorded with the next one.'
+
+const MONTH_KEY = /^\d{4}-\d{2}$/
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/
+const METER_SID = /^[0-9a-f]{32}$/
+const METER_LABEL = /^[\x20-\x7e]{1,80}$/
+const METER_MODEL = /^[a-z0-9][a-z0-9.-]{0,31}$/
+
+export function emptyMeter() {
+  return { version: 1, day: '', writes: 0, months: {}, last: null }
+}
+
+const emptyMeterMonth = () => ({ conversations: 0, micros: 0, incomplete: [], fishBytes: {}, sids: [] })
+const uniqueLabels = (list) => [...new Set((Array.isArray(list) ? list : []).filter((label) => typeof label === 'string' && METER_LABEL.test(label)))]
+
+function normaliseMeterMonth(raw) {
+  const month = emptyMeterMonth()
+  if (!plainObject(raw)) return month
+  month.conversations = count(raw.conversations)
+  month.micros = count(raw.micros)
+  month.incomplete = uniqueLabels(raw.incomplete).slice(0, METER_MAX_INCOMPLETE)
+  for (const [model, bytes] of Object.entries(plainObject(raw.fishBytes) ? raw.fishBytes : {})) {
+    if (Object.keys(month.fishBytes).length >= METER_MAX_FISH_MODELS) break
+    if (METER_MODEL.test(model) && count(bytes) > 0) month.fishBytes[model] = count(bytes)
+  }
+  const sids = Array.isArray(raw.sids) ? raw.sids.filter((sid) => typeof sid === 'string' && METER_SID.test(sid)) : []
+  // The newest are kept: an old conversation can no longer be reported, a recent one still can.
+  month.sids = [...new Set(sids)].slice(-METER_SIDS_PER_MONTH)
+  return month
+}
+
+function normaliseLast(raw) {
+  if (!plainObject(raw) || typeof raw.sid !== 'string' || !METER_SID.test(raw.sid)) return null
+  if (typeof raw.at !== 'string' || Number.isNaN(Date.parse(raw.at))) return null
+  return {
+    sid: raw.sid,
+    at: raw.at,
+    micros: count(raw.micros),
+    incomplete: uniqueLabels(raw.incomplete).slice(0, METER_MAX_INCOMPLETE),
+    model: typeof raw.model === 'string' && METER_MODEL.test(raw.model) ? raw.model : '',
+    mouth: raw.mouth === 'fish' ? 'fish' : 'openai',
+    fishBytes: count(raw.fishBytes)
+  }
+}
+
+// Read as if a stranger wrote it, like settings.json: anything the board itself could not have
+// written is dropped, and only the newest thirteen months are kept, newest first.
+export function normaliseMeter(raw) {
+  const meter = emptyMeter()
+  if (!plainObject(raw)) return meter
+  if (typeof raw.day === 'string' && DAY_KEY.test(raw.day)) meter.day = raw.day
+  meter.writes = count(raw.writes)
+  const months = plainObject(raw.months) ? raw.months : {}
+  const keys = Object.keys(months).filter((key) => MONTH_KEY.test(key)).sort().reverse().slice(0, METER_MONTHS)
+  for (const key of keys) meter.months[key] = normaliseMeterMonth(months[key])
+  meter.last = normaliseLast(raw.last)
+  return meter
+}
+
+// How many meter writes a day the picture caps leave over. Zero when they use the whole budget.
+export function meterWritesPerDay(env = process.env) {
+  const caps = dailyCaps(env)
+  return Math.max(0, ADVANCED_OPS_PER_DAY - (PUTS_PER_CHANGE * caps.writes + PUTS_PER_PICTURE_MADE * caps.generated))
+}
+
+// The day only moves forward, as with the picture caps: a request whose clock still says yesterday
+// is held to the file's count.
+export function meterWritesLeft(meter, env, day) {
+  const used = meter.day >= day ? meter.writes : 0
+  return Math.max(0, meterWritesPerDay(env) - used)
+}
+
+// Called inside a saveMeter change, so the count lands with the report - or, with none left, the
+// throw stops the save and nothing is written at all.
+export function spendMeterWrite(meter, env, day) {
+  if (meterWritesLeft(meter, env, day) === 0) throw new PictureStoreError(429, METER_SPENT)
+  if (meter.day < day) {
+    meter.day = day
+    meter.writes = 0
+  }
+  meter.writes += 1
+}
+
+// What this instance last read of the meter for showing it, kept SHOWN_MS like settings.json's.
+const meterShown = new WeakMap()
+// The meter's saves take turns with each other, never with the picture saves: a slow meter save
+// must not hold a picture change up.
+const meterTurnKeys = new WeakMap()
+const meterTurnKey = (loadSdk) => {
+  if (!meterTurnKeys.has(loadSdk)) meterTurnKeys.set(loadSdk, {})
+  return meterTurnKeys.get(loadSdk)
+}
+
 // --- the store ---------------------------------------------------------------------------
 
 const loadRealSdk = () => import('@vercel/blob')
@@ -521,5 +644,68 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk, { pause =
     await attempt((blob) => blob.del(path))
   }
 
-  return { readSettings, saveSettings, putPicture, getPicture, dropPicture }
+  // --- the voice meter: its own file, its own copy for showing, its own turns ------------------
+
+  async function readMeter({ fresh = false } = {}) {
+    if (fresh) return readMeterFromStore({ access: 'private', useCache: false })
+    const kept = meterShown.get(loadSdk)
+    if (kept && Date.now() - kept.at < SHOWN_MS) return { meter: structuredClone(kept.meter), etag: null }
+    const read = await readMeterFromStore({ access: 'private' })
+    meterShown.set(loadSdk, { at: Date.now(), meter: structuredClone(read.meter) })
+    return read
+  }
+
+  async function readMeterFromStore(options) {
+    const found = await attempt((blob) => blob.get(METER_PATH, options))
+    if (!found || found.statusCode !== 200 || !found.stream) return { meter: emptyMeter(), etag: null }
+    const text = await readCapped(found.stream, METER_MAX_BYTES)
+    let parsed = null
+    try {
+      parsed = text ? JSON.parse(text.toString('utf8')) : null
+    } catch {
+      parsed = null
+    }
+    // Never read as an empty meter: the next save would write zero over the owner's totals.
+    if (!plainObject(parsed)) throw new PictureStoreError(502, METER_DAMAGED)
+    return { meter: normaliseMeter(parsed), etag: found.blob?.etag || null }
+  }
+
+  // Like saveSettings: `mutate` gets a copy of the latest meter and changes it (or throws to stop),
+  // run again against the latest file if another instance saved in between.
+  const saveMeter = (mutate) => takeTurn(meterTurnKey(loadSdk), () => saveMeterNow(mutate))
+
+  async function saveMeterNow(mutate) {
+    for (let tries = 1; tries <= SAVE_TRIES; tries += 1) {
+      if (tries > 1) await pause(RETRY_PAUSE_MS.least + random() * (RETRY_PAUSE_MS.most - RETRY_PAUSE_MS.least))
+      const { meter, etag } = await readMeter({ fresh: true })
+      meterShown.set(loadSdk, { at: Date.now(), meter: structuredClone(meter) })
+      const draft = structuredClone(meter)
+      const next = normaliseMeter((await mutate(draft)) ?? draft)
+      const text = JSON.stringify(next)
+      if (Buffer.byteLength(text, 'utf8') > METER_MAX_BYTES) throw new PictureStoreError(413, METER_DAMAGED)
+      const guard = etag ? { allowOverwrite: true, ifMatch: etag } : { allowOverwrite: false }
+      const blob = await sdk()
+      try {
+        await blob.put(METER_PATH, text, {
+          access: 'private',
+          contentType: 'application/json',
+          addRandomSuffix: false,
+          cacheControlMaxAge: 60,
+          ...guard
+        })
+        meterShown.set(loadSdk, { at: Date.now(), meter: structuredClone(next) })
+        return next
+      } catch (error) {
+        const lostRace = etag
+          ? typeof blob.BlobPreconditionFailedError === 'function' && error instanceof blob.BlobPreconditionFailedError
+          : (await readMeter({ fresh: true })).etag !== null
+        if (lostRace) continue
+        const { status, error: sentence } = storeFailure(error, blob)
+        throw new PictureStoreError(status, sentence)
+      }
+    }
+    throw new PictureStoreError(409, 'The voice meter was saved somewhere else at the same moment, so this conversation stays on this device for now.')
+  }
+
+  return { readSettings, saveSettings, putPicture, getPicture, dropPicture, readMeter, saveMeter }
 }
