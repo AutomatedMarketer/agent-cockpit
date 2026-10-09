@@ -5397,6 +5397,23 @@ const VOICE_NO_MIC = 'This browser cannot use a microphone for the board, so tal
 const voiceCanListen = (deps) =>
   Boolean(typeof deps?.mediaDevices?.getUserMedia === 'function' && typeof deps?.RTCPeerConnection === 'function')
 
+// The names the person may say: the assistant's, the owner's, and each agent's - its name on the card
+// and its slug as words. Only what the board already shows; the server holds each to the name rule.
+function voiceNamesOnBoard() {
+  const names = []
+  const add = (value) => {
+    if (typeof value === 'string' && value.trim() && !names.includes(value.trim())) names.push(value.trim())
+  }
+  add(brand?.assistantName)
+  add(data?.owner?.name)
+  for (const agent of Array.isArray(data?.agents) ? data.agents : []) {
+    if (typeof agent?.slug !== 'string') continue
+    add(displayName(agent.slug))
+    add(agent.slug.replace(/-/g, ' '))
+  }
+  return names.slice(0, 24)
+}
+
 // What the voice code reaches for in the browser, in one place, so the tests can hand in their own.
 function voiceDeps() {
   // A mouse means a computer, where speakers and microphone sit together: speakers mode's ground,
@@ -5418,8 +5435,14 @@ function voiceDeps() {
     // The person tapped, so a missing edit key may be asked for - once, as every change asks. Sent as
     // JSON: Vercel hands a function no application/sdp body at all.
     // echoGuardHere lets the session ask for the transcript the echo guard reads only where it runs: a
-    // computer on headphones.
-    startCall: (sdp) => storeWrite('/api/voice-session', JSON.stringify({ sdp, echoGuardHere: finePointer && voiceOnHeadphones() }), 'application/json'),
+    // computer on headphones. The names on this board are spelling hints for that transcript, and a
+    // computer on its own speakers is a far microphone.
+    startCall: (sdp) => storeWrite('/api/voice-session', JSON.stringify({
+      sdp,
+      echoGuardHere: finePointer && voiceOnHeadphones(),
+      names: voiceNamesOnBoard(),
+      micDistance: finePointer && !voiceOnHeadphones() ? 'far' : 'near'
+    }), 'application/json'),
     view: () => ({ data, names: brand?.names ?? {}, now: Date.now(), hermes: hermesShown(), spend: voiceSpendNow() }),
     openScreen: (screen) => { location.hash = `#${screen}` },
     prices: () => voiceMeter?.prices ?? null,

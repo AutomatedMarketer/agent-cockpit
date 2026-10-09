@@ -58,10 +58,18 @@ function readOffer(request) {
   const sdp = body?.sdp
   if (typeof sdp !== 'string') return { error: SAY.notOffer, status: 400 }
   if (Buffer.byteLength(sdp, 'utf8') > MAX_OFFER_BYTES) return { error: SAY.tooBig, status: 413 }
-  // Every session description starts with its version line. Beside it, the one other thing read:
-  // whether the echo guard will run on the page's device - exactly true, or it will not - which can
-  // only turn the guard's transcript on (sessionFor). Anything else in the body is not read at all.
-  return /^v=0\r?\n/.test(sdp) ? { offer: sdp, echoGuardHere: body.echoGuardHere === true } : { error: SAY.notOffer, status: 400 }
+  // Every session description starts with its version line. Beside it, three things are read, each
+  // only as far as it can go: whether the echo guard will run on the page's device (exactly true, or
+  // it will not), the names on the page's board (a list of at most 24, each held to the name rule by
+  // sessionFor and used only as spelling hints for the transcript), and how far its microphone is
+  // ("far", or it is near). Anything else in the body is not read at all.
+  if (!/^v=0\r?\n/.test(sdp)) return { error: SAY.notOffer, status: 400 }
+  return {
+    offer: sdp,
+    echoGuardHere: body.echoGuardHere === true,
+    names: Array.isArray(body.names) ? body.names.slice(0, 24) : [],
+    micDistance: body.micDistance === 'far' ? 'far' : 'near'
+  }
 }
 
 // The assistant's name from the store's cached copy, or '' - which the session calls "your
@@ -139,7 +147,7 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
 
     const form = new FormData()
     form.set('sdp', read.offer)
-    form.set('session', JSON.stringify(sessionFor(config, name, { echoGuardHere: read.echoGuardHere })))
+    form.set('session', JSON.stringify(sessionFor(config, name, { echoGuardHere: read.echoGuardHere, names: read.names, micDistance: read.micDistance })))
     let upstream
     try {
       upstream = await fetch(CALLS_URL, {

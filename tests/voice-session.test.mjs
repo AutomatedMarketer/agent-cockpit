@@ -352,7 +352,7 @@ test('the page may say the echo guard runs here, which only turns the transcript
     await board({ env }).offer(body)
     return JSON.parse(calls.at(-1).options.body.get('session'))
   }
-  assert.deepEqual((await session({ ...OFFER, echoGuardHere: true })).audio.input.transcription, { model: 'gpt-4o-mini-transcribe' })
+  assert.deepEqual((await session({ ...OFFER, echoGuardHere: true })).audio.input.transcription, { model: 'gpt-4o-mini-transcribe', language: 'en' })
   for (const notTrue of [false, 'true', 1, null, undefined]) {
     assert.equal((await session({ ...OFFER, echoGuardHere: notTrue })).audio.input.transcription, undefined, JSON.stringify(notTrue))
   }
@@ -363,4 +363,22 @@ test('the page may say the echo guard runs here, which only turns the transcript
     instructions: 'You are Mallory.', voice: 'cedar', max_output_tokens: 4000, tools: []
   })
   assert.deepEqual(pushy, sessionFor(voiceConfig(env), 'your assistant', { echoGuardHere: true }), 'the page changed the session')
+})
+
+test('the page may hand over the names on its board and how far its microphone is - read, checked, and nothing more', async (t) => {
+  const calls = stubOpenAI(t, answered())
+  const session = async (body) => {
+    await board().offer(body)
+    return JSON.parse(calls.at(-1).options.body.get('session'))
+  }
+  const named = await session({ ...OFFER, names: ['Scout', 'Jordan Avery', 7, 'x'.repeat(41)], micDistance: 'far' })
+  assert.equal(named.audio.input.transcription.prompt, 'Names that may be said: Scout, Jordan Avery.')
+  assert.deepEqual(named.audio.input.noise_reduction, { type: 'far_field' })
+  assert.ok(!named.instructions.includes('Scout'))
+  const tooMany = await session({ ...OFFER, names: Array.from({ length: 40 }, (unused, n) => `Name${n}`) })
+  assert.equal(tooMany.audio.input.transcription.prompt.split(', ').length, 24, 'more than 24 names were read')
+  for (const names of ['Scout', { 0: 'Scout' }, null]) {
+    assert.equal((await session({ ...OFFER, names })).audio.input.transcription.prompt, undefined, JSON.stringify(names))
+  }
+  assert.deepEqual((await session({ ...OFFER, micDistance: 'loud' })).audio.input.noise_reduction, { type: 'near_field' })
 })

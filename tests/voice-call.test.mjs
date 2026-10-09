@@ -330,7 +330,7 @@ test('the page sends the offer to the board as JSON - the one way Vercel hands a
   assert.equal(sent.init.headers['Content-Type'], 'application/json')
   // And whether the echo guard will run here - a computer on headphones; the harness's window has no
   // fine pointer - which alone decides whether a transcript is asked for when captions are off.
-  assert.deepEqual(JSON.parse(sent.init.body), { sdp: SDP_OFFER, echoGuardHere: false })
+  assert.deepEqual(JSON.parse(sent.init.body), { sdp: SDP_OFFER, echoGuardHere: false, names: [], micDistance: 'near' })
 })
 
 test('the outbox entry says the conversation is still going until the call ends', async () => {
@@ -866,4 +866,26 @@ test('tool calls that arrive only in response.done\'s own list are still run, wi
   browser.emit({ type: 'response.created' })
   browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
   assert.equal(sent().filter((event) => event.type === 'response.create').length, 1)
+})
+
+test('the page hands the session the names on its board, and its microphone\'s distance', async () => {
+  const { loadPage, flush: settle } = await import('./helpers/page-harness.mjs')
+  const { basePayload: payloadOf, brandAnswer: brandOf } = await import('./helpers/page-payload.mjs')
+  const payload = { ...payloadOf(), owner: { name: 'Jordan Avery' }, agents: [{ slug: 'customer-service', state: 'working' }, { slug: 'research', state: 'working' }] }
+  const brand = { ...brandOf({ enabled: true, assistantName: 'Penny', voice: { on: true, mouth: 'openai' } }), names: { research: 'Scout' } }
+  const sent = async (options) => {
+    const loaded = loadPage({
+      fetch: async (url) => ({ ok: true, status: 200, json: async () => (url.startsWith('/api/brand') ? brand : url.startsWith('/api/state') ? payload : {}) }),
+      expose: ['voiceDeps'],
+      ...options
+    })
+    await settle()
+    await loaded.exposed.voiceDeps().startCall('v=0\r\n')
+    return JSON.parse(loaded.requests.find((request) => request.url === '/api/voice-session').init.body)
+  }
+  const phone = await sent({})
+  assert.deepEqual(phone.names, ['Penny', 'Jordan Avery', 'customer service', 'Scout', 'research'])
+  assert.equal(phone.micDistance, 'near')
+  assert.equal((await sent({ media: { '(pointer: fine)': true } })).micDistance, 'far', 'a computer on its speakers asked for a close microphone')
+  assert.equal((await sent({ media: { '(pointer: fine)': true }, storage: { 'agent-cockpit-voice-headphones': 'on' } })).micDistance, 'near')
 })
