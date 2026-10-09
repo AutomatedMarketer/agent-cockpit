@@ -269,7 +269,7 @@ export function imageSize(data) {
 // single space first, because that is what a pasted name usually carries.
 const UNPRINTABLE = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/
 
-function cleanText(value, min, max) {
+export function cleanText(value, min, max) {
   if (typeof value !== 'string') return null
   const collapsed = value.replace(/\s+/g, ' ').trim()
   if (UNPRINTABLE.test(collapsed)) return null
