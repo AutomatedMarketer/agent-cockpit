@@ -296,3 +296,95 @@ test('while the sheet is open, the page can scroll its last content clear of it'
   assert.match(room[0]['padding-bottom'], /\+ [\d.]+rem/, 'the room leaves out the orb under the sheet')
   assert.match(room[0]['padding-bottom'], /safe-area-inset-bottom/)
 })
+
+/* ---------- speakers or headphones, on a computer ---------- */
+
+const COMPUTER = { media: { '(pointer: fine)': true } }
+const HEADPHONES = 'agent-cockpit-voice-headphones'
+
+test('on a computer the sheet says it is in speakers mode, and "I\'m on headphones" is a real toggle this device remembers', async () => {
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { ...COMPUTER, expose: ['voiceDeps'] })
+  const markup = page.node('voice-dock').innerHTML
+  assert.match(markup, /<p class="voice-mode" id="voice-mode">Speakers mode: the microphone rests while it talks, so tap the orb or press Space to interrupt\.<\/p>/)
+  assert.match(markup, /<button class="fire voice-toggle" type="button" id="voice-headphones" aria-pressed="false">I&#39;m on headphones<\/button>/)
+  const press = () => {
+    const toggle = { closest: (selector) => (selector === '#voice-headphones' ? toggle : null) }
+    for (const listener of page.documentListeners.filter((one) => one.type === 'click')) listener.handler({ target: toggle })
+  }
+  press()
+  assert.equal(page.storage.getItem(HEADPHONES), 'on')
+  assert.equal(page.node('voice-headphones').attributes['aria-pressed'], 'true')
+  assert.match(page.node('voice-mode').textContent, /^Headphones mode: talk over it to interrupt\./)
+  assert.equal(page.exposed.voiceDeps().headphones(), true)
+  press()
+  assert.equal(page.storage.getItem(HEADPHONES), null)
+  assert.equal(page.node('voice-headphones').attributes['aria-pressed'], 'false')
+
+  const again = await boot(brandAnswer({ voice: VOICE_ON }), { ...COMPUTER, storage: { [HEADPHONES]: 'on' } })
+  assert.match(again.node('voice-dock').innerHTML, /id="voice-headphones" aria-pressed="true"/)
+  assert.match(again.node('voice-dock').innerHTML, /Headphones mode: talk over it to interrupt\./)
+})
+
+test('pressing the toggle mid-call tells the call at once', async () => {
+  const told = []
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { ...COMPUTER, after: 'voiceSession = given.session', given: { session: { stop() {}, setSpeakersMode: (on) => told.push(on) } } })
+  const toggle = { closest: (selector) => (selector === '#voice-headphones' ? toggle : null) }
+  for (const listener of page.documentListeners.filter((one) => one.type === 'click')) listener.handler({ target: toggle })
+  assert.deepEqual(told, [false])
+})
+
+test('a phone has no mode line and no toggle: it always talks over', async () => {
+  const page = await boot(brandAnswer({ voice: VOICE_ON }))
+  assert.doesNotMatch(page.node('voice-dock').innerHTML, /voice-headphones|voice-mode/)
+})
+
+test('the orb, Esc and Space interrupt a reply; with nothing to interrupt, the orb and Esc end the call and Space does nothing', async () => {
+  const session = (replying) => ({
+    stopped: [], interrupted: 0,
+    interrupt() { if (replying) this.interrupted += 1; return replying },
+    stop(reason) { this.stopped.push(reason) }
+  })
+  const live = async (one) => boot(brandAnswer({ voice: VOICE_ON }), { after: 'voiceSession = given.session', given: { session: one } })
+  const fire = (page, type, event) => { for (const listener of page.documentListeners.filter((entry) => entry.type === type)) listener.handler(event) }
+  const orb = { closest: (selector) => (selector === '#voice-orb' ? orb : null) }
+
+  const replying = session(true)
+  const page = await live(replying)
+  fire(page, 'click', { target: orb })
+  fire(page, 'keydown', { key: 'Escape' })
+  let prevented = 0
+  fire(page, 'keydown', { key: ' ', target: { tagName: 'BODY' }, preventDefault: () => { prevented += 1 } })
+  assert.equal(replying.interrupted, 3, 'the orb, Esc and Space did not each interrupt')
+  assert.deepEqual(replying.stopped, [], 'an interrupt ended the call')
+  assert.equal(prevented, 1, 'Space also scrolled the page')
+  for (const tagName of ['TEXTAREA', 'INPUT', 'BUTTON', 'SELECT']) fire(page, 'keydown', { key: ' ', target: { tagName } })
+  fire(page, 'keydown', { key: ' ', target: { tagName: 'DIV', isContentEditable: true } })
+  assert.equal(replying.interrupted, 3, 'Space typed into a field interrupted')
+
+  const quiet = session(false)
+  const idle = await live(quiet)
+  fire(idle, 'keydown', { key: ' ', target: { tagName: 'BODY' } })
+  assert.deepEqual(quiet.stopped, [], 'Space ended the call')
+  fire(idle, 'click', { target: orb })
+  fire(idle, 'keydown', { key: 'Escape' })
+  assert.deepEqual(quiet.stopped, ['stopped', 'stopped'])
+})
+
+test('the page asks for the guard\'s transcript only where the guard runs: a computer on headphones', async () => {
+  const call = async (options) => {
+    const page = await boot(brandAnswer({ voice: VOICE_ON }), { ...options, expose: ['voiceDeps'] })
+    await page.exposed.voiceDeps().startCall('v=0\r\n')
+    return JSON.parse(page.requests.find((request) => request.url === '/api/voice-session').init.body).echoGuardHere
+  }
+  assert.equal(await call(COMPUTER), false, 'a computer in speakers mode asked for a transcript nothing reads')
+  assert.equal(await call({ ...COMPUTER, storage: { [HEADPHONES]: 'on' } }), true)
+  assert.equal(await call({ storage: { [HEADPHONES]: 'on' } }), false, 'a phone asked for the guard\'s transcript')
+})
+
+test('every class the computer\'s sheet adds is one the stylesheet styles', async () => {
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { ...COMPUTER, expose: ['voiceDockHtml'] })
+  for (const name of ['voice-mode', 'voice-toggle']) {
+    assert.ok(classesIn(page.exposed.voiceDockHtml()).has(name), `${name} is not drawn`)
+    assert.ok(rules.some((rule) => new RegExp(`\\.${name}(?![\\w-])`).test(rule.selector)), `class "${name}" has no rule`)
+  }
+})

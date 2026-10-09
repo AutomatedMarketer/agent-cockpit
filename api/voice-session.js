@@ -59,9 +59,9 @@ function readOffer(request) {
   if (typeof sdp !== 'string') return { error: SAY.notOffer, status: 400 }
   if (Buffer.byteLength(sdp, 'utf8') > MAX_OFFER_BYTES) return { error: SAY.tooBig, status: 413 }
   // Every session description starts with its version line. Beside it, the one other thing read:
-  // whether the page is on a computer - exactly true, or it is not - which can only turn the echo
-  // guard's transcript on (sessionFor). Anything else in the body is not read at all.
-  return /^v=0\r?\n/.test(sdp) ? { offer: sdp, finePointer: body.finePointer === true } : { error: SAY.notOffer, status: 400 }
+  // whether the echo guard will run on the page's device - exactly true, or it will not - which can
+  // only turn the guard's transcript on (sessionFor). Anything else in the body is not read at all.
+  return /^v=0\r?\n/.test(sdp) ? { offer: sdp, echoGuardHere: body.echoGuardHere === true } : { error: SAY.notOffer, status: 400 }
 }
 
 // The assistant's name from the store's cached copy, or '' - which the session calls "your
@@ -139,7 +139,7 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
 
     const form = new FormData()
     form.set('sdp', read.offer)
-    form.set('session', JSON.stringify(sessionFor(config, name, { finePointer: read.finePointer })))
+    form.set('session', JSON.stringify(sessionFor(config, name, { echoGuardHere: read.echoGuardHere })))
     let upstream
     try {
       upstream = await fetch(CALLS_URL, {

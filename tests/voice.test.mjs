@@ -321,8 +321,8 @@ test('the echo guard is on unless VOICE_ECHO_GUARD says off', () => {
   for (const off of ['off', 'false', '0', 'OFF']) assert.equal(voiceConfig({ ...ON, VOICE_ECHO_GUARD: off }).echoGuard, false, off)
 })
 
-test('a transcript is asked for when captions are on, or when the echo guard will run on this device - a computer', () => {
-  const transcription = (env, finePointer) => sessionFor(voiceConfig({ ...ON, ...env }), '', { finePointer }).audio.input.transcription
+test('a transcript is asked for when captions are on, or when the echo guard will run on this device - a computer on headphones', () => {
+  const transcription = (env, echoGuardHere) => sessionFor(voiceConfig({ ...ON, ...env }), '', { echoGuardHere }).audio.input.transcription
   const ASKED = { model: 'gpt-4o-mini-transcribe' }
   assert.deepEqual(transcription({ VOICE_CAPTIONS: 'off' }, true), ASKED, 'a computer with the guard on has no transcript to read')
   assert.equal(transcription({ VOICE_CAPTIONS: 'off' }, false), undefined, 'a phone pays for a transcript nothing reads')
@@ -334,4 +334,12 @@ test('a transcript is asked for when captions are on, or when the echo guard wil
   assert.match(readme, /use \*\*Stop\*\* or Esc/i)
   assert.match(readme, /about \$0\.002 a minute of your talking/i)
   assert.match(readme, /Phones do not pay it unless captions are on/i)
+})
+
+test('the README explains speakers and headphones mode, and why', () => {
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+  assert.match(readme, /### Speakers or headphones/)
+  assert.match(readme, /Elgato Wave Link/)
+  assert.match(readme, /I'm on headphones/)
+  assert.match(readme, /tap the orb, press Esc or press Space/i)
 })

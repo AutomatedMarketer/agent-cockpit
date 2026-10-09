@@ -299,6 +299,19 @@ address could spend your OpenAI money. Voice does **not** need the picture store
 The first tap asks your browser for the microphone. If you said no by mistake: on an iPhone,
 **Settings → Safari → Microphone**; in Chrome, tap the icon left of the address.
 
+### Speakers or headphones
+
+On a computer the board starts in **speakers mode**: while the assistant talks, the microphone rests,
+so it cannot hear its own voice coming back out of the speakers and answer itself. To interrupt it,
+tap the orb, press Esc or press Space; it stops and listens at once. **Stop** still ends the call.
+
+Why: on some computers the browser cannot cancel the echo. Sound routed through a virtual or mixing
+setup - Elgato Wave Link is one - goes out to the speakers by a path the browser's echo canceller
+never sees, so the assistant hears itself and replies to it.
+
+On headphones, press **I'm on headphones** in the panel: then you simply talk over it to interrupt.
+The board remembers that on this device. Phones always work that way.
+
 ### Set a hard spend limit on your OpenAI project - do this first
 
 **The board does not cap voice.** There is no daily limit; there is a meter (below). What stops the
@@ -472,7 +485,7 @@ Locally:
 npm test
 ```
 
-1273 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1280 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

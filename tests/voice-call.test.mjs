@@ -328,9 +328,9 @@ test('the page sends the offer to the board as JSON - the one way Vercel hands a
   assert.ok(sent, 'the offer never went to the board')
   assert.equal(sent.init.method, 'POST')
   assert.equal(sent.init.headers['Content-Type'], 'application/json')
-  // And whether this device is a computer (the harness's window has no fine pointer): that alone
-  // decides whether a transcript is asked for when captions are off.
-  assert.deepEqual(JSON.parse(sent.init.body), { sdp: SDP_OFFER, finePointer: false })
+  // And whether the echo guard will run here - a computer on headphones; the harness's window has no
+  // fine pointer - which alone decides whether a transcript is asked for when captions are off.
+  assert.deepEqual(JSON.parse(sent.init.body), { sdp: SDP_OFFER, echoGuardHere: false })
 })
 
 test('the outbox entry says the conversation is still going until the call ends', async () => {

@@ -1272,6 +1272,9 @@
   .voice-said { display: block; overflow-wrap: anywhere; }
   .voice-cost, .voice-mouth { margin: 0 0 .5rem; font-size: .8125rem; color: var(--muted); }
   .voice-stop { margin-top: .25rem; }
+  .voice-mode { margin: 0 0 .5rem; font-size: .8125rem; }
+  .voice-toggle { margin: 0 .5rem .5rem 0; }
+  .voice-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
   /* Voice spend, in Today's Usage section under Subscriptions. "estimate" is a chip in plain view. */
   .voice-spend { margin-top: .75rem; padding: .9rem 1.05rem; }
   .voice-spend .title { margin: 0 0 .4rem; }
@@ -5375,6 +5378,14 @@ const voiceWords = (state, name = voiceName()) => ({
   ended: 'Ended. Tap the orb to talk again.'
 })[state] ?? ''
 
+// Speakers or headphones, on a computer: "I'm on headphones" is remembered on this device.
+const VOICE_HEADPHONES_STORE = 'agent-cockpit-voice-headphones'
+const voiceOnHeadphones = () => readStore(VOICE_HEADPHONES_STORE) === 'on'
+const VOICE_MODE_WORDS = {
+  speakers: 'Speakers mode: the microphone rests while it talks, so tap the orb or press Space to interrupt.',
+  headphones: 'Headphones mode: talk over it to interrupt.'
+}
+
 const VOICE_MOUTH_WORDS = {
   openai: 'Speaking with OpenAI\'s voice - add Fish for your own voice.',
   fish: 'Speaking with your Fish voice.'
@@ -5388,7 +5399,8 @@ const voiceCanListen = (deps) =>
 
 // What the voice code reaches for in the browser, in one place, so the tests can hand in their own.
 function voiceDeps() {
-  // A mouse means a computer, where speakers and microphone sit together: the echo guard's ground.
+  // A mouse means a computer, where speakers and microphone sit together: speakers mode's ground,
+  // and - on headphones - the echo guard's.
   const finePointer = window.matchMedia?.('(pointer: fine)')?.matches === true
   return {
     mediaDevices: typeof navigator === 'undefined' ? undefined : navigator.mediaDevices,
@@ -5405,8 +5417,9 @@ function voiceDeps() {
     },
     // The person tapped, so a missing edit key may be asked for - once, as every change asks. Sent as
     // JSON: Vercel hands a function no application/sdp body at all.
-    // finePointer lets the session ask for the transcript the echo guard reads only where it runs.
-    startCall: (sdp) => storeWrite('/api/voice-session', JSON.stringify({ sdp, finePointer }), 'application/json'),
+    // echoGuardHere lets the session ask for the transcript the echo guard reads only where it runs: a
+    // computer on headphones.
+    startCall: (sdp) => storeWrite('/api/voice-session', JSON.stringify({ sdp, echoGuardHere: finePointer && voiceOnHeadphones() }), 'application/json'),
     view: () => ({ data, names: brand?.names ?? {}, now: Date.now(), hermes: hermesShown(), spend: voiceSpendNow() }),
     openScreen: (screen) => { location.hash = `#${screen}` },
     prices: () => voiceMeter?.prices ?? null,
@@ -5420,6 +5433,7 @@ function voiceDeps() {
     clearTimeout: (id) => clearTimeout(id),
     cancelOnBargeIn: VOICE_CANCEL_ON_BARGE_IN,
     finePointer,
+    headphones: voiceOnHeadphones,
     now: () => Date.now(),
     fish: fishMouth({
       speak: (body, signal) => fetch('/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),
@@ -5433,12 +5447,19 @@ function voiceDockHtml() {
   const name = escapeHtml(voiceName())
   const able = voiceCanListen(voiceDeps())
   const mouth = VOICE_MOUTH_WORDS[voiceInfo.mouth] + (voiceInfo.note ? ` ${voiceInfo.note}` : '')
+  // Only a computer chooses: a phone always talks over, which its echo cancelling is built for.
+  const headphones = voiceOnHeadphones()
+  const mode = voiceDeps().finePointer
+    ? `<p class="voice-mode" id="voice-mode">${escapeHtml(VOICE_MODE_WORDS[headphones ? 'headphones' : 'speakers'])}</p>
+      <button class="fire voice-toggle" type="button" id="voice-headphones" aria-pressed="${headphones}">${escapeHtml("I'm on headphones")}</button>`
+    : ''
   return `<section class="voice-sheet" id="voice-sheet" aria-label="Talking to ${name}" hidden>
       <p class="voice-state" id="voice-state" role="status" aria-live="polite"></p>
       <p class="voice-line"><span class="voice-who">You</span><span class="voice-said" id="voice-you"></span></p>
       <p class="voice-line"><span class="voice-who" id="voice-who">${name}</span><span class="voice-said" id="voice-said"></span></p>
       <p class="voice-cost" id="voice-cost"></p>
       <p class="voice-mouth">${escapeHtml(mouth)}</p>
+      ${mode}
       <button class="fire voice-stop" type="button" id="voice-stop">Stop</button>
     </section>
     <button class="voice-orb" type="button" id="voice-orb" data-state="idle" aria-pressed="false" aria-controls="voice-sheet"${able ? '' : ' aria-disabled="true"'} title="${able ? `Talk to ${name}` : escapeHtml(VOICE_NO_MIC)}">
@@ -5484,6 +5505,8 @@ const voiceUi = {
 // A tap on the orb: ends a live call, or starts one. A browser that cannot listen is told why.
 function voiceTap(deps = voiceDeps()) {
   if (voiceSession) {
+    // In speakers mode a tap while it talks interrupts; otherwise it ends the call, as always.
+    if (voiceSession.interrupt?.()) return
     voiceSession.stop('stopped')
     return
   }
@@ -5500,13 +5523,33 @@ function voiceStopPressed() {
   else voiceUi.show('idle', { live: false })
 }
 
+// "I'm on headphones", pressed: remembered on this device, said in the sheet, and told to a live call.
+function toggleHeadphones() {
+  const on = !voiceOnHeadphones()
+  writeStore(VOICE_HEADPHONES_STORE, on ? 'on' : null)
+  el('voice-headphones').setAttribute('aria-pressed', String(on))
+  el('voice-mode').textContent = VOICE_MODE_WORDS[on ? 'headphones' : 'speakers']
+  voiceSession?.setSpeakersMode?.(!on)
+}
+
+// Space is for typing and for pressing buttons wherever the focus is one of those.
+const voiceTypingIn = (target) =>
+  ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(String(target?.tagName ?? '').toUpperCase()) || target?.isContentEditable === true
+
 document.addEventListener('click', (event) => {
   const target = event.target
   if (target?.closest?.('#voice-orb')) voiceTap()
   else if (target?.closest?.('#voice-stop')) voiceStopPressed()
+  else if (target?.closest?.('#voice-headphones')) toggleHeadphones()
 })
 document.addEventListener('keydown', (event) => {
-  if (event?.key === 'Escape' && voiceSession) voiceSession.stop('stopped')
+  if (!voiceSession) return
+  // Esc interrupts a reply in speakers mode, and otherwise ends the call. Space only interrupts.
+  if (event?.key === 'Escape') {
+    if (!voiceSession.interrupt?.()) voiceSession.stop('stopped')
+  } else if (event?.key === ' ' && !voiceTypingIn(event.target)) {
+    if (voiceSession.interrupt?.()) event.preventDefault?.()
+  }
 })
 // A call never carries on where nobody can see it: a hidden tab, or one being closed, ends it.
 document.addEventListener('visibilitychange', () => {
