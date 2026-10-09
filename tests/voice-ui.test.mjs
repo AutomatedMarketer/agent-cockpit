@@ -263,3 +263,16 @@ test('the listening pulse runs only for someone who has not asked for less motio
     assert.ok(rules.some((rule) => rule.selector.includes(`[data-state="${state}"]`)), `${state} has no shape of its own`)
   }
 })
+
+/* ---------- the footer's promise ---------- */
+
+test('with voice on, the footer no longer says nothing on the page comes from anywhere else', async () => {
+  const on = await boot(brandAnswer({ voice: VOICE_ON }))
+  const said = on.node('foot').textContent
+  assert.match(said, /^Read from your repo /)
+  assert.doesNotMatch(said, /Nothing on this page comes from anywhere else/, 'the footer promises something voice makes untrue')
+  assert.match(said, /what the assistant says comes from OpenAI/)
+  assert.match(said, /Voice spend is the board's own estimate/)
+  const off = await boot(brandAnswer({ voice: { on: false, why: 'No key.' } }))
+  assert.match(off.node('foot').textContent, /^Read from your repo .*\. Nothing on this page comes from anywhere else\.$/)
+})

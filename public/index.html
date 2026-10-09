@@ -6116,10 +6116,19 @@ function render() {
   renderConnections()
   renderHermes()
   renderShell()
-  el('foot').textContent = `Read from your repo ${stamp(data.generatedAt)}. Nothing on this page comes from anywhere else.`
+  el('foot').textContent = footWords()
   renderVoiceDock()
   showScreen(location.hash.slice(1))
   showArt('today')
+}
+
+// The footer's promise, kept true: with voice on, the assistant's words come from OpenAI and the
+// spend card is the board's own estimate, so "nothing comes from anywhere else" would not be.
+function footWords() {
+  const read = `Read from your repo ${stamp(data.generatedAt)}.`
+  return voiceInfo.on
+    ? `${read} With voice on, what the assistant says comes from OpenAI, and Voice spend is the board's own estimate.`
+    : `${read} Nothing on this page comes from anywhere else.`
 }
 
 function renderError(message) {
