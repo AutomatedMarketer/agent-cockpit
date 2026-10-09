@@ -850,3 +850,20 @@ test('nothing is said for a reply the page itself cancelled, one the person talk
   }
   assert.deepEqual(said, [])
 })
+
+test('tool calls that arrive only in response.done\'s own list are still run, with one deferred request for the reply', async () => {
+  // No response.function_call_arguments.done events at all: the list is the only place they are.
+  const browser = await connected()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: TOOL_CALLS } })
+  const sent = () => browser.state.channel.sent
+  assert.deepEqual(sent().map((event) => event.item?.call_id ?? event.type), ['call_1', 'call_2'], 'the tool calls in the list were not run')
+  assert.deepEqual(JSON.parse(sent()[0].item.output), voiceToolAnswer('whats_due', { hours: 24 }, browser.deps.view()))
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  assert.equal(sent().filter((event) => event.type === 'response.create').length, 1)
+})
