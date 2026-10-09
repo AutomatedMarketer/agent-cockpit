@@ -301,3 +301,60 @@ export function isMp3(bytes) {
   const layer = (bytes[1] >> 1) & 0x03 // 00 is reserved
   return sync && version !== 0x01 && layer !== 0x00
 }
+
+// --- shared with the page ------------------------------------------------------------------------
+// KEEP IN SYNC: everything between the two markers below is mirrored verbatim inside
+// public/index.html's inline script (the page has no module loading), with `export ` taken off.
+// tests/voice-client.test.mjs holds the two copies together, byte for byte. So nothing in here may
+// import anything or reach for anything the page does not have.
+// voice-page:start
+
+// A count the meter can use: a whole number above zero. Anything else counts for nothing rather
+// than for something - a count is never guessed.
+const wholeCount = (value) => (Number.isInteger(value) && value > 0 ? value : 0)
+const ownRow = (table, key) => (table && typeof key === 'string' && Object.hasOwn(table, key) ? table[key] : null)
+
+// Which count is priced by which rate, and how an unpriced one is named.
+const REALTIME_PARTS = [
+  ['textIn', 'textIn', 'text in'],
+  ['cachedTextIn', 'cachedTextIn', 'cached text in'],
+  ['audioIn', 'audioIn', 'audio in'],
+  ['cachedAudioIn', 'cachedAudioIn', 'cached audio in'],
+  ['textOut', 'textOut', 'text out'],
+  ['audioOut', 'audioOut', 'audio out']
+]
+const CAPTION_PARTS = [
+  ['transcribeTextIn', 'textIn', 'text in'],
+  ['transcribeAudioIn', 'audioIn', 'audio in'],
+  ['transcribeOut', 'textOut', 'text out']
+]
+
+// A conversation's counts, in dollars: { micros, usd, incomplete, fishBytes }. Worked in millionths
+// of a dollar and rounded once, at the end. A count with no rate to price it is named in
+// `incomplete` and left out of the total - the total is then less than the truth and says so, which
+// is the opposite of counting it as free. A count of zero needs no rate.
+export function costOf(counts, models, prices) {
+  const incomplete = []
+  let micros = 0
+  const price = (row, parts, label) => {
+    for (const [field, rate, words] of parts) {
+      const used = wholeCount(counts?.[field])
+      if (!used) continue
+      const perMillion = row?.[rate]
+      if (typeof perMillion === 'number' && perMillion >= 0) micros += used * perMillion
+      else incomplete.push(`${label} ${words}`)
+    }
+  }
+  price(ownRow(prices?.realtime, models?.model), REALTIME_PARTS, String(models?.model ?? 'voice'))
+  price(ownRow(prices?.transcription, models?.transcribeModel), CAPTION_PARTS, `captions (${models?.transcribeModel})`)
+  const fishBytes = wholeCount(counts?.fishBytes)
+  if (fishBytes) {
+    const row = ownRow(prices?.fish, models?.fishModel)
+    if (typeof row?.perMillionBytes === 'number' && row.perMillionBytes >= 0) micros += fishBytes * row.perMillionBytes
+    else incomplete.push(`Fish ${models?.fishModel ?? 'voice'}`)
+  }
+  const rounded = Math.round(micros)
+  return { micros: rounded, usd: rounded / 1e6, incomplete, fishBytes }
+}
+
+// voice-page:end
