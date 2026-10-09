@@ -1225,6 +1225,54 @@
     .banner .greeting, .banner .headline { font-size: clamp(1.6rem, 2.5vw, 2.25rem); }
     .kpis { gap: 1rem; margin: 1.1rem 0 1.25rem; }
   }
+  /* Talk to the board: the orb, bottom-right on every screen, and the sheet above it. The dock is the
+     width of the screen less a gutter each side, so the sheet can be too on a phone; it lets taps
+     through to the page everywhere but on the orb and the sheet themselves. Above the phone's home
+     bar, and clear of the nav, which is at the top. */
+  .voice-dock {
+    position: fixed; left: 1rem; right: 1rem; bottom: calc(1rem + env(safe-area-inset-bottom, 0px)); z-index: 15;
+    display: flex; flex-direction: column; align-items: flex-end; gap: .6rem; pointer-events: none;
+  }
+  .voice-dock > * { pointer-events: auto; }
+  /* Room at the end of the page, so the orb never sits over the last thing on it. */
+  .voice-on .wrap { padding-bottom: 5.5rem; }
+  .voice-orb {
+    width: 3.5rem; height: 3.5rem; min-width: 2.75rem; min-height: 2.75rem; padding: 0; flex: none;
+    display: grid; place-items: center; border-radius: 50%; cursor: pointer;
+    border: 2px solid var(--accent); background: var(--panel); color: var(--accent); box-shadow: var(--shadow);
+  }
+  .voice-orb .ico { width: 1.5rem; height: 1.5rem; }
+  .voice-orb:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
+  /* Each state has a shape of its own as well as its words, so colour is never the only sign: a
+     broken ring while it connects or thinks, a still ring while it listens, filled while it speaks. */
+  .voice-orb[data-state="connecting"], .voice-orb[data-state="thinking"] { border-style: dashed; }
+  .voice-orb[data-state="listening"] { box-shadow: 0 0 0 .3rem color-mix(in srgb, var(--accent) 35%, transparent); }
+  .voice-orb[data-state="speaking"] { background: var(--accent); color: var(--panel); }
+  .voice-orb[data-state="error"] { border-color: var(--warn); color: var(--warn); }
+  .voice-orb[aria-disabled="true"] { border-color: var(--line); color: var(--muted); cursor: default; }
+  /* The ring breathes while it listens, only for someone whose device has not asked for less motion:
+     written as no-preference, like the sidebar's picture, so it cannot run anywhere else. */
+  @keyframes voice-pulse {
+    0%, 100% { box-shadow: 0 0 0 .3rem color-mix(in srgb, var(--accent) 35%, transparent); }
+    50% { box-shadow: 0 0 0 .7rem color-mix(in srgb, var(--accent) 10%, transparent); }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .voice-orb[data-state="listening"] { animation: voice-pulse 1.8s ease-in-out infinite; }
+  }
+  .voice-sheet {
+    width: 100%; max-height: min(60vh, 28rem); overflow-y: auto; margin: 0; padding: .9rem 1rem;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+  }
+  .voice-state { margin: 0 0 .5rem; font-weight: 600; }
+  .voice-line { margin: 0 0 .5rem; font-size: .875rem; }
+  .voice-who { display: block; font-size: .6875rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .voice-said { display: block; overflow-wrap: anywhere; }
+  .voice-cost, .voice-mouth { margin: 0 0 .5rem; font-size: .8125rem; color: var(--muted); }
+  .voice-stop { margin-top: .25rem; }
+  /* From 1024px the sheet is docked beside the orb at a reading width. */
+  @media (min-width: 64rem) {
+    .voice-sheet { width: 22rem; }
+  }
 </style>
 </head>
 <body>
@@ -1299,6 +1347,9 @@
     <span id="profile-name" class="who"></span>
   </div>
 </nav>
+
+<!-- Talk to the board: the orb and its sheet, drawn by the script only when voice is on. -->
+<div class="voice-dock" id="voice-dock" hidden></div>
 
 <script>
 'use strict'
@@ -4138,6 +4189,8 @@ function holdArt(slot, entry) {
 // go of here; the new version is fetched when its screen asks.
 function useBrand(answer) {
   brand = parseBrand(answer)
+  // Voice rides on the same answer, and does not need personalising on.
+  voiceInfo = parseVoice(answer)
   // Off because the store is connected but failing - a damaged settings file, a public store - the
   // server's sentence is the one to show: "connect a store" would send the owner round in circles.
   brandFault = !brand && isRecord(answer) && answer.fault === true && typeof answer.why === 'string' ? answer.why : ''
@@ -4542,7 +4595,17 @@ function brandPanelHtml() {
       <span class="fire-note"></span>
     </form>
     <p class="small muted allowance">${allowanceText()}</p>
+    ${voicePanelHtml()}
   </div>`
+}
+
+// Talking to the board, in Make it yours: which voice speaks, or why there is no orb.
+function voicePanelHtml() {
+  if (voiceInfo.on) {
+    const words = VOICE_MOUTH_WORDS[voiceInfo.mouth] + (voiceInfo.note ? ` ${voiceInfo.note}` : '')
+    return `<p class="small muted">${escapeHtml(words)}</p>`
+  }
+  return voiceInfo.why ? `<p class="small muted">${escapeHtml(voiceInfo.why)}</p>` : ''
 }
 
 // Whose style is in the box: the default, or the owner's own - with the default shown beside it, so
@@ -5199,6 +5262,147 @@ function confirmsYes(signal) {
 
 // voice-page:end
 
+/* ---------- Talk to the board: the orb and the sheet ----------
+   Tap the orb and talk; the board answers out loud from what it already shows. The orb sits
+   bottom-right on every screen, drawn only when /api/brand says voice is on - which needs
+   OPENAI_API_KEY, and EDIT_KEY on a board open to everyone - and never otherwise: with voice off
+   there is nothing to tap and Make it yours says why. The sheet above it says, in words, what is
+   happening, what it heard, what it is saying and what this conversation has cost so far.
+
+   Everything the assistant or a caption says is put on the page with textContent, never as markup
+   (tests/voice-ui.test.mjs reads the source to hold that). The focus never moves on its own. */
+
+const VOICE_OFF = { on: false, why: '', mouth: 'openai', note: '' }
+// What /api/brand said about voice: off - nothing drawn at all - unless it said exactly on.
+let voiceInfo = VOICE_OFF
+// The live call, while there is one.
+let voiceSession = null
+
+function parseVoice(answer) {
+  const voice = isRecord(answer) && isRecord(answer.voice) ? answer.voice : null
+  const words = (value) => (typeof value === 'string' ? value : '')
+  if (voice?.on !== true) return { ...VOICE_OFF, why: words(voice?.why) }
+  return { on: true, why: '', mouth: voice.mouth === 'fish' ? 'fish' : 'openai', note: words(voice.note) }
+}
+
+// The name the orb and the sheet use: the one given in Make it yours, or "your assistant".
+const voiceName = () => (brand?.assistantName?.trim() ? brand.assistantName.trim() : 'your assistant')
+
+const voiceWords = (state, name = voiceName()) => ({
+  idle: `Talk to ${name}`,
+  connecting: 'Connecting…',
+  listening: 'Listening',
+  thinking: 'Thinking',
+  speaking: 'Speaking - talk to interrupt',
+  ended: 'Ended. Tap the orb to talk again.'
+})[state] ?? ''
+
+const VOICE_MOUTH_WORDS = {
+  openai: 'Speaking with OpenAI\'s voice - add Fish for your own voice.',
+  fish: 'Speaking with your Fish voice.'
+}
+
+// Whether this browser can do it at all - a microphone and WebRTC - asked of what is there, never of
+// the browser's name.
+const VOICE_NO_MIC = 'This browser cannot use a microphone for the board, so talking is off here. Try Safari on an iPhone, or Chrome.'
+const voiceCanListen = (deps) =>
+  Boolean(typeof deps?.mediaDevices?.getUserMedia === 'function' && typeof deps?.RTCPeerConnection === 'function')
+
+// What the voice code reaches for in the browser, in one place, so the tests can hand in their own.
+function voiceDeps() {
+  return {
+    mediaDevices: typeof navigator === 'undefined' ? undefined : navigator.mediaDevices,
+    RTCPeerConnection: window.RTCPeerConnection,
+    AudioContext: window.AudioContext ?? window.webkitAudioContext
+  }
+}
+
+// The sheet first, so it sits above the orb in the column the dock lays out.
+function voiceDockHtml() {
+  const name = escapeHtml(voiceName())
+  const able = voiceCanListen(voiceDeps())
+  const mouth = VOICE_MOUTH_WORDS[voiceInfo.mouth] + (voiceInfo.note ? ` ${voiceInfo.note}` : '')
+  return `<section class="voice-sheet" id="voice-sheet" aria-label="Talking to ${name}" hidden>
+      <p class="voice-state" id="voice-state" role="status" aria-live="polite"></p>
+      <p class="voice-line"><span class="voice-who">You</span><span class="voice-said" id="voice-you"></span></p>
+      <p class="voice-line"><span class="voice-who" id="voice-who">${name}</span><span class="voice-said" id="voice-said"></span></p>
+      <p class="voice-cost" id="voice-cost"></p>
+      <p class="voice-mouth">${escapeHtml(mouth)}</p>
+      <button class="fire voice-stop" type="button" id="voice-stop">Stop</button>
+    </section>
+    <button class="voice-orb" type="button" id="voice-orb" data-state="idle" aria-pressed="false" aria-controls="voice-sheet"${able ? '' : ' aria-disabled="true"'} title="${able ? `Talk to ${name}` : escapeHtml(VOICE_NO_MIC)}">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      <span class="visually-hidden" id="voice-label">Talk to ${name}</span>
+    </button>`
+}
+
+// Drawn when the board is drawn, and only then - and never while a call is live: a reading of the
+// repo redraws every screen, and redrawing the sheet mid-call would wipe what was said.
+function renderVoiceDock() {
+  const dock = el('voice-dock')
+  document.body.classList.toggle('voice-on', voiceInfo.on)
+  if (voiceSession) return
+  if (!voiceInfo.on) {
+    dock.hidden = true
+    dock.innerHTML = ''
+    return
+  }
+  dock.hidden = false
+  dock.innerHTML = voiceDockHtml()
+}
+
+// Every change the sheet shows, in words, and the orb's state for its shape. `live` is whether a
+// call is open, which is what aria-pressed says and what turns Stop into Close.
+const voiceUi = {
+  show(state, { words, live = Boolean(voiceSession) } = {}) {
+    const orb = el('voice-orb')
+    orb.dataset.state = state
+    orb.setAttribute('aria-pressed', String(live))
+    el('voice-sheet').hidden = state === 'idle' && !live
+    el('voice-state').textContent = words ?? voiceWords(state)
+    el('voice-stop').textContent = live ? 'Stop' : 'Close'
+  },
+  you(text) { el('voice-you').textContent = text },
+  said(text) { el('voice-said').textContent = text },
+  cost(text) { el('voice-cost').textContent = text },
+  who(name) { el('voice-who').textContent = name }
+}
+
+// A tap on the orb: ends a live call, or starts one. A browser that cannot listen is told why.
+function voiceTap(deps = voiceDeps()) {
+  if (voiceSession) {
+    voiceSession.stop('stopped')
+    return
+  }
+  if (!voiceCanListen(deps)) {
+    voiceUi.show('error', { words: VOICE_NO_MIC, live: false })
+    return
+  }
+  voiceUi.show('connecting', { live: false })
+}
+
+// Stop ends a live call; once it has ended, the same button closes the sheet.
+function voiceStopPressed() {
+  if (voiceSession) voiceSession.stop('stopped')
+  else voiceUi.show('idle', { live: false })
+}
+
+document.addEventListener('click', (event) => {
+  const target = event.target
+  if (target?.closest?.('#voice-orb')) voiceTap()
+  else if (target?.closest?.('#voice-stop')) voiceStopPressed()
+})
+document.addEventListener('keydown', (event) => {
+  if (event?.key === 'Escape' && voiceSession) voiceSession.stop('stopped')
+})
+// A call never carries on where nobody can see it: a hidden tab, or one being closed, ends it.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && voiceSession) voiceSession.stop('hidden')
+})
+window.addEventListener('pagehide', () => {
+  if (voiceSession) voiceSession.stop('hidden')
+})
+
 /* ---------- shell ---------- */
 
 // Hermes is a screen only for somebody who has Hermes, so it is not in TITLES: every screen there
@@ -5314,6 +5518,7 @@ function render() {
   renderHermes()
   renderShell()
   el('foot').textContent = `Read from your repo ${stamp(data.generatedAt)}. Nothing on this page comes from anywhere else.`
+  renderVoiceDock()
   showScreen(location.hash.slice(1))
   showArt('today')
 }
