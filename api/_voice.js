@@ -357,4 +357,341 @@ export function costOf(counts, models, prices) {
   return { micros: rounded, usd: rounded / 1e6, incomplete, fishBytes }
 }
 
+// --- cutting a reply into pieces Fish can speak (the Fish mouth only) ---
+// Jack's rule: the first piece goes at the first pause - a comma, a dash, a full stop - once there
+// are 12 characters to say, so the first sound comes early; after that, a sentence at a time. A
+// mark only counts with a space after it, so "1,000" and "3.5" are never cut, and a mark at the very
+// end of what has arrived waits for the next characters. A run with no pause at all is cut before
+// 220 characters, at the last pause or space. When the reply is done, whatever is left is spoken.
+const FIRST_PIECE_AT = 12
+const LONGEST_PIECE = 220
+const PAUSE = /[,;:—–.!?](?=\s)/g
+const SENTENCE_END = /[.!?](?=\s)/g
+
+export function takeSpeakable(text, { first = false, done = false } = {}) {
+  const buffer = typeof text === 'string' ? text : ''
+  if (done) {
+    const piece = buffer.replace(/\s+/g, ' ').trim()
+    return { piece: piece || null, rest: '' }
+  }
+  let cut = -1
+  for (const mark of buffer.matchAll(first ? PAUSE : SENTENCE_END)) {
+    if (!first || mark.index + 1 >= FIRST_PIECE_AT) {
+      cut = mark.index + 1
+      break
+    }
+  }
+  if (cut < 0 && buffer.length > LONGEST_PIECE) {
+    const head = buffer.slice(0, LONGEST_PIECE)
+    const pauses = [...head.matchAll(PAUSE)]
+    const space = head.lastIndexOf(' ')
+    cut = pauses.length ? pauses[pauses.length - 1].index + 1 : space > 0 ? space : LONGEST_PIECE
+  }
+  if (cut < 0) return { piece: null, rest: buffer }
+  const piece = buffer.slice(0, cut).replace(/\s+/g, ' ').trim()
+  const rest = buffer.slice(cut).replace(/^\s+/, '')
+  return piece ? { piece, rest } : { piece: null, rest }
+}
+
+// --- turns ---
+// Every reply is a turn. Talking over it starts a new one, and anything still arriving for an old
+// turn - a piece of speech, a late answer from /api/speak - is dropped rather than played.
+export function newTurn(turns) {
+  turns.current = (turns.current ?? 0) + 1
+  return turns.current
+}
+export const isStale = (turns, turn) => turn !== turns.current
+
+// --- counting what a conversation used, for the meter ---
+// The counts are OpenAI's own (realtime-costs): response.done carries a reply's usage, and each
+// caption carries its own. Cached tokens are counted apart from the rest, because they are priced
+// apart; the cached part is taken OUT of the plain count, so nothing is ever priced twice.
+const TALLY_FIELDS = [
+  'textIn', 'cachedTextIn', 'audioIn', 'cachedAudioIn', 'textOut', 'audioOut',
+  'transcribeTextIn', 'transcribeAudioIn', 'transcribeOut', 'fishBytes'
+]
+export function emptyTally() {
+  return Object.fromEntries(TALLY_FIELDS.map((field) => [field, 0]))
+}
+
+// A new tally with this usage added; the one given is left as it was. `kind` is 'reply' for a
+// response.done, 'captions' for a transcription. Anything else, or usage that is not usage, adds
+// nothing.
+export function addUsage(tally, usage, kind) {
+  const next = { ...emptyTally(), ...tally }
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return next
+  const input = usage.input_token_details ?? {}
+  const output = usage.output_token_details ?? {}
+  if (kind === 'reply') {
+    const cached = input.cached_tokens_details ?? {}
+    const cachedText = wholeCount(cached.text_tokens)
+    const cachedAudio = wholeCount(cached.audio_tokens)
+    next.textIn += Math.max(0, wholeCount(input.text_tokens) - cachedText)
+    next.cachedTextIn += cachedText
+    next.audioIn += Math.max(0, wholeCount(input.audio_tokens) - cachedAudio)
+    next.cachedAudioIn += cachedAudio
+    next.textOut += wholeCount(output.text_tokens)
+    next.audioOut += wholeCount(output.audio_tokens)
+  } else if (kind === 'captions') {
+    const split = input.text_tokens !== undefined || input.audio_tokens !== undefined
+    next.transcribeTextIn += wholeCount(input.text_tokens)
+    // With no split, a caption's input is the person's audio.
+    next.transcribeAudioIn += split ? wholeCount(input.audio_tokens) : wholeCount(usage.input_tokens)
+    next.transcribeOut += wholeCount(usage.output_tokens)
+  }
+  return next
+}
+
+// Fish bills by the UTF-8 bytes of the text it is sent, so that is what is counted.
+export function addFishBytes(tally, text) {
+  return { ...emptyTally(), ...tally, fishBytes: wholeCount(tally?.fishBytes) + new TextEncoder().encode(String(text ?? '')).length }
+}
+
+// --- the outbox: conversations on this device not yet recorded by the board ---
+// Saved after every reply, so a closed tab loses nothing; sent at hang-up and when the board opens.
+// One entry per conversation, updated as it goes. Kept to the newest MAX_OUTBOX_ITEMS, so a board
+// with no store - where the outbox IS the meter - cannot grow it for ever.
+export const MAX_OUTBOX_ITEMS = 200
+const OUTBOX_BATCH = 20
+const OUTBOX_TICKET = /^[A-Za-z0-9_-]{1,600}\.[A-Za-z0-9_-]{1,64}$/
+const OUTBOX_SID = /^[0-9a-f]{32}$/
+const OUTBOX_MODEL = /^[a-z0-9][a-z0-9.-]{0,39}$/
+
+function outboxItem(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  if (typeof raw.ticket !== 'string' || !OUTBOX_TICKET.test(raw.ticket)) return null
+  if (typeof raw.sid !== 'string' || !OUTBOX_SID.test(raw.sid)) return null
+  if (typeof raw.at !== 'string' || Number.isNaN(Date.parse(raw.at))) return null
+  if (typeof raw.model !== 'string' || !OUTBOX_MODEL.test(raw.model)) return null
+  if (raw.mouth !== 'openai' && raw.mouth !== 'fish') return null
+  const counts = {}
+  for (const field of TALLY_FIELDS) {
+    const value = raw.counts?.[field] ?? 0
+    if (!Number.isInteger(value) || value < 0) return null
+    counts[field] = value
+  }
+  const fishModel = raw.mouth === 'fish' && typeof raw.fishModel === 'string' && OUTBOX_MODEL.test(raw.fishModel) ? raw.fishModel : null
+  return { ticket: raw.ticket, sid: raw.sid, at: raw.at, model: raw.model, mouth: raw.mouth, ...(fishModel ? { fishModel } : {}), counts }
+}
+
+// The outbox from what storage held (a string, or null), keeping only entries the page could have
+// written: storage can be edited by hand, by an extension, by anything on the device.
+export function readOutbox(stored) {
+  let parsed = null
+  try {
+    parsed = typeof stored === 'string' ? JSON.parse(stored) : null
+  } catch (error) {
+    parsed = null
+  }
+  const items = Array.isArray(parsed?.items) ? parsed.items.map(outboxItem).filter(Boolean) : []
+  return { version: 1, items: items.slice(-MAX_OUTBOX_ITEMS) }
+}
+
+export function outboxPut(outbox, entry) {
+  const item = outboxItem(entry)
+  if (!item) return outbox
+  const items = outbox.items.filter((kept) => kept.sid !== item.sid)
+  const at = outbox.items.findIndex((kept) => kept.sid === item.sid)
+  if (at >= 0) items.splice(at, 0, item)
+  else items.push(item)
+  return { version: 1, items: items.slice(-MAX_OUTBOX_ITEMS) }
+}
+
+// The next report to send: the oldest 20, and which session each one is, by position.
+export function outboxBatch(outbox) {
+  const items = outbox.items.slice(0, OUTBOX_BATCH)
+  return { reports: items.map((item) => ({ ticket: item.ticket, counts: item.counts })), sids: items.map((item) => item.sid) }
+}
+
+// The outbox after the server answered `batch`: what it counted, and what it says can never count,
+// go; everything else - kept for later, or not sent - stays. An answer that is not one clears nothing.
+export function outboxSettle(outbox, batch, answer) {
+  const accepted = Array.isArray(answer?.accepted) ? answer.accepted : []
+  const refused = Array.isArray(answer?.refused) ? answer.refused : []
+  const gone = new Set(accepted.filter((sid) => typeof sid === 'string'))
+  for (const one of refused) {
+    if (Number.isInteger(one?.at) && one.at >= 0 && one.at < batch.sids.length) gone.add(batch.sids[one.at])
+  }
+  return { version: 1, items: outbox.items.filter((item) => !gone.has(item.sid)) }
+}
+
+// This device's own total for one month, priced by the table the server sent - what the meter shows
+// with no store, and the "not recorded yet" count with one.
+export function outboxSummary(outbox, prices, month) {
+  const summary = { conversations: 0, usd: 0, incomplete: [], fishBytes: {}, waiting: outbox.items.length }
+  if (!prices) summary.incomplete.push('no price table yet')
+  let micros = 0
+  for (const item of outbox.items) {
+    if (item.at.slice(0, 7) !== month) continue
+    summary.conversations += 1
+    if (item.counts.fishBytes > 0 && item.fishModel) {
+      summary.fishBytes[item.fishModel] = (summary.fishBytes[item.fishModel] ?? 0) + item.counts.fishBytes
+    }
+    if (!prices) continue
+    const cost = costOf(item.counts, { model: item.model, transcribeModel: prices.transcribeModel, fishModel: item.fishModel }, prices)
+    micros += cost.micros
+    for (const label of cost.incomplete) if (!summary.incomplete.includes(label)) summary.incomplete.push(label)
+  }
+  summary.usd = micros / 1e6
+  return summary
+}
+
+// --- the six tools, answered from the board the page already has ---
+// Read-only, every one: no new request, no new read of the repo, no cost. Each answer is small (4 KB
+// at most) and plain (no string over 120 characters), because it goes back to OpenAI as the tool's
+// output and the model reads it out. What the repo says is passed on as data; the session's
+// instructions tell the model it is never an instruction. When the board does not know, the answer
+// says "unknown" - a zero here would be a number the model then reads out as fact.
+export const VOICE_PAGE_SCREENS = ['today', 'ledger', 'team', 'workflows', 'skills', 'memory', 'connections', 'hermes']
+const TOOL_ANSWER_BYTES = 4096
+const TOOL_TEXT = 120
+const toolText = (value) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, TOOL_TEXT) : '')
+const toolTime = (value) => (typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? new Date(Date.parse(value)).toISOString() : null)
+const toolList = (value) => (Array.isArray(value) ? value.filter((item) => item && typeof item === 'object' && !Array.isArray(item)) : [])
+const toolFew = (items, how, many = 5) => items.slice(0, many).map(how)
+
+// The biggest list in an answer loses its last entry until the whole answer fits, and then says so.
+function toolFits(answer) {
+  let size = JSON.stringify(answer).length
+  for (let guard = 0; size > TOOL_ANSWER_BYTES && guard < 2000; guard += 1) {
+    let biggest = null
+    const visit = (value) => {
+      if (Array.isArray(value)) {
+        if (value.length && (!biggest || JSON.stringify(value).length > JSON.stringify(biggest).length)) biggest = value
+        value.forEach(visit)
+      } else if (value && typeof value === 'object') {
+        Object.values(value).forEach(visit)
+      }
+    }
+    visit(answer)
+    if (!biggest) break
+    biggest.pop()
+    answer.truncated = true
+    size = JSON.stringify(answer).length
+  }
+  return answer
+}
+
+function teamStatus({ data, names }) {
+  if (!Array.isArray(data?.agents)) return { status: 'unknown' }
+  return {
+    agents: toolList(data.agents).map((agent) => {
+      const slug = toolText(agent.slug)
+      const given = names && typeof agent.slug === 'string' && Object.hasOwn(names, agent.slug) ? toolText(names[agent.slug]) : ''
+      return { name: given || slug, slug, state: toolText(agent.state), lastRun: toolTime(agent.lastRun) }
+    })
+  }
+}
+
+function whatsDue({ data, now }, args) {
+  const ahead = (args?.hours === 48 ? 48 : 24) * 3600_000
+  if (!Array.isArray(data?.workflows)) return { status: 'unknown' }
+  const due = toolList(data.workflows)
+    .filter((job) => toolTime(job.nextRun) && Date.parse(job.nextRun) - now <= ahead)
+    .sort((a, b) => Date.parse(a.nextRun) - Date.parse(b.nextRun))
+  return {
+    hours: ahead / 3600_000,
+    due: toolFew(due, (job) => ({ name: toolText(job.name), at: toolTime(job.nextRun) }), 10),
+    goneQuiet: toolFew(toolList(data.goneQuiet), (item) => ({ name: toolText(item.name), kind: toolText(item.kind), lastRun: toolTime(item.lastRun) }), 10),
+    upNext: toolFew(toolList(data.board?.upNext), (card) => ({ name: toolText(card.name), at: toolTime(card.when), owner: toolText(card.owner) }), 10)
+  }
+}
+
+function taskBoard({ data }) {
+  if (!data?.board || typeof data.board !== 'object') return { status: 'unknown' }
+  const todo = toolList(data.board.todo)
+  const column = (cards) => ({ count: cards.length, first: toolFew(cards, (card) => toolText(card.title)) })
+  return {
+    todo: column(todo.filter((card) => !card.doing)),
+    doing: column(todo.filter((card) => card.doing)),
+    done: column(toolList(data.board.done).filter((card) => card.kind === 'task'))
+  }
+}
+
+function usageNow({ data, spend }) {
+  const voiceSpend = spend && typeof spend.usd === 'number'
+    ? { estimate: true, thisMonthUsd: spend.usd, conversations: wholeCount(spend.conversations), incomplete: Array.isArray(spend.incomplete) && spend.incomplete.length > 0 }
+    : 'unknown'
+  const usage = data?.usage
+  if (!usage || usage.status !== 'ok') return { status: 'unknown', voiceSpend }
+  const services = [['claude', 'Claude'], ['codex', 'Codex']]
+    .filter(([key]) => usage[key] && typeof usage[key] === 'object')
+    .map(([key, service]) => {
+      const reading = usage[key]
+      const limits = reading.limits && typeof reading.limits === 'object' ? reading.limits : {}
+      return {
+        service,
+        computer: toolText(reading.computer),
+        plan: reading.plan?.status === 'found' ? toolText(reading.plan.name) : 'unknown',
+        unofficial: limits.source === 'unofficial-live' || limits.source === 'claude-code-saved',
+        takenAt: toolTime(reading.takenAt),
+        stale: reading.stale === true,
+        windows: limits.status === 'found'
+          ? toolList(limits.windows).map((limit) => ({
+            label: toolText(limit.label),
+            usedPercent: typeof limit.usedPercent === 'number' && !limit.resetSinceReading ? Math.round(limit.usedPercent) : null,
+            resetsAt: toolTime(limit.resetsAt)
+          }))
+          : []
+      }
+    })
+  return { status: 'ok', services, voiceSpend }
+}
+
+function connectionsNow({ data }) {
+  const computers = data?.found?.status === 'ok' ? toolList(data.found.computers) : null
+  const hermes = data?.hermes?.status === 'ok' ? toolList(data.hermes.computers) : null
+  if (!computers && !hermes) return { status: 'unknown' }
+  const servers = (block, key) => {
+    if (block?.status !== 'found') return toolText(block?.status) || 'unknown'
+    const list = toolList(block.servers)
+    const named = (state) => toolFew(list.filter((server) => server[key] === state), (server) => toolText(server.name))
+    return key === 'state'
+      ? { connected: list.filter((server) => server.state === 'connected').length, needsSignIn: named('needs sign-in'), failed: named('failed') }
+      : { found: list.filter((server) => server.state === 'found').length }
+  }
+  return {
+    computers: (computers ?? []).map((computer) => ({
+      computer: toolText(computer.computer),
+      checkedAt: toolTime(computer.takenAt),
+      stale: computer.freshness === 'stale',
+      claude: servers(computer.claude, 'state'),
+      codex: servers(computer.codex, 'codex')
+    })),
+    hermes: (hermes ?? [])
+      .filter((computer) => ['install', 'gateway', 'profiles'].some((part) => computer?.[part]?.status === 'found'))
+      .map((computer) => ({ computer: toolText(computer.computer), running: computer.alive === 'running', words: toolText(computer.aliveLabel) }))
+  }
+}
+
+// `view` is { data, names, now, hermes, spend }: the board's payload, the owner's names for agents,
+// the time, whether this board shows Hermes, and this month's voice spend if the meter has one.
+export function voiceToolAnswer(name, args, view) {
+  const safe = { data: null, names: null, now: Date.now(), hermes: false, spend: null, ...view }
+  switch (name) {
+    case 'open_screen': {
+      const screen = args?.screen
+      const allowed = VOICE_PAGE_SCREENS.filter((one) => one !== 'hermes' || safe.hermes)
+      return typeof screen === 'string' && allowed.includes(screen)
+        ? { opened: screen }
+        : { error: 'There is no screen with that name on this board.' }
+    }
+    case 'team_status': return toolFits(teamStatus(safe))
+    case 'whats_due': return toolFits(whatsDue(safe, args))
+    case 'task_board': return toolFits(taskBoard(safe))
+    case 'usage': return toolFits(usageNow(safe))
+    case 'connections_status': return toolFits(connectionsNow(safe))
+    default: return { error: 'There is no tool with that name.' }
+  }
+}
+
+// --- the owner's yes ---
+// THE hook every later action goes through (voice orders, Phase 11): only a real tap by the person -
+// a click the browser itself marks as trusted - says yes. Never the model's words, a tool's result, a
+// page or an email the team read, or a click a script made. The owner's own spoken "yes" will come
+// through here too, from the transcript of THEIR audio only, and is not accepted yet.
+export function confirmsYes(signal) {
+  return Boolean(signal) && typeof signal === 'object' && signal.kind === 'tap' && signal.trusted === true
+}
+
 // voice-page:end
