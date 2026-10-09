@@ -242,3 +242,36 @@ test('Fish on a computer\'s speakers: the microphone rests while the pieces play
   assert.deepEqual(cut.tracks.map((track) => track.enabled), [true])
   assert.ok(cut.state.channel.sent.some((event) => event.type === 'response.cancel'))
 })
+
+test('25 Fish pieces queued at once keep the microphone rested until the last has played, plus the 300 ms tail', async () => {
+  // The reviewer's case: 25 pieces of 1.5 s, all queued together, play until 37.5 s. The safety that
+  // brings a stuck microphone back must count from when the LAST piece will end, not from 30 s after
+  // each was queued - or the microphone opens mid-reply and hears Fish.
+  const browser = await connected({ answer: { ticket: ticketFor('fish'), mouth: 'fish' }, finePointer: true })
+  const mic = () => browser.tracks.map((track) => track.enabled)
+  browser.emit({ type: 'response.created' })
+  text(browser, Array.from({ length: 25 }, (unused, n) => `Sentence number ${n + 1} is here. `).join(''))
+  browser.emit({ type: 'response.output_text.done' })
+  browser.emit({ type: 'response.done', response: { usage: REPLY_USAGE } })
+  assert.equal(browser.speeches.length, 25)
+  for (const speech of browser.speeches) speech.answer()
+  await flush(20)
+  const nodes = browser.state.context.started
+  assert.equal(nodes.length, 25)
+  assert.equal(nodes.at(-1).at + 1.5, 37.5)
+  const safety = [...browser.timers.values()].filter((timer) => timer.ms >= 30_000)
+  assert.equal(safety.length, 1)
+  assert.ok(safety[0].ms >= 37_500, `the microphone would come back at ${safety[0].ms / 1000} s, before the reply ends at 37.5 s`)
+  assert.equal(safety[0].ms, 42_500, 'the safety is not the end of the last piece plus its 5 s margin')
+  assert.deepEqual(mic(), [false])
+  for (const node of nodes.slice(0, -1)) node.onended()
+  assert.deepEqual(mic(), [false], 'the microphone came back before the last piece played')
+  assert.notEqual(browser.lastState(), 'listening')
+  nodes.at(-1).onended()
+  assert.deepEqual(mic(), [false], 'no tail after the last piece')
+  const [id, tail] = [...browser.timers.entries()].find(([, timer]) => timer.ms === 300)
+  browser.timers.delete(id)
+  tail.fn()
+  assert.deepEqual(mic(), [true])
+  assert.equal(browser.lastState(), 'listening')
+})
