@@ -120,6 +120,14 @@ export function voiceConfig(env = {}) {
   }
 }
 
+// What the page is told, in GET /api/brand: whether to show the orb, which mouth speaks, and why not
+// or what is half set up. Never a key, a voice id or a model.
+export function voiceView(env = {}) {
+  const config = voiceConfig(env)
+  if (!config.on) return { on: false, why: config.why, mouth: 'openai' }
+  return { on: true, mouth: config.mouth, ...(config.note ? { note: config.note } : {}) }
+}
+
 // --- the session -----------------------------------------------------------------------------------
 
 // The name the assistant answers to, from Make it yours. It is held to the same rule as when it was

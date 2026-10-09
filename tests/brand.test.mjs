@@ -87,8 +87,11 @@ test('a connected, empty store reads as the defaults, with the full day\'s allow
     defaultArtStyle: DEFAULT_ART_STYLE,
     names: {},
     pictures: {},
-    left: { writes: 20, generated: 10 }
+    left: { writes: 20, generated: 10 },
+    // Voice rides along; with no OPENAI_API_KEY it is off and says why.
+    voice: { on: false, why: response.body.voice.why, mouth: 'openai' }
   })
+  assert.match(response.body.voice.why, /OPENAI_API_KEY/)
   assert.equal(fake.calls.get.length, 1, 'a page load is one read of settings.json')
   assert.equal(fake.calls.put.length, 0, 'reading never writes')
 })
@@ -455,4 +458,54 @@ test('a JSON body that arrives as a string is read the same way', async () => {
   })
   assert.equal(response.statusCode, 200)
   assert.equal((await get()).body.names.content, 'Penny')
+})
+
+/* ---------- voice: whether the orb shows, and which mouth speaks ---------- */
+// The page learns whether to show the orb from this answer, so it needs no extra request. Voice does
+// not need the picture store, so it is reported the same with personalising on or off.
+
+const OPENAI_KEY = ['sk', 'test', 'brandVoiceKey'].join('-')
+const FISH_KEY = ['fish', 'test', 'brandVoiceKey'].join('_')
+const FISH_VOICE = '0123456789abcdef'.repeat(2)
+
+test('voice is on with OPENAI_API_KEY, in OpenAI\'s own voice, and the answer says so', async () => {
+  const response = await board({ env: { ...STORE_ENV, OPENAI_API_KEY: OPENAI_KEY } }).get()
+  assert.deepEqual(response.body.voice, { on: true, mouth: 'openai' })
+})
+
+test('voice is on without a picture store too', async () => {
+  const handler = makeHandler({ store: null, env: { VIEW_KEY: STORE_ENV.VIEW_KEY, OPENAI_API_KEY: OPENAI_KEY }, now: NOON })
+  const response = await call(handler, { method: 'GET', headers: asTheBoard() })
+  assert.equal(response.body.enabled, false)
+  assert.deepEqual(response.body.voice, { on: true, mouth: 'openai' })
+})
+
+test('voice off says why: no OPENAI_API_KEY, or an open board without EDIT_KEY', async () => {
+  const noKey = (await board().get()).body.voice
+  assert.equal(noKey.on, false)
+  assert.match(noKey.why, /OPENAI_API_KEY/)
+  const handler = makeHandler({ store: null, env: { PUBLIC_DASHBOARD: 'true', OPENAI_API_KEY: OPENAI_KEY }, now: NOON })
+  const open = (await call(handler, { method: 'GET', headers: {} })).body.voice
+  assert.equal(open.on, false)
+  assert.match(open.why, /EDIT_KEY/)
+})
+
+test('the mouth is Fish only with both Fish settings, and a half-set Fish is explained', async () => {
+  const fish = { ...STORE_ENV, OPENAI_API_KEY: OPENAI_KEY, FISH_API_KEY: FISH_KEY, FISH_VOICE_ID: FISH_VOICE }
+  assert.equal((await board({ env: fish }).get()).body.voice.mouth, 'fish')
+  const { FISH_VOICE_ID, ...half } = fish
+  const halfSet = (await board({ env: half }).get()).body.voice
+  assert.equal(halfSet.mouth, 'openai')
+  assert.match(halfSet.note, /FISH_VOICE_ID/)
+})
+
+test('a change is answered with voice too, and no key or voice id is ever in the answer', async () => {
+  const env = { ...STORE_ENV, OPENAI_API_KEY: OPENAI_KEY, FISH_API_KEY: FISH_KEY, FISH_VOICE_ID: FISH_VOICE }
+  const { get, post } = board({ env })
+  const changed = await post({ change: 'assistant', value: 'Penny' })
+  assert.deepEqual(changed.body.voice, { on: true, mouth: 'fish' })
+  for (const response of [changed, await get()]) {
+    const sent = JSON.stringify(response.body)
+    for (const secret of [OPENAI_KEY, FISH_KEY, FISH_VOICE]) assert.ok(!sent.includes(secret), 'a key or voice id reached the page')
+  }
 })
