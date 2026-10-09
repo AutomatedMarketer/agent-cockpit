@@ -5592,6 +5592,10 @@ const VOICE_MIC_MISSING = 'No microphone was found, so connect or allow one, the
 const VOICE_NO_START = 'The call could not start in this browser, so tap the orb to try again.'
 const VOICE_DROPPED = 'The call dropped, so tap the orb to start again.'
 const VOICE_UNHEARD = 'OpenAI could not answer that, so try asking again.'
+// A reply that came back with nothing in it - no sound, no words, no tool call - and that the page
+// did not cancel itself. Seen live (2026-10-09): the first turn of a call got an empty response
+// 367 ms after it started, and the person heard silence with nothing to say why.
+const VOICE_NO_REPLY = 'No reply came back. Say it again.'
 const VOICE_OUTBOX_STORE = 'agent-cockpit-voice-outbox'
 // The echo guard. On a computer on speakers, its own voice can reach the microphone however well the
 // browser cancels echo: the live test (desktop, quiet room, 2026-10-09) heard "It happened.", "Still
@@ -5659,6 +5663,7 @@ function openVoice(deps, ui) {
     userSpeaking: false, replyOwed: false, replyRetries: 0, replyTimer: null,
     echoGuard: false, soundStartedAt: null, suspectTurn: false, echoRetryLeft: 1,
     speakersMode: false, micMuted: false, soundPlaying: false, tailTimer: null, restTimer: null,
+    replyHadOutput: false, cancelledByUs: false,
     soundEndedAt: null, listenPending: null,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
@@ -5755,6 +5760,8 @@ function openVoice(deps, ui) {
   const mic = deps.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
 
   const send = (event) => {
+    // Whatever cancels it - the interrupt, the echo guard, a barge-in - the reply ending empty is ours.
+    if (event.type === 'response.cancel') session.cancelledByUs = true
     if (session.channel?.readyState === 'open') session.channel.send(JSON.stringify(event))
   }
 
@@ -5924,6 +5931,8 @@ function openVoice(deps, ui) {
       }
       case 'response.created':
         session.responding = true
+        session.replyHadOutput = false
+        session.cancelledByUs = false
         session.soundStartedAt = null
         // A response started: an owed reply now waits for it to finish, not for the clock.
         deps.clearTimeout(session.replyTimer)
@@ -5935,6 +5944,7 @@ function openVoice(deps, ui) {
       case 'response.output_audio_transcript.delta':
       case 'response.output_text.delta':
         if (typeof event.delta !== 'string') break
+        session.replyHadOutput = true
         session.said += event.delta
         ui.said(session.said)
         if (event.type === 'response.output_text.delta') fish()?.replyText(session, event.delta)
@@ -5944,6 +5954,7 @@ function openVoice(deps, ui) {
         fish()?.replyText(session, '', true)
         break
       case 'output_audio_buffer.started':
+        session.replyHadOutput = true
         session.soundStarted()
         show('speaking')
         break
@@ -5962,6 +5973,12 @@ function openVoice(deps, ui) {
         break
       case 'response.done': {
         session.responding = false
+        // Empty: nothing said or heard, no message and no tool call in it. Not ours to report when the
+        // page cancelled it, the person is talking over it, or a tool reply is owed after it.
+        const output = Array.isArray(event.response?.output) ? event.response.output : []
+        const empty = !session.replyHadOutput && session.calls.size === 0 &&
+          !output.some((item) => item?.type === 'message' || item?.type === 'function_call')
+        const unexplained = empty && !session.cancelledByUs && !session.userSpeaking && !session.replyOwed
         session.tally = addUsage(session.tally, event.response?.usage, 'reply')
         saveTally()
         showCost()
@@ -5980,6 +5997,11 @@ function openVoice(deps, ui) {
           fish().replyDone(session)
         } else if (session.state !== 'speaking') {
           show('listening')
+        }
+        if (unexplained) {
+          show('listening', VOICE_NO_REPLY)
+          // The status alone, for whoever is debugging - never anything that was said.
+          console.info('voice: a reply came back empty', event.response?.status ?? null, event.response?.status_details ?? null)
         }
         break
       }

@@ -361,7 +361,7 @@ const TOOL_CALLS = [
   { type: 'function_call', call_id: 'call_2', name: 'team_status', arguments: '{}' }
 ]
 const toolReply = (browser, extra = {}) => {
-  for (const call of TOOL_CALLS) browser.emit({ type: 'response.function_call_arguments.done', ...call })
+  for (const call of TOOL_CALLS) browser.emit({ ...call, type: 'response.function_call_arguments.done' })
   browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: TOOL_CALLS, ...extra } })
 }
 const sentTypes = (browser) => browser.state.channel.sent.map((event) => event.type)
@@ -407,7 +407,7 @@ test('if OpenAI refuses the request because a response is running, it is asked a
 test('talking over a tool round trip keeps the outputs, and the reply comes once after the person\'s turn', async () => {
   const browser = await connected()
   browser.emit({ type: 'response.created' })
-  browser.emit({ type: 'response.function_call_arguments.done', ...TOOL_CALLS[0] })
+  browser.emit({ ...TOOL_CALLS[0], type: 'response.function_call_arguments.done' })
   browser.emit({ type: 'input_audio_buffer.speech_started' })
   browser.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [TOOL_CALLS[0]] } })
   const [output] = browser.state.channel.sent
@@ -675,7 +675,7 @@ test('a tool round trip across the rest loses nothing: the outputs go, and the r
   const browser = await speakers()
   browser.emit({ type: 'response.created' })
   browser.emit({ type: 'output_audio_buffer.started' })
-  for (const call of TOOL_CALLS) browser.emit({ type: 'response.function_call_arguments.done', ...call })
+  for (const call of TOOL_CALLS) browser.emit({ ...call, type: 'response.function_call_arguments.done' })
   browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: TOOL_CALLS } })
   browser.emit({ type: 'output_audio_buffer.stopped' })
   endTail(browser)
@@ -777,4 +777,76 @@ test('a double tap - an interrupt, then a second tap as the cancelled reply fini
   browser.clock.now += 300
   assert.equal(browser.call.handlesTap(), true, 'the second tap of a double tap hung up')
   assert.deepEqual(browser.state.ended, [])
+})
+
+/* ---------- a reply that came back empty ---------- */
+// Live test #3: the first spoken turn got response.created, then response.done 367 ms later with no
+// output at all - no sound, no words - and the person heard silence with nothing to say why.
+
+const NO_REPLY = 'No reply came back. Say it again.'
+const watchInfo = (t) => {
+  const said = []
+  t.mock.method(console, 'info', (...parts) => { said.push(parts) })
+  return said
+}
+
+test('a reply that comes back with nothing in it says so, and logs only its status for debugging', async (t) => {
+  const said = watchInfo(t)
+  const browser = await connected()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', status_details: null, usage: REPLY_USAGE, output: [] } })
+  assert.deepEqual(browser.ui.shown.at(-1), { state: 'listening', words: NO_REPLY, live: true })
+  assert.equal(said.length, 1)
+  assert.deepEqual(said[0].slice(1), ['completed', null])
+})
+
+test('a failed reply is said the same way, and its status details are logged - never what was said', async (t) => {
+  const said = watchInfo(t)
+  const browser = await connected()
+  browser.emit({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'Checking in.', usage: TRANSCRIPTION_USAGE })
+  browser.emit({ type: 'response.created' })
+  const details = { type: 'failed', error: { type: 'server_error', code: 'internal_error' } }
+  browser.emit({ type: 'response.done', response: { status: 'failed', status_details: details, usage: REPLY_USAGE, output: [] } })
+  assert.equal(browser.ui.shown.at(-1).words, NO_REPLY)
+  assert.deepEqual(said[0].slice(1), ['failed', details])
+  assert.ok(!JSON.stringify(said).includes('Checking in'), 'what the person said was logged')
+})
+
+test('nothing is said for a reply the page itself cancelled, one the person talked over, or one that only asked for tools', async (t) => {
+  const said = watchInfo(t)
+  // Cancelled by the page: the interrupt in speakers mode, before any sound came.
+  const interrupted = await connected({ finePointer: true })
+  interrupted.emit({ type: 'response.created' })
+  assert.equal(interrupted.call.interrupt(), true)
+  interrupted.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [] } })
+  // Cancelled by the page: the echo guard.
+  const echoed = await guarded()
+  await heardItself(echoed, 'It happened.')
+  echoed.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [] } })
+  // Talked over by the person.
+  const talkedOver = await connected()
+  talkedOver.emit({ type: 'response.created' })
+  talkedOver.emit({ type: 'input_audio_buffer.speech_started' })
+  talkedOver.emit({ type: 'response.done', response: { status: 'cancelled', status_details: { type: 'cancelled', reason: 'turn_detected' }, usage: REPLY_USAGE, output: [] } })
+  // Only tool calls, and the response OpenAI started itself while a tool reply was owed.
+  const tools = await connected()
+  tools.emit({ type: 'response.created' })
+  tools.emit({ type: 'input_audio_buffer.speech_started' })
+  toolReply(tools)
+  tools.emit({ type: 'input_audio_buffer.speech_stopped' })
+  tools.emit({ type: 'response.created' })
+  tools.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  // A tool call heard in its events, though the response's own list came back empty.
+  const toolEvents = await connected()
+  toolEvents.emit({ type: 'response.created' })
+  toolEvents.emit({ ...TOOL_CALLS[0], type: 'response.function_call_arguments.done' })
+  toolEvents.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  // A message in the response's own list, though none of its words were seen arriving.
+  const message = await connected()
+  message.emit({ type: 'response.created' })
+  message.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_audio' }] }] } })
+  for (const [what, browser] of [['interrupted', interrupted], ['echo', echoed], ['talked over', talkedOver], ['tools', tools], ['tool events', toolEvents], ['message', message]]) {
+    assert.ok(!browser.ui.shown.some((shown) => shown.words === NO_REPLY), `${what}: "no reply" was said`)
+  }
+  assert.deepEqual(said, [])
 })
