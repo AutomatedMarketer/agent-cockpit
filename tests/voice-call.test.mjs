@@ -340,3 +340,101 @@ test('the outbox entry says the conversation is still going until the call ends'
   assert.equal(browser.state.saved.at(-1).open, false, 'an ended conversation is still marked as going')
   assert.equal(browser.state.saved.at(-1).counts.audioOut, 91)
 })
+
+/* ---------- the reply to a tool round trip: never lost to a response OpenAI started itself ---------- */
+// From the live test on a preview (2026-10-09, Chrome, real OpenAI): the model spoke a preamble,
+// asked for two tools and finished at 1148 ms; at 1249 ms the server's VAD committed a turn (the
+// assistant's own voice, heard back) and started a NEW response at 1254 ms; the page's response.create
+// for the tool outputs was then refused - "Conversation already has an active response in progress" -
+// and the outputs were never answered. OpenAI's own error event, word for word but the id:
+const ACTIVE_RESPONSE = {
+  type: 'error',
+  error: {
+    type: 'invalid_request_error',
+    code: 'conversation_already_has_active_response',
+    message: 'Conversation already has an active response in progress: resp_123. Wait until the response is finished before creating a new one.'
+  }
+}
+const TOOL_CALLS = [
+  { type: 'function_call', call_id: 'call_1', name: 'whats_due', arguments: '{"hours":24}' },
+  { type: 'function_call', call_id: 'call_2', name: 'team_status', arguments: '{}' }
+]
+const toolReply = (browser, extra = {}) => {
+  for (const call of TOOL_CALLS) browser.emit({ type: 'response.function_call_arguments.done', ...call })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: TOOL_CALLS, ...extra } })
+}
+const sentTypes = (browser) => browser.state.channel.sent.map((event) => event.type)
+const creates = (browser) => sentTypes(browser).filter((type) => type === 'response.create').length
+
+test('the live race: a turn the server heard mid-reply holds the tool reply until its own response is done, then asks once', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'Let me check the board.' })
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  toolReply(browser)
+  assert.deepEqual(sentTypes(browser), ['conversation.item.create', 'conversation.item.create'], 'the outputs did not go at once, or a reply was asked for while a turn was being heard')
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.emit({ type: 'input_audio_buffer.committed' })
+  browser.emit({ type: 'response.created' })
+  assert.equal(creates(browser), 0, 'a reply was asked for while OpenAI\'s own response was running')
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  assert.equal(creates(browser), 1, 'the tool outputs were never answered')
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  assert.equal(creates(browser), 1, 'the reply was asked for twice')
+})
+
+test('if OpenAI refuses the request because a response is running, it is asked again once - after that response - and never loops', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.created' })
+  toolReply(browser)
+  assert.deepEqual(sentTypes(browser), ['conversation.item.create', 'conversation.item.create', 'response.create'])
+  // The server's VAD started its own response first, so ours was refused.
+  browser.emit({ type: 'response.created' })
+  browser.emit(ACTIVE_RESPONSE)
+  assert.notEqual(browser.ui.shown.at(-1).words, browser.exposed.VOICE_UNHEARD, 'a refusal the page handles was shown as a failure')
+  assert.equal(creates(browser), 1)
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  assert.equal(creates(browser), 2, 'the refused request was not asked again after the running response')
+  // Refused again: no third try for this batch.
+  browser.emit({ type: 'response.created' })
+  browser.emit(ACTIVE_RESPONSE)
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  assert.equal(creates(browser), 2, 'one tool batch asked for a reply more than twice')
+})
+
+test('talking over a tool round trip keeps the outputs, and the reply comes once after the person\'s turn', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.function_call_arguments.done', ...TOOL_CALLS[0] })
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [TOOL_CALLS[0]] } })
+  const [output] = browser.state.channel.sent
+  assert.equal(output?.item?.call_id, 'call_1', 'a tool output was dropped when the person talked over it')
+  assert.equal(creates(browser), 0, 'a reply was asked for while the person was talking')
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  assert.equal(creates(browser), 1)
+})
+
+test('a reply held for a turn that never gets a response of its own is asked for 1.5 seconds after the turn ends', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  toolReply(browser)
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  const held = [...browser.timers.entries()].find(([, timer]) => timer.ms === 1500)
+  assert.ok(held, 'nothing waits to ask for the held reply')
+  assert.equal(creates(browser), 0)
+  held[1].fn()
+  assert.equal(creates(browser), 1)
+  // And when a response does start in that time, the wait is dropped and the reply waits for it.
+  const other = await connected()
+  other.emit({ type: 'response.created' })
+  other.emit({ type: 'input_audio_buffer.speech_started' })
+  toolReply(other)
+  other.emit({ type: 'input_audio_buffer.speech_stopped' })
+  other.emit({ type: 'response.created' })
+  assert.ok(![...other.timers.values()].some((timer) => timer.ms === 1500), 'the wait was left running after a response started')
+})

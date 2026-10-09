@@ -5534,6 +5534,9 @@ const VOICE_NO_START = 'The call could not start in this browser, so tap the orb
 const VOICE_DROPPED = 'The call dropped, so tap the orb to start again.'
 const VOICE_UNHEARD = 'OpenAI could not answer that, so try asking again.'
 const VOICE_OUTBOX_STORE = 'agent-cockpit-voice-outbox'
+// How long a reply held for the person's turn waits for that turn's own response before it is asked
+// for anyway, so a turn that never gets one cannot leave the tool outputs unanswered.
+const VOICE_REPLY_WAIT_MS = 1500
 
 // The voice meter as GET /api/voice-meter last said it, price table included; null until it answers.
 let voiceMeter = null
@@ -5559,6 +5562,7 @@ function openVoice(deps, ui) {
   const session = {
     state: 'connecting', stopped: false, turns: { current: 0 }, tally: emptyTally(), claims: null, ticket: '',
     mouth: 'openai', idleMinutes: 2, captions: true, responding: false, calls: new Map(), said: '',
+    userSpeaking: false, replyOwed: false, replyRetries: 0, replyTimer: null,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
   const show = (state, words) => {
@@ -5624,6 +5628,7 @@ function openVoice(deps, ui) {
     if (session.stopped) return
     session.stopped = true
     deps.clearTimeout(session.timer)
+    deps.clearTimeout(session.replyTimer)
     deps.fish?.stop(session)
     try { session.channel?.close() } catch (error) { /* already closed */ }
     try { session.pc?.close() } catch (error) { /* already closed */ }
@@ -5645,6 +5650,7 @@ function openVoice(deps, ui) {
   }
 
   // A tool the model asked for, answered from the board this page already has.
+  // The outputs go the moment they are ready, a request for the reply only when OpenAI can take one.
   function answerTools(calls) {
     for (const call of calls) {
       let args = {}
@@ -5653,7 +5659,35 @@ function openVoice(deps, ui) {
       if (answer.opened) deps.openScreen(answer.opened)
       send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(answer) } })
     }
+    session.replyRetries = 1
+    askForReply()
+  }
+
+  // The reply to a batch of tool outputs. OpenAI refuses response.create while another response is
+  // running ("Conversation already has an active response"), and its server VAD starts one of its own
+  // the moment it hears a turn end - which can fall between our outputs and our request (seen live,
+  // 2026-10-09). So the request goes only when no response is running and nobody is talking; else it
+  // is owed, and asked once after the next response.done. Refused anyway, it is asked once more after
+  // that - never again for the same batch, so it cannot loop.
+  function askForReply() {
+    deps.clearTimeout(session.replyTimer)
+    session.replyTimer = null
+    if (session.responding || session.userSpeaking) {
+      session.replyOwed = true
+      return
+    }
+    session.replyOwed = false
     send({ type: 'response.create' })
+  }
+
+  // A turn has ended with a reply still owed: its own response normally starts at once, and the reply
+  // waits for that one to finish. If none starts, the reply is asked for after a short wait.
+  function waitThenAsk() {
+    deps.clearTimeout(session.replyTimer)
+    session.replyTimer = deps.setTimeout(() => {
+      session.replyTimer = null
+      if (!session.stopped && session.replyOwed && !session.responding) askForReply()
+    }, VOICE_REPLY_WAIT_MS)
   }
 
   // The person started talking: over a reply, that is a new turn. OpenAI cancels the reply and cuts
@@ -5672,13 +5706,16 @@ function openVoice(deps, ui) {
     if (session.stopped || !event || typeof event.type !== 'string') return
     switch (event.type) {
       case 'input_audio_buffer.speech_started':
+        session.userSpeaking = true
         armIdle()
         bargeIn()
         ui.you('')
         show('listening')
         break
       case 'input_audio_buffer.speech_stopped':
+        session.userSpeaking = false
         armIdle()
+        if (session.replyOwed && !session.responding) waitThenAsk()
         show('thinking')
         break
       case 'conversation.item.input_audio_transcription.completed':
@@ -5688,6 +5725,9 @@ function openVoice(deps, ui) {
         break
       case 'response.created':
         session.responding = true
+        // A response started: an owed reply now waits for it to finish, not for the clock.
+        deps.clearTimeout(session.replyTimer)
+        session.replyTimer = null
         session.replyTurn = session.turns.current
         session.said = ''
         fish()?.replyStarted(session)
@@ -5728,6 +5768,9 @@ function openVoice(deps, ui) {
         if (calls.length) {
           answerTools(calls)
           show('thinking')
+        } else if (session.replyOwed) {
+          askForReply()
+          show('thinking')
         } else if (fish()) {
           fish().replyDone(session)
         } else if (session.state !== 'speaking') {
@@ -5738,6 +5781,15 @@ function openVoice(deps, ui) {
       case 'error':
         // Cancelling a reply that had already finished is not worth a word.
         if (event.error?.code === 'response_cancel_not_active') break
+        // Our request for a tool reply arrived while a response was running: ask again once, after it.
+        if (event.error?.code === 'conversation_already_has_active_response' || /already has an active response/i.test(String(event.error?.message ?? ''))) {
+          if (session.replyRetries > 0) {
+            session.replyRetries -= 1
+            session.replyOwed = true
+            if (!session.responding) waitThenAsk()
+          }
+          break
+        }
         show('listening', VOICE_UNHEARD)
         break
       default:
