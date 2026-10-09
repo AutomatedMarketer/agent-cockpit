@@ -321,3 +321,13 @@ test('a new call starts with an empty sheet, never the last call\'s words or cos
   loaded.exposed.openVoice(browser.deps, browser.ui)
   assert.deepEqual([browser.ui.heard[0], browser.ui.spoken[0], browser.ui.costs[0]], ['', '', ''])
 })
+
+test('the page sends the offer to the board as JSON - the one way Vercel hands a body over', async () => {
+  const loaded = await page()
+  await loaded.exposed.voiceDeps().startCall(SDP_OFFER)
+  const sent = loaded.requests.find((request) => request.url === '/api/voice-session')
+  assert.ok(sent, 'the offer never went to the board')
+  assert.equal(sent.init.method, 'POST')
+  assert.equal(sent.init.headers['Content-Type'], 'application/json')
+  assert.deepEqual(JSON.parse(sent.init.body), { sdp: SDP_OFFER })
+})

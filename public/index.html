@@ -5352,8 +5352,9 @@ function voiceDeps() {
       el('voice-dock').appendChild(audio)
       return audio
     },
-    // The person tapped, so a missing edit key may be asked for - once, as every change asks.
-    startCall: (sdp) => storeWrite('/api/voice-session', sdp, 'application/sdp'),
+    // The person tapped, so a missing edit key may be asked for - once, as every change asks. Sent as
+    // JSON: Vercel hands a function no application/sdp body at all.
+    startCall: (sdp) => storeWrite('/api/voice-session', JSON.stringify({ sdp }), 'application/json'),
     view: () => ({ data, names: brand?.names ?? {}, now: Date.now(), hermes: hermesShown(), spend: voiceSpendNow() }),
     openScreen: (screen) => { location.hash = `#${screen}` },
     prices: () => voiceMeter?.prices ?? null,

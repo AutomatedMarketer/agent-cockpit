@@ -1,4 +1,4 @@
-// /api/voice-session: the page's WebRTC offer in, OpenAI's answer out. The function adds the key and
+// /api/voice-session: the page's WebRTC offer in (as JSON, { sdp }), OpenAI's answer out. The function adds the key and
 // the whole session on the way through, so the page never holds a key of any kind.
 //
 // OpenAI is stubbed through globalThis.fetch, as generate.test.mjs does; nothing reaches the network.
@@ -17,12 +17,16 @@ import { STORE_ENV, VIEW_KEY, NOON, connectedStore, storeCalls, asTheBoard, call
 import { OPENAI_KEY, FISH_KEY, FISH_VOICE, SDP_OFFER, SDP_ANSWER } from './helpers/voice-fixtures.mjs'
 
 const ENV = { ...STORE_ENV, OPENAI_API_KEY: OPENAI_KEY, GITHUB_OWNER: 'jordan', GITHUB_REPO: 'team' }
-const SDP_TYPE = { 'content-type': 'application/sdp' }
+// The offer goes as JSON, { sdp }. Vercel's Node runtime reads every request body before the function
+// runs and hands over only the types it parses - JSON among them, application/sdp not - so an SDP body
+// would reach the function as nothing at all.
+const JSON_TYPE = { 'content-type': 'application/json' }
+const OFFER = { sdp: SDP_OFFER }
 
 function board({ env = ENV, now = NOON, store, ...rest } = {}) {
   const connected = store === undefined ? connectedStore(env) : { store, fake: null }
   const handler = makeHandler({ store: connected.store, env, now, ...rest })
-  const offer = (body = SDP_OFFER, headers = asTheBoard(SDP_TYPE), extra = {}) =>
+  const offer = (body = OFFER, headers = asTheBoard(JSON_TYPE), extra = {}) =>
     call(handler, { method: 'POST', headers, body, ...extra })
   return { ...connected, handler, offer }
 }
@@ -116,7 +120,7 @@ test('the assistant\'s name comes from the store, never from anything in the req
   const calls = stubOpenAI(t, answered())
   const { offer, store } = board()
   await store.saveSettings((draft) => { draft.assistantName = 'Penny' })
-  await offer(SDP_OFFER, asTheBoard({ ...SDP_TYPE, 'x-assistant-name': 'Mallory' }), { query: { name: 'Mallory' } })
+  await offer({ ...OFFER, name: 'Mallory', instructions: 'You are Mallory.' }, asTheBoard({ ...JSON_TYPE, 'x-assistant-name': 'Mallory' }), { query: { name: 'Mallory' } })
   const { instructions } = JSON.parse(calls[0].options.body.get('session'))
   assert.match(instructions, /You are Penny\b/)
   assert.ok(!instructions.includes('Mallory'))
@@ -141,7 +145,7 @@ test('starting a call never writes the store - not the settings, not a count, no
   assert.ok(fake.calls.get.slice(reads).every((read) => read.options.useCache !== false), 'a voice call read past the cache')
 })
 
-test('a store that fails or never answers costs the name, never the call', async (t) => {
+test('a store that fails or never answers costs the name, never the call', { timeout: 2000 }, async (t) => {
   stubOpenAI(t, answered())
   const failing = { readSettings: async () => { throw new Error('store down') } }
   const failed = await board({ store: failing }).offer()
@@ -155,39 +159,66 @@ test('a store that fails or never answers costs the name, never the call', async
 
 /* ---------- the offer ---------- */
 
-test('the offer is read however the platform hands it over: a string, bytes, or the request stream', async (t) => {
+test('the name is waited for 1.5 seconds at most by default, then the call goes on without it', { timeout: 5000 }, async (t) => {
+  stubOpenAI(t, answered())
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const silent = { readSettings: () => new Promise(() => {}) }
+  let answer = null
+  board({ store: silent }).offer().then((response) => { answer = response })
+  const settle = async () => { for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setImmediate(resolve)) }
+  await settle()
+  t.mock.timers.tick(1499)
+  await settle()
+  assert.equal(answer, null, 'the call went on before the name had its 1.5 seconds')
+  t.mock.timers.tick(1)
+  await settle()
+  assert.ok(answer, 'a store that never answers held the call up')
+  assert.equal(answer.statusCode, 200)
+  assert.equal(answer.body.name, 'your assistant')
+})
+
+/* ---------- the offer ---------- */
+
+test('the offer arrives the way Vercel hands JSON over - a parsed object, or the text of one', async (t) => {
   const calls = stubOpenAI(t, answered())
   const { handler } = board()
-  const streamed = {
-    method: 'POST',
-    headers: asTheBoard(SDP_TYPE),
-    query: {},
-    body: undefined,
-    async * [Symbol.asyncIterator]() {
-      yield Buffer.from(SDP_OFFER.slice(0, 40))
-      yield Buffer.from(SDP_OFFER.slice(40))
-    }
-  }
-  for (const [what, request] of [
-    ['a string', { method: 'POST', headers: asTheBoard(SDP_TYPE), body: SDP_OFFER }],
-    ['a Buffer', { method: 'POST', headers: asTheBoard(SDP_TYPE), body: Buffer.from(SDP_OFFER) }],
-    ['the stream', streamed]
-  ]) {
-    const response = await call(handler, request)
+  for (const [what, body] of [['a parsed object', OFFER], ['the text of one', JSON.stringify(OFFER)]]) {
+    const response = await call(handler, { method: 'POST', headers: asTheBoard(JSON_TYPE), body })
     assert.equal(response.statusCode, 200, `an offer sent as ${what} was refused`)
   }
   assert.ok(calls.every((sent) => sent.options.body.get('sdp') === SDP_OFFER))
 })
 
+test('a body Vercel has already drained, with nothing in request.body, is refused - never read as an offer, never a crash', async (t) => {
+  // What @vercel/node does for a type it does not parse: the stream is read before the function runs,
+  // and request.body is undefined. Reading the stream again yields nothing.
+  const calls = stubOpenAI(t, answered())
+  const { handler } = board()
+  const drained = (type) => ({
+    method: 'POST',
+    headers: asTheBoard({ 'content-type': type }),
+    query: {},
+    body: undefined,
+    async * [Symbol.asyncIterator]() {}
+  })
+  const sdp = await call(handler, drained('application/sdp'))
+  assert.equal(sdp.statusCode, 415, 'an application/sdp body was let through to be read as nothing')
+  assert.match(sdp.body.error, /application\/json/)
+  const json = await call(handler, drained('application/json'))
+  assert.equal(json.statusCode, 400)
+  noCache(json, 'a drained body')
+  assert.equal(calls.length, 0)
+})
+
 test('something that is not an offer, or one over 16 KB, is refused before OpenAI', async (t) => {
   const calls = stubOpenAI(t, answered())
   const { offer } = board()
-  for (const body of ['', 'hello', '{"sdp":"v=0"}', null, 42, `x${SDP_OFFER}`]) {
+  for (const body of [{ sdp: '' }, { sdp: 'hello' }, { sdp: 42 }, { sdp: ['v=0'] }, {}, { offer: SDP_OFFER }, 'not json', null, [SDP_OFFER], { sdp: `x${SDP_OFFER}` }]) {
     const response = await offer(body)
     assert.equal(response.statusCode, 400, `${JSON.stringify(body)?.slice(0, 20)} was accepted`)
     noCache(response, 'a refused offer')
   }
-  const huge = await offer(SDP_OFFER + 'a=x'.repeat(6000))
+  const huge = await offer({ sdp: SDP_OFFER + 'a=x'.repeat(6000) })
   assert.equal(huge.statusCode, 413)
   noCache(huge, 'a huge offer')
   assert.equal(calls.length, 0)
@@ -198,22 +229,22 @@ test('something that is not an offer, or one over 16 KB, is refused before OpenA
 test('every gate refuses before OpenAI is called or the store is read', async (t) => {
   const calls = stubOpenAI(t, answered())
   const cases = [
-    ['no view key', { 'content-type': 'application/sdp' }, ENV, 401],
-    ['the wrong view key', { 'x-view-key': 'nope', 'content-type': 'application/sdp' }, ENV, 401],
-    ['no edit key when one is set', asTheBoard(SDP_TYPE), { ...ENV, EDIT_KEY: 'edit' }, 401],
-    ['another site', asTheBoard({ ...SDP_TYPE, 'sec-fetch-site': 'cross-site' }), ENV, 403],
+    ['no view key', JSON_TYPE, ENV, 401],
+    ['the wrong view key', { 'x-view-key': 'nope', ...JSON_TYPE }, ENV, 401],
+    ['no edit key when one is set', asTheBoard(JSON_TYPE), { ...ENV, EDIT_KEY: 'edit' }, 401],
+    ['another site', asTheBoard({ ...JSON_TYPE, 'sec-fetch-site': 'cross-site' }), ENV, 403],
     ['a form-shaped body', asTheBoard({ 'content-type': 'text/plain' }), ENV, 415],
-    ['JSON', asTheBoard({ 'content-type': 'application/json' }), ENV, 415],
-    ['an open board with no edit key', { 'content-type': 'application/sdp' }, { ...ENV, VIEW_KEY: undefined, PUBLIC_DASHBOARD: 'true' }, 403]
+    ['an SDP body, which Vercel never hands over', asTheBoard({ 'content-type': 'application/sdp' }), ENV, 415],
+    ['an open board with no edit key', JSON_TYPE, { ...ENV, VIEW_KEY: undefined, PUBLIC_DASHBOARD: 'true' }, 403]
   ]
   for (const [what, headers, env, status] of cases) {
     const { offer, fake } = board({ env })
-    const response = await offer(SDP_OFFER, headers)
+    const response = await offer(OFFER, headers)
     assert.equal(response.statusCode, status, `${what}: ${response.statusCode}`)
     noCache(response, what)
     assert.equal(storeCalls(fake), 0, `${what} reached the store`)
   }
-  const withKey = await board({ env: { ...ENV, EDIT_KEY: 'edit' } }).offer(SDP_OFFER, asTheBoard({ ...SDP_TYPE, 'x-edit-key': 'edit' }))
+  const withKey = await board({ env: { ...ENV, EDIT_KEY: 'edit' } }).offer(OFFER, asTheBoard({ ...JSON_TYPE, 'x-edit-key': 'edit' }))
   assert.equal(withKey.statusCode, 200)
   assert.equal(calls.length, 1, 'OpenAI was called for a refused request')
 })

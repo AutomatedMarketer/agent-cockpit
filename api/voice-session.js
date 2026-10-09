@@ -1,4 +1,4 @@
-// /api/voice-session: the page's WebRTC offer in, OpenAI's answer out (Phase 10).
+// /api/voice-session: the page's WebRTC offer in, as JSON { sdp }, OpenAI's answer out (Phase 10).
 //
 // This is OpenAI's "unified" way of starting a call: the browser makes an offer, our function sends
 // it to OpenAI with the key and the session, and OpenAI's answer goes back to the browser. After that
@@ -18,7 +18,7 @@
 // not on the view key, so anything it kept here could be handed to somebody without one.
 
 import { createHash } from 'node:crypto'
-import { writeGate, readCapped } from './lib.js'
+import { writeGate, readJsonBody, readCapped } from './lib.js'
 import { pictureStore } from './_picture-store.js'
 import { voiceConfig, sessionFor, assistantLabel, signTicket, newSessionId } from './_voice.js'
 
@@ -48,31 +48,17 @@ const SAY = {
 
 const timedOut = (error) => error?.name === 'TimeoutError' || error?.name === 'AbortError'
 
-// The offer as text, however the platform handed it over. Vercel parses only the body types it
-// knows, and application/sdp is not one, so it usually arrives as the request stream - read here no
-// further than one byte past the limit. A string or bytes are taken as they are, in case it ever does.
-async function readOffer(request) {
-  const body = request?.body
-  let bytes
-  if (typeof body === 'string') bytes = Buffer.from(body, 'utf8')
-  else if (body instanceof Uint8Array) bytes = Buffer.from(body.buffer, body.byteOffset, body.byteLength)
-  else if (body === undefined && typeof request?.[Symbol.asyncIterator] === 'function') {
-    const chunks = []
-    let size = 0
-    for await (const chunk of request) {
-      const part = Buffer.from(chunk)
-      chunks.push(part)
-      size += part.length
-      if (size > MAX_OFFER_BYTES) break // leaving the loop stops the stream
-    }
-    bytes = Buffer.concat(chunks)
-  } else {
-    return { error: SAY.notOffer, status: 400 }
-  }
-  if (bytes.length > MAX_OFFER_BYTES) return { error: SAY.tooBig, status: 413 }
-  const text = bytes.toString('utf8')
+// The offer, from { "sdp": "v=0..." } sent as JSON. Not as application/sdp, the type an offer
+// usually travels as: Vercel's Node runtime reads every request body before the function runs and
+// hands over only the types it parses - JSON, octet-stream, forms and plain text - so an SDP body
+// arrives as nothing at all, on a stream that is already empty. JSON is parsed for us, and it is a
+// type a cross-site form cannot send without the browser asking first (see writeGate).
+function readOffer(request) {
+  const sdp = readJsonBody(request)?.sdp
+  if (typeof sdp !== 'string') return { error: SAY.notOffer, status: 400 }
+  if (Buffer.byteLength(sdp, 'utf8') > MAX_OFFER_BYTES) return { error: SAY.tooBig, status: 413 }
   // Every session description starts with its version line.
-  return text.startsWith('v=0\r\n') || text.startsWith('v=0\n') ? { offer: text } : { error: SAY.notOffer, status: 400 }
+  return /^v=0\r?\n/.test(sdp) ? { offer: sdp } : { error: SAY.notOffer, status: 400 }
 }
 
 // The assistant's name from the store's cached copy, or '' - which the session calls "your
@@ -123,11 +109,11 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
     response.setHeader('Cache-Control', 'private, no-store')
     if (String(request?.method ?? 'GET').toUpperCase() !== 'POST') {
       response.setHeader('Allow', 'POST')
-      response.status(405).json({ error: 'POST the browser\'s call offer as application/sdp.' })
+      response.status(405).json({ error: 'POST { "sdp": "<the browser\'s call offer>" } as application/json.' })
       return
     }
 
-    const denied = writeGate(request, environment, 'application/sdp')
+    const denied = writeGate(request, environment)
     if (denied) {
       const { status, ...answer } = denied
       response.status(status).json(answer)
@@ -138,7 +124,7 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
       response.status(503).json({ error: config.why })
       return
     }
-    const read = await readOffer(request)
+    const read = readOffer(request)
     if (read.error) {
       response.status(read.status).json({ error: read.error })
       return
