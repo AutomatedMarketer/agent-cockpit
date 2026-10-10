@@ -1496,3 +1496,71 @@ test('the page\'s re-check for "is it done?" is the Readiness check: one small c
   assert.deepEqual(await recheck(reply(200, { unchanged: true, commit: 'abc123' })), { checked: true, asked: ['/api/state?since=abc123'] })
   assert.equal((await recheck(reply(500, { error: 'no' }))).checked, false)
 })
+
+/* ---------- Jev's pick, when the switch is on ---------- */
+
+test('with Jev on, a task card asks it who should do it, shows the pick and how sure it was, and the owner can change it', async () => {
+  const browser = await ordering({
+    keyHeld: true,
+    answer: { orders: { ...ORDERS, jev: true } },
+    routeTask: async () => ({ for: 'research', confidence: 0.84 })
+  })
+  propose(browser, 'add_task', { title: 'Draft it', details: 'Use the Monday notes.' })
+  await flush()
+  assert.deepEqual(browser.state.routed, [{ title: 'Draft it', details: 'Use the Monday notes.', agents: [{ slug: 'research', description: 'Finds things out.' }] }])
+  assert.deepEqual(browser.ui.picks.at(-1), { owner: 'research', words: 'Picked by Jev (84% sure). Change it if you like.' })
+  // A spoken yes goes with what the card says now - the pick, or whatever the owner changed it to.
+  browser.ui.ownerNow = ''
+  browser.clock.now += 2000
+  say(browser, 'item_yes', 'yes')
+  await flush()
+  assert.deepEqual(browser.state.dispatched[0].body, { action: 'task', title: 'Draft it', details: 'Use the Monday notes.' }, 'the owner\'s change was not kept')
+})
+
+test('a pick the card did not offer, a late pick, a run card, or Jev off: the orchestrator stays the choice', async () => {
+  const offList = await ordering({ answer: { orders: { ...ORDERS, jev: true } }, routeTask: async () => ({ for: 'sales', confidence: 0.99 }) })
+  propose(offList, 'add_task', { title: 'Draft it' })
+  await flush()
+  assert.deepEqual(offList.ui.picks, [], 'a switched-off agent was picked')
+  let answerLate
+  const late = await ordering({ answer: { orders: { ...ORDERS, jev: true } }, routeTask: () => new Promise((resolve) => { answerLate = resolve }) })
+  propose(late, 'add_task', { title: 'Draft it' })
+  late.call.decline()
+  answerLate({ for: 'research', confidence: 0.9 })
+  await flush()
+  assert.deepEqual(late.ui.picks, [], 'a pick arrived on a card that was already gone')
+  const run = await ordering({ answer: { orders: { ...ORDERS, jev: true } } })
+  propose(run, 'run_job', { workflow: 'morning-intel' })
+  await flush()
+  assert.deepEqual(run.state.routed, [], 'a run was sent to Jev')
+  const off = await ordering()
+  propose(off, 'add_task', { title: 'Draft it' })
+  await flush()
+  assert.deepEqual(off.state.routed, [], 'the order went to Jev with the switch off')
+})
+
+test('the page asks /api/route-task as a change - JSON, the edit key when there is one - and takes any failure as no pick', async () => {
+  const { loadPage } = await import('./helpers/page-harness.mjs')
+  const { brandAnswer, VOICE_ON } = await import('./helpers/page-payload.mjs')
+  const reply = (status, body) => ({ ok: status < 300, status, headers: { get: () => null }, json: async () => body })
+  const route = async (answer) => {
+    const loaded = loadPage({
+      storage: { 'agent-cockpit-edit-key': 'an-edit-key' },
+      fetch: async (url) => url.startsWith('/api/brand') ? reply(200, brandAnswer({ voice: VOICE_ON }))
+        : url === '/api/route-task' ? answer()
+          : reply(200, url.startsWith('/api/state') ? basePayload() : {}),
+      expose: ['voiceDeps']
+    })
+    await flush()
+    const picked = await loaded.exposed.voiceDeps().routeTask({ title: 'Draft it', agents: [] })
+    return { picked, sent: loaded.requests.find((request) => request.url === '/api/route-task') }
+  }
+  const { picked, sent } = await route(() => reply(200, { for: 'research', confidence: 0.84 }))
+  assert.deepEqual(picked, { for: 'research', confidence: 0.84 })
+  assert.equal(sent.init.method, 'POST')
+  assert.equal(sent.init.headers['Content-Type'], 'application/json')
+  assert.equal(sent.init.headers['x-edit-key'], 'an-edit-key')
+  assert.deepEqual(JSON.parse(sent.init.body), { title: 'Draft it', agents: [] })
+  assert.equal((await route(() => reply(401, { needs: 'edit-key' }))).picked, null)
+  assert.equal((await route(() => { throw new Error('offline') })).picked, null)
+})

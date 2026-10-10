@@ -4525,6 +4525,17 @@ function voiceDeps() {
     ordersLog: voiceOrdersLog,
     // The Readiness wall's own check: one small call when nothing changed, the new board when it has.
     recheck: () => recheckBoardNow(),
+    // Jev's suggestion of who should do a task (only when the board has it switched on). A change like
+    // any other - JSON, with the edit key when there is one - but never a prompt mid-card: anything
+    // but a clean answer is no suggestion, and the orchestrator routes.
+    routeTask: async (body) => {
+      try {
+        const response = await fetch('/api/route-task', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body) })
+        return response.ok ? await answerOf(response) : null
+      } catch (error) {
+        return null
+      }
+    },
     fish: fishMouth({
       speak: (body, signal) => fetch('/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),
       now: () => Date.now()
@@ -4641,6 +4652,14 @@ const voiceUi = {
     box.hidden = !card
   },
   orderTime(seconds) { el('voice-order-time').textContent = `${seconds} s to answer` },
+  // Jev's pick: the picker set to it, and a line saying who picked it and how sure it was.
+  orderPick(owner, words) {
+    el('voice-order-for').value = owner
+    el('voice-order-pick').textContent = words
+    el('voice-order-pick').hidden = !words
+  },
+  // Who the card says does it, right now: the owner may have changed it since it appeared.
+  orderOwner() { return el('voice-order-for')?.value ?? '' },
   orderNote(words) { el('voice-order-note').textContent = words },
   orderBusy(busy) {
     el('voice-order-yes').disabled = busy === true
@@ -5273,6 +5292,24 @@ function openVoice(deps, ui) {
       session.replyRetries = 1
       askForReply()
     }, CONFIRM_WINDOW_MS)
+    if (order.kind === 'task' && session.orders.jev === true) suggestOwner(card)
+  }
+
+  // Jev's pick for who does a task (the board has it switched on): only an agent the card offers, and
+  // only while the card is still up. The picker shows it; the owner can still change it.
+  async function suggestOwner(card) {
+    const described = new Map((Array.isArray(deps.view()?.data?.agents) ? deps.view().data.agents : [])
+      .map((agent) => [agent?.slug, typeof agent?.description === 'string' ? agent.description : '']))
+    const agents = card.words.owners.filter((one) => one.value).slice(0, 16).map((one) => ({ slug: one.value, description: described.get(one.value) ?? '' }))
+    if (!agents.length) return
+    const answer = await deps.routeTask?.({ title: card.order.title, ...(card.order.details ? { details: card.order.details } : {}), agents })
+    if (session.stopped || session.card !== card || card.busy) return
+    const pick = typeof answer?.for === 'string' ? answer.for : ''
+    if (!pick || !agents.some((agent) => agent.slug === pick)) return
+    const sure = typeof answer.confidence === 'number' && answer.confidence > 0 && answer.confidence <= 1 ? Math.round(answer.confidence * 100) : null
+    card.words.owner = pick
+    card.words.pick = `Picked by Jev${sure ? ` (${sure}% sure)` : ''}. Change it if you like.`
+    ui.orderPick?.(pick, card.words.pick)
   }
 
   // A proposal: checked first (orderFrom), then shown. The model is told it waits for the owner.
@@ -5361,7 +5398,7 @@ function openVoice(deps, ui) {
       keyReady: keyReady(),
       now: deps.now()
     })
-    if (verdict === 'yes') sendOrder(card, card.words.owner, 'spoken')
+    if (verdict === 'yes') sendOrder(card, ui.orderOwner?.() ?? card.words.owner, 'spoken')
     else if (verdict === 'no') closeCard(VOICE_ORDER.no)
     else if (verdict === 'unclear') ui.orderNote?.(VOICE_ORDER.unclear)
   }

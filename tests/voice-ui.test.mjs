@@ -612,3 +612,18 @@ test('with an order card open, Esc is its No and never a hang-up; Yes hands the 
   fire('click', { target: no })
   assert.equal(session.declined, 2)
 })
+
+test('Jev\'s pick sets the picker and says who picked it, as text; the picker is what the card says now', async () => {
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { expose: ['voiceUi'] })
+  const { voiceUi } = page.exposed
+  voiceUi.order(CARD)
+  assert.equal(page.node('voice-order-pick').hidden, true)
+  voiceUi.orderPick('research', 'Picked by Jev (84% sure). Change it if you like.')
+  assert.equal(page.node('voice-order-for').value, 'research')
+  assert.equal(page.node('voice-order-pick').textContent, 'Picked by Jev (84% sure). Change it if you like.')
+  assert.equal(page.node('voice-order-pick').innerHTML, '')
+  assert.equal(page.node('voice-order-pick').hidden, false)
+  assert.equal(voiceUi.orderOwner(), 'research')
+  page.node('voice-order-for').value = ''
+  assert.equal(voiceUi.orderOwner(), '', 'the owner\'s own change was not read')
+})
