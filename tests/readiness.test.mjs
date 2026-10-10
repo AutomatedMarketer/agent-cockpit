@@ -342,10 +342,38 @@ test('launchd, a report up to five minutes before the slot counts for it', () =>
   assert.equal(misses.faded, true)
 })
 
-test('launchd, one expected run in the look-back and it was missed: late, not silent, because two cannot be shown', () => {
-  const card = cardOf(mac(reading({ launchd: [lj({ dueBeforeAt: undefined, lastReportAt: '2026-10-01T10:15:22Z' })] })), STORY)
-  assert.equal(card.light, 'go')
-  assert.equal(card.faded, true)
+test('launchd, the newest expected run missed and no earlier one to count: SILENT, never GO', () => {
+  // A monthly job has only one expected run in the look-back. Last run July 1, due October 1: that is
+  // a missed run and nothing that covers the one before it, so it is two missed, not one.
+  const monthly = { kind: 'slots', slots: [{ minute: 0, hour: 8, day: 1 }] }
+  const card = cardOf(mac(reading({ launchd: [lj({ cadence: monthly, lastReportAt: '2026-07-01T08:00:20Z', dueAt: '2026-10-01T08:00:00Z', dueBeforeAt: undefined })] })), STORY)
+  assert.equal(card.light, 'silent')
+  assert.equal(card.faded, false)
+  assert.deepEqual(card.sentence, { text: 'Has not reported since {date}.', at: '2026-07-01T08:00:20Z' })
+  assert.equal(card.schedule, 'Monthly on the 1st at 8:00am (Mac time)')
+  // It never reads as green, faded or not, and the same job that reported on its slot is GO.
+  const covered = cardOf(mac(reading({ launchd: [lj({ cadence: monthly, lastReportAt: '2026-10-01T08:00:20Z', dueAt: '2026-10-01T08:00:00Z', dueBeforeAt: undefined })] })), STORY)
+  assert.equal(covered.light, 'go')
+  assert.equal(covered.faded, false)
+  // A failure that is never followed by a report says so too.
+  const failed = cardOf(mac(reading({ launchd: [lj({ cadence: monthly, lastExit: 1, lastReportAt: '2026-07-01T08:00:20Z', dueAt: '2026-10-01T08:00:00Z', dueBeforeAt: undefined })] })), STORY)
+  assert.equal(failed.sentence.text, 'Has not reported since {date}. Its last run failed.')
+})
+
+test('launchd, no exit status for a job that is loaded: SILENT, it has not said how its last run ended', () => {
+  // A recent log is not an outcome. The last exit is what says whether the run worked.
+  const card = cardOf(mac(reading({ launchd: [lj({ lastExit: undefined })] })), STORY)
+  assert.equal(card.light, 'silent')
+  assert.equal(card.faded, false)
+  assert.deepEqual(card.sentence, { text: 'Story belt daily has not said how its last run ended. Its log was last written at {time}.', at: '2026-10-09T10:15:22Z' })
+  // The same for a schedule nobody could read, and for one with nothing due lately.
+  const unknown = cardOf(mac(reading({ launchd: [lj({ lastExit: undefined, cadence: { kind: 'unknown' }, dueAt: undefined, dueBeforeAt: undefined })] })), STORY)
+  assert.equal(unknown.light, 'silent')
+  assert.match(unknown.sentence.text, /has not said how its last run ended/)
+  // A job that is running right now has no last exit to give, and is not marked down for it.
+  assert.equal(cardOf(mac(reading({ launchd: [lj({ state: 'running', lastExit: undefined })] })), STORY).light, 'go')
+  // And one that is not loaded at all is still NO GO for that.
+  assert.equal(cardOf(mac(reading({ launchd: [lj({ state: 'not loaded', lastExit: undefined })] })), STORY).light, 'no-go')
 })
 
 test('launchd, a schedule the collector could not read: the light comes from the last exit alone, and says so', () => {
@@ -536,6 +564,13 @@ test('Hermes cron job: never run, or silent for two slots, or a result Hermes di
   const unsaid = cardOf(mac(reading({ launchd: [], hermes: [hj({ lastResult: 'unknown' })] })), 'hermes:default/a1b2c3d4e5f6')
   assert.equal(unsaid.light, 'silent')
   assert.equal(unsaid.sentence.text, "Hermes did not say how Hermes job a1b2c3d4e5f6's last run, at {time}, ended.")
+})
+
+test('Hermes cron job, the newest expected run missed and no earlier one: SILENT, never GO', () => {
+  const monthly = { kind: 'slots', slots: [{ minute: 0, hour: 8, day: 1 }] }
+  const card = cardOf(mac(reading({ launchd: [], hermes: [hj({ cadence: monthly, lastRunAt: '2026-07-01T08:00:04Z', dueAt: '2026-10-01T08:00:00Z', dueBeforeAt: undefined })] })), 'hermes:default/a1b2c3d4e5f6')
+  assert.equal(card.light, 'silent')
+  assert.equal(card.sentence.text, 'Has not reported since {date}.')
 })
 
 test('Hermes cron job, faded and unjudged', () => {

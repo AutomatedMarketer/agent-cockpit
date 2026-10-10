@@ -41,6 +41,7 @@ export const READINESS_WORDS = {
   faded: 'Its last report is older than its own schedule.',
   unknownSchedule: 'The schedule could not be read, so lateness is not judged.',
   noRecentSlot: 'Nothing has been due to run lately, so lateness is not judged.',
+  launchdEndedUnknown: '{name} has not said how its last run ended. Its log was last written at {time}.',
   managedOwner: 'Its scheduler is running. Whether its last report was written is checked on the Mac control center, not here.',
   neverReported: 'Has never reported.',
   notReportedSince: 'Has not reported since {date}.',
@@ -329,8 +330,10 @@ function missedOf(reportAt, dueAt, dueBeforeAt) {
   const counts = (slot) => reportAt !== null && Date.parse(reportAt) >= Date.parse(slot) - minutes(SLOT_TOLERANCE_MINUTES)
   if (counts(dueAt)) return 0
   if (dueBeforeAt && counts(dueBeforeAt)) return 1
-  // One expected run in the look-back and it was missed: late, but two misses cannot be shown.
-  return dueBeforeAt ? 2 : 1
+  // The newest expected run was missed and there is no earlier one in the file to say the job was
+  // keeping up (a monthly job has one in the look-back): that is two missed, never a green card
+  // that was last seen working months ago. The team-repo side counts the same way.
+  return 2
 }
 
 function launchdCard(job, ctx, lookup) {
@@ -371,6 +374,11 @@ function launchdCard(job, ctx, lookup) {
   if (missed === 2) return card({ light: 'silent', sentence: notReportedSince(job.lastReportAt, failed), lastReport: report })
   const faded = missed === 1
   const shared = { faded, lastReport: report, silentAt: stalesAt, silentSentence: staleWords }
+  // A listed job with no last exit has not told the board how its last run went: a log that was
+  // written lately is not an outcome. Said as unknown, like a Hermes result the board cannot word.
+  if (job.state === 'loaded' && job.lastExit === null) {
+    return card({ light: 'silent', lastReport: report, sentence: sentence(`${fill(READINESS_WORDS.launchdEndedUnknown, { name: safe, time: '{time}' })}${note}`, job.lastReportAt) })
+  }
   if (failed) {
     return card({ ...shared, light: 'no-go', sentence: withFaded(sentence(`${fill(READINESS_WORDS.failedExit, { name: safe, code: job.lastExit })}${note}`, job.lastReportAt), faded) })
   }
