@@ -40,10 +40,17 @@ test('the policy is exactly this one: every directive, every source', () => {
     'script-src': ["'self'", "'unsafe-inline'"],
     'img-src': ["'self'", 'data:', 'blob:'],
     'connect-src': ["'self'"],
+    'object-src': ["'none'"],
     'base-uri': ["'none'"],
     'form-action': ["'none'"],
     'frame-ancestors': ["'none'"]
   })
+})
+
+test('plugins and embedded objects are refused outright', () => {
+  // default-src 'self' already covers <object> and <embed>, but only while it stays 'self': this
+  // says it on its own line, so a later widening of default-src does not let them in.
+  assert.deepEqual(policy()['object-src'], ["'none'"])
 })
 
 test('pictures may come from memory, and still from nowhere outside the site', () => {
@@ -87,6 +94,35 @@ test('the other security headers are unchanged', () => {
   assert.equal(headers['X-Content-Type-Options'], 'nosniff')
   assert.equal(headers['X-Frame-Options'], 'DENY')
   assert.equal(headers['Referrer-Policy'], 'strict-origin-when-cross-origin')
+})
+
+// Audit finding #8 (2026-10-10): defence in depth the board was missing.
+function permissions() {
+  const value = headersFor('/(.*)')['Permissions-Policy']
+  assert.ok(value, 'there is no Permissions-Policy')
+  const features = {}
+  for (const part of value.split(',').map((piece) => piece.trim()).filter(Boolean)) {
+    const found = /^([a-z-]+)=\(([^)]*)\)$/.exec(part)
+    assert.ok(found, `"${part}" is not a feature=(allowlist) pair`)
+    assert.equal(features[found[1]], undefined, `${found[1]} is given twice`)
+    features[found[1]] = found[2].trim()
+  }
+  return features
+}
+
+test('the microphone is for this site only, and the camera and location are off for everyone', () => {
+  const features = permissions()
+  // Talking to the board needs the microphone on its own page, and nowhere else: not in a frame,
+  // not from another site.
+  assert.equal(features.microphone, 'self')
+  assert.equal(features.camera, '')
+  assert.equal(features.geolocation, '')
+})
+
+test('another site opened from the board cannot reach back into it', () => {
+  // same-origin: a page this board opens (a GitHub link, a Claude session) gets no handle on the
+  // board's window, and a page that opens the board gets none either.
+  assert.equal(headersFor('/(.*)')['Cross-Origin-Opener-Policy'], 'same-origin')
 })
 
 test('making a picture gets 60 seconds, and gives up on OpenAI before the platform gives up on it', () => {
