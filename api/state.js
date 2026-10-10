@@ -303,7 +303,7 @@ export function isUsageFile(path) {
   return USAGE_COMPUTER_SLUG.test(path.slice(prefix.length, -'.json'.length))
 }
 
-const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+export const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 // A name the board will print: a computer, a plan, a model, or the collector's one-line reason.
 // The same refusals as the collector's gate - an @, a slash either way, a JWT's opening, an API
@@ -656,7 +656,7 @@ function blockStatus(raw) {
 
 // Keeps the entries that pass, in the file's order and only up to the cap. A dropped entry is
 // counted in hidden; one past the cap is counted in more, so neither disappears without a word.
-function keepEntries(given, cap, shape, keyOf) {
+export function keepEntries(given, cap, shape, keyOf) {
   const kept = []
   const seen = new Set()
   let hidden = 0
@@ -750,7 +750,7 @@ function foundTool(raw) {
 // One status file's envelope, judged the same way for every part the collector writes: no body
 // (not fetched, or the tree said it was too big), too big, not JSON, another schema, no time, or a
 // time in the future. Every `why` is a finished sentence naming which kind of file it was.
-function readStatusEnvelope(body, now, { schema, maxBytes, noun }) {
+export function readStatusEnvelope(body, now, { schema, maxBytes, noun }) {
   if (typeof body !== 'string') return { usable: false, why: `A ${noun} file could not be fetched, or was too big to read.` }
   if (Buffer.byteLength(body, 'utf8') > maxBytes) return { usable: false, why: `A ${noun} file was too big to read.` }
   let parsed
@@ -768,13 +768,13 @@ function readStatusEnvelope(body, now, { schema, maxBytes, noun }) {
 }
 
 // A time as the collector writes it: whole seconds, Z, no milliseconds.
-const isoSeconds = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z')
+export const isoSeconds = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z')
 
 // `found` is how many files of this kind the tree holds. Only the first five, in name order, are
 // read, and the rest are counted in `skipped`. Of the files that could be used, the newest three
 // are shown and the others counted in `notShown`: a card per computer is already a long screen on
 // a phone, and nobody has more than three computers they set things up on.
-function shapeStatusFiles(files, now, found, { maxFiles, maxComputers, noneWhy, read }) {
+export function shapeStatusFiles(files, now, found, { maxFiles, maxComputers, noneWhy, read }) {
   const given = Array.isArray(files) ? files : []
   const total = Math.max(found ?? 0, given.length)
   const toRead = [...given].sort((a, b) => String(a[0]).localeCompare(String(b[0]))).slice(0, maxFiles)
