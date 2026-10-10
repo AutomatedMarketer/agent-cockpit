@@ -264,6 +264,10 @@ test('the listening pulse runs only for someone who has not asked for less motio
   }
 })
 
+test('each tool\'s line in the state line shows on a line of its own', () => {
+  assert.equal(valuesOf('.voice-state')['white-space'], 'pre-line')
+})
+
 /* ---------- the footer's promise ---------- */
 
 test('with voice on, the footer no longer says nothing on the page comes from anywhere else', async () => {

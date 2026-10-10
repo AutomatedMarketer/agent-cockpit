@@ -1005,3 +1005,21 @@ test('no words as they come with captions off, or while a turn might be the assi
   partial(early, 'item_echo', 'It happened')
   assert.ok(!early.ui.heard.includes('It happened'), 'what may be its own voice was shown as the person\'s')
 })
+
+/* ---------- feels alive: what it is doing, while it looks ---------- */
+
+test('while it looks something up, the sheet says what - a short line for each tool, never a tool\'s own name', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.created' })
+  toolReply(browser)
+  assert.deepEqual(browser.ui.shown.at(-1), { state: 'thinking', words: 'Checking what\'s due…\nChecking on the team…', live: true })
+  const every = await connected()
+  every.emit({ type: 'response.created' })
+  const calls = ['whats_due', 'team_status', 'task_board', 'usage', 'connections_status', 'open_screen', '<b>wipe</b>', 'whats_due']
+    .map((name, n) => ({ type: 'function_call', call_id: `call_${n}`, name, arguments: '{}' }))
+  every.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: calls } })
+  assert.deepEqual(every.ui.shown.at(-1).words.split('\n'), [
+    'Checking what\'s due…', 'Checking on the team…', 'Reading the task board…', 'Checking your usage…',
+    'Checking your connections…', 'Opening that screen…', 'Looking that up…'
+  ], 'a tool has no line, a line is said twice, or a name nobody defined was shown')
+})

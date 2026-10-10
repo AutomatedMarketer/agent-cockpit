@@ -1266,7 +1266,7 @@
     width: 100%; max-height: min(60vh, 28rem); overflow-y: auto; margin: 0; padding: .9rem 1rem;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
   }
-  .voice-state { margin: 0 0 .5rem; font-weight: 600; }
+  .voice-state { margin: 0 0 .5rem; font-weight: 600; white-space: pre-line; }
   .voice-line { margin: 0 0 .5rem; font-size: .875rem; }
   .voice-who { display: block; font-size: .6875rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
   .voice-said { display: block; overflow-wrap: anywhere; }
@@ -5644,6 +5644,20 @@ const VOICE_UNHEARD = 'OpenAI could not answer that, so try asking again.'
 // did not cancel itself. Seen live (2026-10-09): the first turn of a call got an empty response
 // 367 ms after it started, and the person heard silence with nothing to say why.
 const VOICE_NO_REPLY = 'No reply came back. Say it again.'
+// What it is doing while it looks something up: a short line for each tool it asked for, in the
+// state line, so the wait between a question and its answer is not a blank on screen. The board's
+// own words for each tool it defines - never the name the model sent.
+const VOICE_DOING = {
+  whats_due: "Checking what's due…",
+  team_status: 'Checking on the team…',
+  task_board: 'Reading the task board…',
+  usage: 'Checking your usage…',
+  connections_status: 'Checking your connections…',
+  open_screen: 'Opening that screen…'
+}
+const VOICE_DOING_ELSE = 'Looking that up…'
+const voiceDoing = (calls) =>
+  [...new Set(calls.map((call) => (Object.hasOwn(VOICE_DOING, call.name) ? VOICE_DOING[call.name] : VOICE_DOING_ELSE)))].join('\n')
 const VOICE_OUTBOX_STORE = 'agent-cockpit-voice-outbox'
 // The echo guard. On a computer on speakers, its own voice can reach the microphone however well the
 // browser cancels echo: the live test (desktop, quiet room, 2026-10-09) heard "It happened.", "Still
@@ -6061,7 +6075,7 @@ function openVoice(deps, ui) {
         session.calls.clear()
         if (calls.length) {
           answerTools(calls)
-          show('thinking')
+          show('thinking', voiceDoing(calls))
         } else if (session.replyOwed) {
           askForReply()
           show('thinking')
