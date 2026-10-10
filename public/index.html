@@ -6711,7 +6711,8 @@ function ageReadiness(readiness, nowMs) {
 // The times in a sentence are filled in here, in the reader's own clock. `readinessClock` is only
 // ever changed by a test, to pin the language and the zone.
 const readinessClock = { locale: undefined, zone: undefined }
-const readinessFormat = (options) => new Intl.DateTimeFormat(readinessClock.locale, { timeZone: readinessClock.zone, ...options })
+const readinessFormatIn = (zone, options) => new Intl.DateTimeFormat(readinessClock.locale, { timeZone: zone, ...options })
+const readinessFormat = (options) => readinessFormatIn(readinessClock.zone, options)
 
 function readinessWhen(iso, kind, nowMs) {
   const ms = Date.parse(iso)
@@ -6720,10 +6721,66 @@ function readinessWhen(iso, kind, nowMs) {
   const dateText = dayOf(ms) === dayOf(nowMs) ? 'today'
     : dayOf(ms) === dayOf(nowMs - 86400_000) ? 'yesterday'
       : readinessFormat({ weekday: 'short', day: 'numeric', month: 'short' }).format(ms)
-  if (kind === 'date') return dateText
   const clock = readinessFormat({ hour: 'numeric', minute: '2-digit' }).format(ms)
+  // "Not checked since today" says nothing: earlier today is said as the time.
+  if (kind === 'date') return dateText === 'today' ? clock : dateText
   if (dateText === 'today') return clock
   return dateText === 'yesterday' ? `${clock} yesterday` : `${clock} on ${dateText}`
+}
+
+// A team-repo schedule in the reader's own time. A routine runs in UTC, so the server sends the clock
+// time and the page converts it - which can move the day as well as the hour (06:00 UTC on a Monday
+// is 02:00 Monday in New York and 15:00 Monday in Tokyo, but 02:00 UTC is Sunday evening in New York).
+// Anything it cannot convert is said as the server wrote it.
+const READINESS_DAY_NAMES = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays']
+const READINESS_DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const readinessOrdinal = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : { 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] ?? 'th'}`
+
+function readinessDay(ms, zone) {
+  const parts = Object.fromEntries(readinessFormatIn(zone, { year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(ms).map((part) => [part.type, part.value]))
+  return { stamp: Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day)), day: Number(parts.day) }
+}
+
+function readinessScheduleText(schedule, nowMs, zone = readinessClock.zone) {
+  if (typeof schedule === 'string') return schedule
+  if (!schedule || typeof schedule.text !== 'string') return 'Not known'
+  const at = schedule.clock
+  if (!at || !['day', 'weekdays', 'weekly', 'monthly'].includes(at.every)) return schedule.text
+  try {
+    const now = new Date(nowMs)
+    const [year, month, day] = [now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()]
+    let reference = Date.UTC(year, month, day, at.hour, at.minute)
+    if (at.every === 'weekly') {
+      for (let ahead = 0; ahead < 7; ahead += 1) {
+        const candidate = Date.UTC(year, month, day + ahead, at.hour, at.minute)
+        if (new Date(candidate).getUTCDay() === at.weekday) {
+          reference = candidate
+          break
+        }
+      }
+    } else if (at.every === 'monthly') {
+      // The next month that has that date: there is no 31st of September.
+      for (let ahead = 0; ahead < 14; ahead += 1) {
+        const candidate = Date.UTC(year, month + ahead, at.day, at.hour, at.minute)
+        if (new Date(candidate).getUTCDate() === at.day && candidate > nowMs) {
+          reference = candidate
+          break
+        }
+      }
+    }
+    const local = readinessDay(reference, zone)
+    const shift = Math.round((local.stamp - readinessDay(reference, 'UTC').stamp) / 86400_000)
+    const time = readinessFormatIn(zone, { hour: 'numeric', minute: '2-digit' }).format(reference)
+    if (at.every === 'day') return `Every day at ${time}`
+    if (at.every === 'weekly') return `${READINESS_DAY_NAMES[(at.weekday + shift + 7) % 7]} at ${time}`
+    if (at.every === 'monthly') return `Monthly on the ${readinessOrdinal(local.day)} at ${time}`
+    const days = [1, 2, 3, 4, 5].map((weekday) => (weekday + shift + 7) % 7).sort((a, b) => a - b)
+    if (days.join() === '1,2,3,4,5') return `Weekdays at ${time}`
+    const run = days.every((value, index) => index === 0 || value === days[index - 1] + 1)
+    return `${run ? `${READINESS_DAY_SHORT[days[0]]} to ${READINESS_DAY_SHORT[days.at(-1)]}` : days.map((value) => READINESS_DAY_SHORT[value]).join(', ')} at ${time}`
+  } catch (error) {
+    return schedule.text
+  }
 }
 
 function readinessSentence(sentence, nowMs) {
@@ -6763,7 +6820,7 @@ function readinessCardNode(card, nowMs) {
     top,
     readinessNode('p', { cls: 'rd-name', text: card.name }),
     readinessNode('p', { cls: 'rd-sentence', text: readinessSentence(card.sentence, nowMs) }),
-    readinessNode('dl', { cls: 'rd-rows' }, row('Schedule', card.schedule), row('Last report', last)),
+    readinessNode('dl', { cls: 'rd-rows' }, row('Schedule', readinessScheduleText(card.schedule, nowMs)), row('Last report', last)),
     readinessNode('p', { cls: 'rd-ref small muted', text: card.ref }))
 }
 

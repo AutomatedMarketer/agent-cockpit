@@ -8,6 +8,7 @@ import {
   slotsWords,
   cadenceWords,
   workflowScheduleWords,
+  workflowClock,
   readableLabel,
   orderCards,
   countCards,
@@ -59,7 +60,7 @@ test('workflow, armed, last run clean on its own schedule: GO, with its time, an
   assert.equal(card.pill, null)
   assert.equal(card.faded, false)
   assert.deepEqual(card.sentence, { text: 'Daily brief ran clean at {time}.', at: '2026-08-10T06:00:20Z' })
-  assert.equal(card.schedule, 'Every day at 6:00am UTC')
+  assert.deepEqual(card.schedule, { text: 'Every day at 6:00am UTC', clock: { every: 'day', hour: 6, minute: 0, weekday: null, day: null } })
   assert.deepEqual(card.lastReport, { text: '{time}', at: '2026-08-10T06:00:20Z' })
   assert.equal(card.ref, 'Team repo · daily-brief')
   // Tomorrow's slot plus the 30 minutes of grace, and the one after: when it would fade, then go silent.
@@ -160,13 +161,13 @@ test('workflow, armed with no fresh list of routines: SILENT, never a claim eith
 test('workflow, a schedule nobody can read: the light comes from the last result alone, and says so', () => {
   const ok = one({ schedule: 'whenever' })
   assert.equal(ok.light, 'go')
-  assert.equal(ok.schedule, 'Not known')
+  assert.equal(ok.schedule.text, 'Not known')
   assert.equal(ok.sentence.text, 'Daily brief ran clean at {time}. The schedule could not be read, so lateness is not judged.')
   assert.equal(ok.fadesAt, null)
   assert.equal(ok.silentAt, null)
   const failed = one({ schedule: null, ...withRun({ status: 'failed', summary: 'Broke.' }) })
   assert.equal(failed.light, 'no-go')
-  assert.equal(failed.schedule, 'No schedule')
+  assert.equal(failed.schedule.text, 'No schedule')
 })
 
 test('workflow, a run still going: GO only while it is inside the grace, otherwise it never said how it ended', () => {
@@ -181,7 +182,7 @@ test('workflow, a run still going: GO only while it is inside the grace, otherwi
 test('workflow, an every-N schedule fades and goes silent N and 2N after its last run, plus the grace', () => {
   const card = one({ schedule: 'every 2 hours', ...withRun({ started_at: '2026-08-10T11:00:00Z' }) })
   assert.equal(card.light, 'go')
-  assert.equal(card.schedule, 'Every 2 hours')
+  assert.equal(card.schedule.text, 'Every 2 hours')
   assert.equal(card.fadesAt, '2026-08-10T13:35:00Z')
   assert.equal(card.silentAt, '2026-08-10T15:35:00Z')
 })
@@ -232,7 +233,7 @@ test('a routine on the account with no workflow file is SILENT, by name only', (
   const result = wall([], { routines })
   assert.deepEqual(result.cards.map((card) => [card.id, card.light, card.source]), [['routine:(unnamed)', 'silent', 'routine'], ['routine:Old experiment', 'silent', 'routine']])
   assert.equal(result.cards[1].sentence.text, 'Old experiment is a routine on your account with no workflow file, so the board has nothing to check it against.')
-  assert.equal(result.cards[1].schedule, 'Not known')
+  assert.equal(result.cards[1].schedule.text, 'Not known')
 })
 
 test('routines the board cannot trust are not turned into cards', () => {
@@ -275,7 +276,7 @@ test('launchd, scheduled, last exit 0 and a log written on its own schedule: GO,
   assert.equal(card.light, 'go')
   assert.equal(card.name, 'Story belt daily')
   assert.deepEqual(card.sentence, { text: 'Story belt daily ran clean at {time}.', at: '2026-10-09T10:15:22Z' })
-  assert.equal(card.schedule, 'Every day at 6:15am (Mac time)')
+  assert.equal(card.schedule.text, 'Every day at 6:15am (Mac time)')
   assert.deepEqual(card.lastReport, { text: '{time}', at: '2026-10-09T10:15:22Z' })
   assert.equal(card.ref, 'Mac Mini · local.donna.story-belt-daily')
   // A reading judged on the Mac's own clock only changes with the clock when it goes stale.
@@ -299,7 +300,7 @@ test('launchd, always on with a process: GO with the RUNNING pill, and the sente
     text: 'Security changelog was running when the Mac checked at {time}. Its scheduler is running. Whether its last report was written is checked on the Mac control center, not here.',
     at: TAKEN
   })
-  assert.equal(card.schedule, 'Always on')
+  assert.equal(card.schedule.text, 'Always on')
 })
 
 test('the eight Mac programs that keep their own clock are named by label, from the control center\'s deploy scripts', () => {
@@ -380,7 +381,7 @@ test('launchd, the newest expected run missed and no earlier one to count: SILEN
   assert.equal(card.light, 'silent')
   assert.equal(card.faded, false)
   assert.deepEqual(card.sentence, { text: 'Has not reported since {date}.', at: '2026-07-01T08:00:20Z' })
-  assert.equal(card.schedule, 'Monthly on the 1st at 8:00am (Mac time)')
+  assert.equal(card.schedule.text, 'Monthly on the 1st at 8:00am (Mac time)')
   // It never reads as green, faded or not, and the same job that reported on its slot is GO.
   const covered = cardOf(mac(reading({ launchd: [lj({ cadence: monthly, lastReportAt: '2026-10-01T08:00:20Z', dueAt: '2026-10-01T08:00:00Z', dueBeforeAt: undefined })] })), STORY)
   assert.equal(covered.light, 'go')
@@ -410,7 +411,7 @@ test('launchd, a schedule the collector could not read: the light comes from the
   const unknown = { kind: 'unknown' }
   const ok = cardOf(mac(reading({ launchd: [lj({ cadence: unknown, dueAt: undefined, dueBeforeAt: undefined })] })), STORY)
   assert.equal(ok.light, 'go')
-  assert.equal(ok.schedule, 'Not known')
+  assert.equal(ok.schedule.text, 'Not known')
   assert.equal(ok.sentence.text, 'Story belt daily ran clean at {time}. The schedule could not be read, so lateness is not judged.')
   const failed = cardOf(mac(reading({ launchd: [lj({ cadence: unknown, lastExit: 2 })] })), STORY)
   assert.equal(failed.light, 'no-go')
@@ -423,7 +424,7 @@ test('launchd, a schedule with nothing due in the look-back: judged by the last 
   const card = cardOf(mac(reading({ launchd: [lj({ cadence: { kind: 'slots', slots: [{ minute: 0, hour: 8, day: 31 }] }, dueAt: undefined, dueBeforeAt: undefined })] })), STORY)
   assert.equal(card.light, 'go')
   assert.equal(card.sentence.text, 'Story belt daily ran clean at {time}. Nothing has been due to run lately, so lateness is not judged.')
-  assert.equal(card.schedule, 'Monthly on the 31st at 8:00am (Mac time)')
+  assert.equal(card.schedule.text, 'Monthly on the 31st at 8:00am (Mac time)')
 })
 
 test('launchd, a calendar job that is running right now is GO, said as running', () => {
@@ -510,7 +511,7 @@ test('the collector row: GO when it wrote inside every three hours, its own laun
   assert.equal(card.source, 'collector')
   assert.equal(card.name, 'Status collector')
   assert.deepEqual(card.sentence, { text: 'The status collector last wrote its readings at {time}.', at: TAKEN })
-  assert.equal(card.schedule, 'Every 3 hours')
+  assert.equal(card.schedule.text, 'Every 3 hours')
   assert.equal(card.ref, 'Mac Mini · status collector')
   assert.equal(card.fadesAt, '2026-10-09T18:35:00Z')
   assert.equal(card.silentAt, '2026-10-09T21:35:00Z')
@@ -581,7 +582,7 @@ test('each computer\'s lists are named by that computer', () => {
 
 test('the collector row without its own launchd row still exists, on the three-hour schedule', () => {
   const card = cardOf(mac(reading({ launchd: [lj()] })), 'collector:Mac Mini')
-  assert.equal(card.schedule, 'Every 3 hours')
+  assert.equal(card.schedule.text, 'Every 3 hours')
 })
 
 /* ---------- Hermes: the gateway, and its cron jobs --------------------------------------------- */
@@ -626,7 +627,7 @@ test('Hermes cron job, clean on its own schedule: GO, under the standard name', 
   assert.equal(card.light, 'go')
   assert.equal(card.name, 'Hermes job a1b2c3d4e5f6')
   assert.deepEqual(card.sentence, { text: 'Hermes job a1b2c3d4e5f6 ran clean at {time}.', at: '2026-10-09T10:30:04Z' })
-  assert.equal(card.schedule, 'Every day at 6:30am (Mac time)')
+  assert.equal(card.schedule.text, 'Every day at 6:30am (Mac time)')
   assert.equal(card.ref, 'Mac Mini · Hermes · default · a1b2c3d4e5f6')
 })
 
@@ -808,6 +809,33 @@ test('schedule words, from a workflow\'s own schedule', () => {
     [null, 'No schedule'],
     [undefined, 'No schedule']
   ]) assert.equal(workflowScheduleWords(schedule), text, String(schedule))
+})
+
+test('a workflow\'s clock, for the page to put in the reader\'s own time', () => {
+  const clock = (every, hour, minute, extra = {}) => ({ every, hour, minute, weekday: null, day: null, ...extra })
+  assert.deepEqual(workflowClock('daily 06:15'), clock('day', 6, 15))
+  assert.deepEqual(workflowClock('weekdays 07:45'), clock('weekdays', 7, 45))
+  assert.deepEqual(workflowClock('weekly mon 09:00'), clock('weekly', 9, 0, { weekday: 1 }))
+  assert.deepEqual(workflowClock('weekly sun 23:30'), clock('weekly', 23, 30, { weekday: 0 }))
+  assert.deepEqual(workflowClock('monthly 31 08:00'), clock('monthly', 8, 0, { day: 31 }))
+  for (const none of ['hourly', 'every 2 hours', 'every 15 minutes', 'whenever', '', null, undefined, 7, 'daily 25:00', 'daily 06:60', 'monthly 0 08:00', 'monthly 32 08:00', 'weekly xxx 06:00']) {
+    assert.equal(workflowClock(none), null, String(none))
+  }
+})
+
+test('a clock time that does not exist is "Not known", never a made-up hour', () => {
+  for (const schedule of ['daily 25:00', 'daily 06:60', 'weekdays 24:00', 'weekly mon 12:99', 'monthly 31 24:00', 'monthly 40 08:00']) {
+    assert.equal(workflowScheduleWords(schedule), 'Not known', schedule)
+  }
+})
+
+test('every card has a schedule that is text, and only a workflow\'s has a clock', () => {
+  const result = mac(reading({ launchd: [SELF, lj()], hermes: [hj()] }), { workflows: [workflow(), workflow({ slug: 'every', name: 'Every', schedule: 'every 2 hours' })], hermes: hermesReading() })
+  for (const card of result.cards) {
+    assert.equal(typeof card.schedule.text, 'string', card.id)
+    if (card.id === 'workflow:daily-brief') assert.equal(card.schedule.clock.every, 'day')
+    else assert.equal(card.schedule.clock, null, card.id)
+  }
 })
 
 test('the switched-off reasons are finished sentences', () => {

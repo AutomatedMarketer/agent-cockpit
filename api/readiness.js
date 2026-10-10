@@ -163,21 +163,43 @@ export function cadenceWords(cadence) {
   return 'Not known'
 }
 
-// A workflow's own schedule strings, in the same words. Routines run in UTC.
+// A workflow's own schedule strings, in the same words. Routines run in UTC, so these words say UTC;
+// the page says the same schedule in the reader's own time from `workflowClock`, and uses these only
+// when it cannot. A clock time that does not exist (daily 25:00) is not a schedule, and is not guessed.
+const DAY_CODES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']
+const validClock = (hour, minute) => Number.isInteger(hour) && Number.isInteger(minute) && hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59
+
+// The parts of a clock-time schedule, for the page to convert: which kind, the UTC hour and minute,
+// and the weekday (0 is Sunday) or day of the month where there is one. null for anything with no
+// clock time in it (hourly, every N), for an unreadable schedule, and for a time that does not exist.
+export function workflowClock(schedule) {
+  if (typeof schedule !== 'string') return null
+  const text = schedule.trim()
+  let match
+  const make = (every, hour, minute, extra = {}) => (validClock(hour, minute) ? { every, hour, minute, weekday: null, day: null, ...extra } : null)
+  if ((match = /^daily (\d{2}):(\d{2})$/.exec(text))) return make('day', Number(match[1]), Number(match[2]))
+  if ((match = /^weekdays (\d{2}):(\d{2})$/.exec(text))) return make('weekdays', Number(match[1]), Number(match[2]))
+  if ((match = /^weekly (sun|mon|tue|wed|thu|fri|sat) (\d{2}):(\d{2})$/.exec(text))) return make('weekly', Number(match[2]), Number(match[3]), { weekday: DAY_CODES.indexOf(match[1]) })
+  if ((match = /^monthly (\d{1,2}) (\d{2}):(\d{2})$/.exec(text))) {
+    const day = Number(match[1])
+    return day >= 1 && day <= 31 ? make('monthly', Number(match[2]), Number(match[3]), { day }) : null
+  }
+  return null
+}
+
 export function workflowScheduleWords(schedule) {
   if (typeof schedule !== 'string' || !schedule.trim()) return 'No schedule'
   const text = schedule.trim()
   let match
   if (text === 'hourly') return 'Every hour'
   if ((match = /^every (\d+) (minutes|hours)$/.exec(text))) return everyWords(Number(match[1]) * (match[2] === 'hours' ? 60 : 1))
-  if ((match = /^daily (\d{2}):(\d{2})$/.exec(text))) return `Every day at ${clock(Number(match[1]), Number(match[2]))} UTC`
-  if ((match = /^weekdays (\d{2}):(\d{2})$/.exec(text))) return `Weekdays at ${clock(Number(match[1]), Number(match[2]))} UTC`
-  if ((match = /^weekly (sun|mon|tue|wed|thu|fri|sat) (\d{2}):(\d{2})$/.exec(text))) {
-    const day = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].indexOf(match[1])
-    return `${WEEKDAY_PLURAL[day]} at ${clock(Number(match[2]), Number(match[3]))} UTC`
-  }
-  if ((match = /^monthly (\d{1,2}) (\d{2}):(\d{2})$/.exec(text))) return `Monthly on the ${ordinal(Number(match[1]))} at ${clock(Number(match[2]), Number(match[3]))} UTC`
-  return 'Not known'
+  const at = workflowClock(text)
+  if (!at) return 'Not known'
+  const time = `${clock(at.hour, at.minute)} UTC`
+  if (at.every === 'day') return `Every day at ${time}`
+  if (at.every === 'weekdays') return `Weekdays at ${time}`
+  if (at.every === 'weekly') return `${WEEKDAY_PLURAL[at.weekday]} at ${time}`
+  return `Monthly on the ${ordinal(at.day)} at ${time}`
 }
 
 // local.donna.story-belt-daily -> "Story belt daily". The first two dot parts are who made it, not
@@ -228,7 +250,9 @@ function makeCard(fields) {
     pill: fields.pill ?? null,
     faded: fields.faded ?? false,
     sentence: fields.sentence,
-    schedule: fields.schedule,
+    // Always { text, clock }. The clock is only a team-repo workflow's, in UTC, for the page to put in
+    // the reader's own time; a Mac job's schedule is on the Mac's clock and is said as it is.
+    schedule: typeof fields.schedule === 'string' ? { text: fields.schedule, clock: null } : fields.schedule,
     lastReport: fields.lastReport ?? { text: READINESS_WORDS.never, at: null },
     fadesAt: fields.fadesAt ?? null,
     silentAt: fields.silentAt ?? null,
@@ -280,7 +304,7 @@ function workflowCard(workflow, ctx) {
   const id = `workflow:${workflow.slug}`
   const name = clean(lookup.names.get(id) ?? workflow.name ?? workflow.slug, READINESS_NAME_MAX) || workflow.slug
   const safe = inSentence(name)
-  const base = { id, source: 'workflow', name, ref: `Team repo · ${workflow.slug}`, schedule: workflowScheduleWords(workflow.schedule) }
+  const base = { id, source: 'workflow', name, ref: `Team repo · ${workflow.slug}`, schedule: { text: workflowScheduleWords(workflow.schedule), clock: workflowClock(workflow.schedule) } }
   const say = (template, values = {}, at = null) => sentence(fill(template, { name: safe, ...values }), at)
 
   if (workflow.arm === 'declared') return makeCard({ ...base, light: 'no-go', sentence: say(READINESS_WORDS.declared), lastReport: lastReportOf(workflow.lastRun?.started_at ?? null) })

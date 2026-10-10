@@ -43,7 +43,7 @@ const wallPayload = (workflows = referenceWorkflows(), extra = {}) => ({
 
 const CLOCK = "readinessClock.locale = 'en-US'; readinessClock.zone = 'UTC'"
 async function boot(payload, options = {}) {
-  const page = loadPage({ payload, hash: '#readiness', after: CLOCK, expose: ['ageReadiness', 'readinessSentence', 'readinessWhen', 'readinessOrder', 'readinessCount', 'readinessCountsText', 'renderReadiness', 'readinessClock'], ...options })
+  const page = loadPage({ payload, hash: '#readiness', after: CLOCK, expose: ['ageReadiness', 'readinessScheduleText', 'readinessSentence', 'readinessWhen', 'readinessOrder', 'readinessCount', 'readinessCountsText', 'renderReadiness', 'readinessClock'], ...options })
   await flush()
   return page
 }
@@ -125,7 +125,7 @@ test('a card is a list item with the light decorative, the status as a word, the
   assert.equal(withClass(card, 'rd-name')[0].textContent, 'Declared 0')
   assert.equal(withClass(card, 'rd-sentence')[0].textContent, 'Declared 0 is marked on, but no routine exists, so nothing fires it.')
   const rows = withClass(card, 'rd-row').map((row) => [row.children[0].tagName, row.children[0].textContent, row.children[1].tagName, flat(row.children[1].textContent)])
-  assert.deepEqual(rows, [['DT', 'Schedule', 'DD', 'Every day at 6:00am UTC'], ['DT', 'Last report', 'DD', 'Never']])
+  assert.deepEqual(rows, [['DT', 'Schedule', 'DD', 'Every day at 6:00 AM'], ['DT', 'Last report', 'DD', 'Never']])
   assert.equal(withClass(card, 'rd-ref')[0].textContent, 'Team repo · declared-0')
   assert.equal(card.attributes['data-id'], 'workflow:declared-0')
 })
@@ -225,7 +225,7 @@ const aging = async (readiness) => {
 }
 const card = (patch = {}) => ({
   id: 'workflow:a', source: 'workflow', name: 'A', ref: 'Team repo · a', light: 'go', word: 'GO', pill: null, faded: false,
-  sentence: { text: 'A ran clean at {time}.', at: '2026-08-10T06:00:20Z' }, schedule: 'Every day at 6:00am UTC',
+  sentence: { text: 'A ran clean at {time}.', at: '2026-08-10T06:00:20Z' }, schedule: { text: 'Every day at 6:00am UTC', clock: { every: 'day', hour: 6, minute: 0, weekday: null, day: null } },
   lastReport: { text: '{time}', at: '2026-08-10T06:00:20Z' },
   fadesAt: '2026-08-11T06:30:00Z', silentAt: '2026-08-12T06:30:00Z', silentSentence: { text: 'Has not reported since {date}.', at: '2026-08-10T06:00:20Z' },
   ...patch
@@ -309,7 +309,9 @@ test('the sentence filler: {time} is a clock on the same day and a date and cloc
   assert.equal(say('At {time}.', '2026-10-09T06:15:00Z'), 'At 6:15 AM.')
   assert.equal(say('At {time}.', '2026-10-08T06:15:00Z'), 'At 6:15 AM yesterday.')
   assert.equal(say('At {time}.', '2026-10-01T06:15:00Z'), 'At 6:15 AM on Thu, Oct 1.')
-  assert.equal(say('Since {date}.', '2026-10-09T06:15:00Z'), 'Since today.')
+  // Earlier today is the clock time, not the word "today": "not checked since today" says nothing.
+  assert.equal(say('Since {date}.', '2026-10-09T06:15:00Z'), 'Since 6:15 AM.')
+  assert.equal(say('Not checked since {date}.', '2026-10-09T14:59:00Z'), 'Not checked since 2:59 PM.')
   assert.equal(say('Since {date}.', '2026-10-08T23:00:00Z'), 'Since yesterday.')
   assert.equal(say('Since {date}.', '2026-10-01T06:15:00Z'), 'Since Thu, Oct 1.')
   assert.equal(say('{hours} h old', '2026-10-09T03:00:00Z'), '12 h old')
@@ -319,6 +321,63 @@ test('the sentence filler: {time} is a clock on the same day and a date and cloc
   assert.equal(say('Nothing to fill.', '2026-10-09T06:15:00Z'), 'Nothing to fill.')
   assert.equal(readinessSentence(null, now), '')
   assert.equal(say('{other} stays', '2026-10-09T06:15:00Z'), '{other} stays')
+})
+
+/* ---------- a schedule in the reader's own time ------------------------------------------------- */
+
+// The app's own rule is that times are said in the reader's local time, never UTC. A routine runs in
+// UTC, so the server sends the clock time and the page puts it in the reader's zone - which can move
+// the day as well as the hour.
+test('a team-repo schedule is said in the reader\'s zone, and the day moves with it', async () => {
+  const { readinessScheduleText } = (await boot(wallPayload([]))).exposed
+  const now = Date.parse('2026-10-09T15:00:00Z')
+  const clock = (every, hour, minute, extra = {}) => ({ text: 'a UTC fallback', clock: { every, hour, minute, weekday: null, day: null, ...extra } })
+  const say = (schedule, zone) => {
+    return readinessScheduleText(schedule, now, zone).replace(/\s/g, ' ')
+  }
+  // UTC readers see what the file says.
+  assert.equal(say(clock('day', 6, 0), 'UTC'), 'Every day at 6:00 AM')
+  assert.equal(say(clock('weekly', 6, 0, { weekday: 1 }), 'UTC'), 'Mondays at 6:00 AM')
+  assert.equal(say(clock('weekdays', 7, 45), 'UTC'), 'Weekdays at 7:45 AM')
+  assert.equal(say(clock('monthly', 8, 0, { day: 31 }), 'UTC'), 'Monthly on the 31st at 8:00 AM')
+  // New York is four hours behind in October.
+  assert.equal(say(clock('day', 6, 0), 'America/New_York'), 'Every day at 2:00 AM')
+  assert.equal(say(clock('weekly', 6, 0, { weekday: 1 }), 'America/New_York'), 'Mondays at 2:00 AM')
+  assert.equal(say(clock('weekdays', 14, 0), 'America/New_York'), 'Weekdays at 10:00 AM')
+  // Past midnight the other way: the day before.
+  assert.equal(say(clock('weekly', 2, 0, { weekday: 1 }), 'America/New_York'), 'Sundays at 10:00 PM')
+  assert.equal(say(clock('weekdays', 2, 0), 'America/New_York'), 'Sun to Thu at 10:00 PM')
+  assert.equal(say(clock('weekly', 1, 0, { weekday: 0 }), 'America/New_York'), 'Saturdays at 9:00 PM')
+  // And ahead of UTC: the day after.
+  assert.equal(say(clock('weekly', 20, 0, { weekday: 1 }), 'Asia/Tokyo'), 'Tuesdays at 5:00 AM')
+  assert.equal(say(clock('weekdays', 20, 0), 'Asia/Tokyo'), 'Tue to Sat at 5:00 AM')
+  assert.equal(say(clock('day', 20, 0), 'Asia/Tokyo'), 'Every day at 5:00 AM')
+  assert.equal(say(clock('monthly', 20, 0, { day: 31 }), 'Asia/Tokyo'), 'Monthly on the 1st at 5:00 AM')
+  assert.equal(say(clock('monthly', 1, 0, { day: 1 }), 'America/New_York'), 'Monthly on the 31st at 9:00 PM')
+  // Ordinals, including the teens that are not "11st".
+  for (const [day, word] of [[1, '1st'], [2, '2nd'], [3, '3rd'], [4, '4th'], [11, '11th'], [12, '12th'], [13, '13th'], [21, '21st'], [22, '22nd'], [23, '23rd'], [30, '30th']]) {
+    assert.equal(say(clock('monthly', 8, 0, { day }), 'UTC'), `Monthly on the ${word} at 8:00 AM`)
+  }
+  // A half-hour zone.
+  assert.equal(say(clock('day', 6, 0), 'Asia/Kolkata'), 'Every day at 11:30 AM')
+})
+
+test('a schedule with no clock, or in a zone this browser does not know, is said as the server wrote it', async () => {
+  const { readinessScheduleText } = (await boot(wallPayload([]))).exposed
+  const now = Date.parse('2026-10-09T15:00:00Z')
+  assert.equal(readinessScheduleText({ text: 'Every 2 hours', clock: null }, now, 'Asia/Tokyo'), 'Every 2 hours')
+  assert.equal(readinessScheduleText({ text: 'Every day at 6:15am (Mac time)', clock: null }, now, 'Asia/Tokyo'), 'Every day at 6:15am (Mac time)')
+  assert.equal(readinessScheduleText({ text: 'Every day at 6:00am UTC', clock: { every: 'day', hour: 6, minute: 0 } }, now, 'Mars/Olympus'), 'Every day at 6:00am UTC')
+  assert.equal(readinessScheduleText({ text: 'Every day at 6:00am UTC', clock: { every: 'fortnightly', hour: 6, minute: 0 } }, now, 'UTC'), 'Every day at 6:00am UTC')
+  assert.equal(readinessScheduleText(null, now, 'UTC'), 'Not known')
+  assert.equal(readinessScheduleText('plain', now, 'UTC'), 'plain')
+})
+
+test('the Schedule row of a team-repo card is in the reader\'s zone, from the clock the server sent', async () => {
+  const payload = wallPayload([workflow()])
+  const page = await boot(payload, { after: "readinessClock.locale = 'en-US'; readinessClock.zone = 'Asia/Tokyo'" })
+  const [card] = withClass(page.node('readiness'), 'rd-card')
+  assert.equal(flat(withClass(card, 'rd-row')[0].children[1].textContent), 'Every day at 3:00 PM')
 })
 
 /* ---------- how it looks ----------------------------------------------------------------------- */
