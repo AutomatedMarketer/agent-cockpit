@@ -12,6 +12,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { loadPage, flush, html } from './helpers/page-harness.mjs'
 import { basePayload } from './helpers/page-payload.mjs'
+import { cssRules } from './helpers/css-rules.mjs'
+
+const declarations = (rule) => Object.fromEntries(rule.body.split(';').map((part) => part.trim()).filter(Boolean)
+  .map((part) => [part.slice(0, part.indexOf(':')).trim(), part.slice(part.indexOf(':') + 1).trim()]))
 
 const OLD_KEY = 'agent-cockpit-view-key'
 const answer = (status, body = {}) => ({ ok: status >= 200 && status < 300, status, type: 'basic', headers: { get: () => null }, json: async () => body })
@@ -57,6 +61,24 @@ test('a board that is not signed in shows a sign-in form a keychain can fill and
   assert.match(drawn, /id="sign-in-note"[^>]*role="status"/)
   assert.match(drawn, /<button[^>]*type="submit"[^>]*>Sign in<\/button>/)
   assert.equal(page.node('sign-in-user').focused, 1, 'the cursor is not in the username field')
+})
+
+// Look and feel T10: the sign-in card sits over the harbour gate at night. The picture is
+// decoration only - hidden from a screen reader, no words of its own - and the card stays a solid
+// panel on top of it, so its words read exactly as before.
+test('the sign-in page sits over the gate picture, which is decoration only, and the card stays solid', async () => {
+  const { page } = boardWith(signedOut)
+  await flush()
+  const drawn = page.node('body').innerHTML
+  assert.ok(drawn.startsWith('<div class="unlock-scene" aria-hidden="true"><img src="/art/unlock-gate.webp" alt="" width="1600" height="686" loading="lazy" decoding="async" /></div>'),
+    'the sign-in page does not start with the gate picture, hidden from a screen reader')
+  assert.match(drawn, /<main class="unlock" aria-labelledby="sign-in-title">/)
+  const rules = cssRules()
+  const card = Object.assign({}, ...rules.filter((rule) => !rule.inMedia && rule.selector === '.unlock').map(declarations))
+  assert.equal(card.background, 'var(--panel)', 'the sign-in card is no longer a solid panel')
+  assert.equal(card.position, 'relative')
+  const wash = Object.assign({}, ...rules.filter((rule) => !rule.inMedia && rule.selector === '.unlock-scene::after').map(declarations))
+  assert.match(wash.background ?? '', /var\(--scrim\)/, 'the picture has no wash under the card')
 })
 
 test('the form is fixed markup, and the server\'s words go in as text, never as markup', async () => {

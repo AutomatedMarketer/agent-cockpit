@@ -5994,7 +5994,10 @@ function renderError(message) {
 
    The markup is fixed: nothing is put into it. The server's sentences, and anything else that
    changes, are set as text. */
-const SIGN_IN_HTML = `<main class="unlock" aria-labelledby="sign-in-title">
+// The picture behind the sign-in card: decoration, hidden from a screen reader, fixed markup.
+const UNLOCK_SCENE_HTML = '<div class="unlock-scene" aria-hidden="true"><img src="/art/unlock-gate.webp" alt="" width="1600" height="686" loading="lazy" decoding="async" /></div>'
+
+const SIGN_IN_HTML = `${UNLOCK_SCENE_HTML}<main class="unlock" aria-labelledby="sign-in-title">
     <p class="eyebrow">Agent OS</p>
     <h1 id="sign-in-title">Sign in</h1>
     <p id="sign-in-note" class="sign-in-note" role="status" aria-live="polite"></p>
@@ -6076,7 +6079,7 @@ function renderSignIn(message = '') {
 // cannot tell from here whether it is signed out, only that it was sent elsewhere. Reloading the
 // page goes through Vercel's sign-in, and then the board's.
 function renderReload() {
-  document.body.innerHTML = `<main class="unlock" aria-labelledby="reload-title">
+  document.body.innerHTML = `${UNLOCK_SCENE_HTML}<main class="unlock" aria-labelledby="reload-title">
     <p class="eyebrow">Agent OS</p>
     <h1 id="reload-title">Reload to sign in</h1>
     <p id="reload-note" role="status" aria-live="polite"></p>

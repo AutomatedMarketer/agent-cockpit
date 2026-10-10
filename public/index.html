@@ -394,8 +394,17 @@
      low on one and off to the right on the other; with the nav gone, so is the room. */
   body:has(> .unlock) { padding: 1rem; }
   .unlock {
+    position: relative; z-index: 1;
     max-width: 24rem; margin: 18vh auto; padding: 1.5rem 1.4rem 1.2rem; text-align: left;
-    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--elev-3);
+  }
+  /* Behind the card, the harbour gate at night, under a wash of --scrim. The card stays a solid panel
+     on top, so its words read exactly as they always did, in either theme. */
+  .unlock-scene { position: fixed; inset: 0; z-index: 0; overflow: hidden; background: var(--bg); }
+  .unlock-scene img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 70% 50%; }
+  .unlock-scene::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--scrim) 45%, transparent), var(--scrim));
   }
   .unlock h1 { font-size: 1.6rem; letter-spacing: -.03em; margin: .3rem 0 .4rem; }
   .unlock p { color: var(--muted); font-size: .875rem; }
@@ -744,15 +753,16 @@
     font-size: .625rem; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
   }
   .count { margin-left: auto; font-size: .75rem; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
-  /* The picture is the harbour from Today, with what the board is doing laid over it. The words
-     sit on a wash of --scrim so they read over the bright parts of the picture as well. */
+  /* The sidebar's own square picture - one lit window on the harbour wall under a wide dusk sky -
+     with what the board is doing laid over it. The words sit on a wash of --scrim so they read over
+     the bright parts of the picture as well. */
   .side-art {
     position: relative; flex: none; margin: .75rem .9rem; aspect-ratio: 1;
     border-radius: 14px; overflow: hidden; border: 1px solid var(--line);
   }
   .side-art img {
-    display: block; width: 100%; height: 100%; object-fit: cover; object-position: 28% 50%;
-    transform: scale(1.35);
+    display: block; width: 100%; height: 100%; object-fit: cover; object-position: 30% 50%;
+    transform: scale(1.12);
   }
   .side-art-caption {
     position: absolute; left: 0; right: 0; bottom: 0; margin: 0; padding: 2.75rem .85rem .75rem;
@@ -1613,8 +1623,8 @@
 
     /* A slow drift across the sidebar's picture, only where the picture shows at all. */
     @keyframes side-art-drift {
-      from { transform: scale(1.35) translateX(0); }
-      to { transform: scale(1.35) translateX(-9%); }
+      from { transform: scale(1.12) translateX(0); }
+      to { transform: scale(1.12) translateX(-5%); }
     }
     @media (min-width: 48rem) and (min-height: 46rem) {
       .side-art img { animation: side-art-drift var(--dur-drift) ease-in-out infinite alternate; }
@@ -1733,7 +1743,7 @@
   </div>
   <!-- Lazy, and display:none until the window is wide and tall enough, so a phone never fetches it. -->
   <div class="side-art">
-    <img src="/art/today-harbour.webp" alt="" width="1600" height="686" loading="lazy" decoding="async" />
+    <img src="/art/side-dusk.webp" alt="" width="640" height="640" loading="lazy" decoding="async" />
     <p id="side-art-caption" class="side-art-caption"></p>
   </div>
   <div id="profile" class="profile" hidden>

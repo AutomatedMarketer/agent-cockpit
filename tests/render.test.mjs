@@ -6097,3 +6097,15 @@ test("a screen's own stored picture is fetched the first time that screen opens,
     Object.keys(SCREEN_BANNER).map((screen) => `/api/art?slot=${screen}&v=${V1}&t=webp`).sort(),
     'each screen did not ask for exactly its own picture, once')
 })
+
+/* ---------- the sidebar picture (look and feel, T10) ----------------------------------------------
+   Its own square picture now - one lit window on the harbour wall under a wide dusk sky - instead
+   of Today's harbour cropped into a square. Still lazy, still only on a window wide and tall
+   enough for it, so a phone never fetches it. */
+test('the sidebar picture is its own square file, lazy and decorative', () => {
+  const art = /<div class="side-art">\s*(<img [^>]*>)/.exec(html)?.[1]
+  assert.ok(art, 'the sidebar picture is gone')
+  assert.equal(art, '<img src="/art/side-dusk.webp" alt="" width="640" height="640" loading="lazy" decoding="async" />')
+  const shown = exactRules('.side-art').filter((rule) => rule.inMedia && valuesIn(rule).display === 'block')
+  assert.ok(shown.length && shown.every((rule) => /min-width: 48rem/.test(rule.condition) && /min-height: 46rem/.test(rule.condition)), 'the sidebar picture shows on a phone or a short laptop')
+})
