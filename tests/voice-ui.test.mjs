@@ -151,7 +151,8 @@ const CARD = {
   owners: [{ value: '', label: 'Let the orchestrator choose' }, { value: 'research', label: '<b>Scout</b>' }],
   owner: 'research',
   pick: '',
-  sayYes: true
+  say: 'Or say "yes".',
+  id: 'card-7'
 }
 
 test('the order card is in the sheet, hidden until there is an order: a group with a heading, a Yes, a No and a polite note', async () => {
@@ -194,6 +195,9 @@ test('the card shows exactly what will be sent, as text: never markup, never the
   assert.equal(page.node('voice-order-for').value, 'research')
   assert.equal(page.node('voice-order-for-label').hidden, false)
   assert.equal(page.node('voice-order-say').hidden, false)
+  assert.equal(page.node('voice-order-say').textContent, 'Or say "yes".')
+  // Yes carries the card it answers, so a tap can only ever send that card.
+  assert.equal(page.node('voice-order-yes').dataset.card, 'card-7')
   assert.equal(page.node('voice-order-yes').disabled, false)
   for (const id of ['voice-order-yes', 'voice-order-no', 'voice-order-for', 'voice-order']) {
     assert.equal(page.node(id).focused, 0, `${id} took the focus on its own`)
@@ -212,13 +216,14 @@ test('the card shows exactly what will be sent, as text: never markup, never the
 test('a run card has no owner to pick and no title line; "or say yes" shows only when a spoken yes can count; gone is gone', async () => {
   const page = await boot(brandAnswer({ voice: VOICE_ON }), { expose: ['voiceUi'] })
   const { voiceUi } = page.exposed
-  voiceUi.order({ heading: 'Run Morning intel?', what: 'Starts this job now, and uses one run of your plan.', text: '', details: '', owners: [], owner: '', pick: '', sayYes: false })
+  voiceUi.order({ heading: 'Run Morning intel?', what: 'Starts this job now, and uses one run of your plan.', text: '', details: '', owners: [], owner: '', pick: '', say: '', id: 'card-8' })
   assert.equal(page.node('voice-order-title').textContent, 'Run Morning intel?')
   assert.equal(page.node('voice-order-text').hidden, true)
   assert.equal(page.node('voice-order-details').hidden, true)
   assert.equal(page.node('voice-order-for-label').hidden, true)
   assert.deepEqual(page.node('voice-order-for').children, [])
   assert.equal(page.node('voice-order-say').hidden, true, '"or say yes" shown where only a tap can send')
+  assert.equal(page.node('voice-order-yes').dataset.card, 'card-8')
   voiceUi.order(CARD)
   voiceUi.orderNote('Sent.')
   voiceUi.order(null)
@@ -600,7 +605,7 @@ test('with an order card open, Esc is its No and never a hang-up; Yes hands the 
     stopped: [], declined: 0, confirmed: [], interrupted: 0, open: true,
     orderOpen() { return this.open },
     decline() { this.declined += 1; this.open = false; return true },
-    confirm(event, owner) { this.confirmed.push({ event, owner }); return true },
+    confirm(event, owner, card) { this.confirmed.push({ event, owner, card }); return true },
     interrupt() { this.interrupted += 1; return false },
     stop(reason) { this.stopped.push(reason) }
   }
@@ -613,7 +618,7 @@ test('with an order card open, Esc is its No and never a hang-up; Yes hands the 
   // With the card gone, Esc is what it always was.
   fire('keydown', { key: 'Escape' })
   assert.deepEqual(session.stopped, ['stopped'])
-  const yes = { closest: (selector) => (selector === '#voice-order-yes' ? yes : null) }
+  const yes = { dataset: { card: 'card-3' }, closest: (selector) => (selector === '#voice-order-yes' ? yes : null) }
   const no = { closest: (selector) => (selector === '#voice-order-no' ? no : null) }
   page.node('voice-order-for').value = 'research'
   const tap = { target: yes, isTrusted: true }
@@ -621,6 +626,7 @@ test('with an order card open, Esc is its No and never a hang-up; Yes hands the 
   assert.equal(session.confirmed.length, 1)
   assert.equal(session.confirmed[0].event, tap, 'the call was not handed the tap itself to check')
   assert.equal(session.confirmed[0].owner, 'research')
+  assert.equal(session.confirmed[0].card, 'card-3', 'the tap was not tied to the card on the button')
   fire('click', { target: no })
   assert.equal(session.declined, 2)
 })

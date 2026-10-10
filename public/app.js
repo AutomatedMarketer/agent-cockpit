@@ -4367,6 +4367,16 @@ function onlyUnits(words, units) {
   return found
 }
 
+// What a spoken yes may approve at all (the coordinator's decision, 2026-10-10): a job run - a fixed
+// job, no words of its own - or a task card whose title is SPOKEN_TITLE_MAX characters or less and has
+// no details. Anything longer was not all heard before the yes, so it takes a tap.
+const SPOKEN_TITLE_MAX = 80
+function spokenYesFits(order) {
+  if (order?.kind === 'run') return typeof order.slug === 'string' && order.slug.length > 0
+  if (order?.kind !== 'task' || typeof order.title !== 'string') return false
+  return order.title.length <= SPOKEN_TITLE_MAX && !order.details
+}
+
 const plainYes = (text) => onlyUnits(spokenWords(text), YES_UNITS)
 const plainNo = (text) => onlyUnits(spokenWords(text), NO_UNITS)
 const soundsLikeYes = (text) => YES_UNITS.some((unit) => ` ${spokenWords(text)} `.includes(` ${unit} `))
@@ -4568,7 +4578,7 @@ function voiceDockHtml() {
           <button class="fire voice-order-yes" type="button" id="voice-order-yes">Yes, send it</button>
           <button class="fire voice-order-no" type="button" id="voice-order-no">No</button>
         </div>
-        <p class="voice-order-say" id="voice-order-say" hidden>Or say "yes".</p>
+        <p class="voice-order-say" id="voice-order-say" hidden></p>
         <p class="voice-order-time" id="voice-order-time" aria-hidden="true"></p>
         <p class="voice-order-note" id="voice-order-note" role="status" aria-live="polite"></p>
       </section>
@@ -4645,7 +4655,11 @@ const voiceUi = {
     select.value = card?.owner ?? ''
     select.hidden = owners.length === 0
     el('voice-order-for-label').hidden = owners.length === 0
-    el('voice-order-say').hidden = card?.sayYes !== true
+    // What the person may say: "Or say yes", why this one needs a tap, or nothing.
+    el('voice-order-say').textContent = card?.say ?? ''
+    el('voice-order-say').hidden = !card?.say
+    // Yes carries the card it answers, so a tap can only ever send that card.
+    el('voice-order-yes').dataset.card = card?.id ?? ''
     el('voice-order-time').textContent = ''
     el('voice-order-note').textContent = ''
     this.orderBusy(false)
@@ -4710,7 +4724,9 @@ document.addEventListener('click', (event) => {
   else if (target?.closest?.('#voice-stop')) voiceStopPressed()
   else if (target?.closest?.('#voice-headphones')) toggleHeadphones()
   // The card's Yes: the event itself goes along, so the call can check it was the person's own tap.
-  else if (target?.closest?.('#voice-order-yes')) voiceSession?.confirm?.(event, el('voice-order-for')?.value ?? '')
+  else if (target?.closest?.('#voice-order-yes')) {
+    voiceSession?.confirm?.(event, el('voice-order-for')?.value ?? '', target.closest('#voice-order-yes').dataset?.card ?? '')
+  }
   else if (target?.closest?.('#voice-order-no')) voiceSession?.decline?.()
 })
 // Space on the orb itself: a browser focuses the orb when it is clicked, and would then press it with
@@ -4802,14 +4818,36 @@ const VOICE_ORDER = {
   waiting: { status: 'waiting', for: 'the owner', expiresInSeconds: CONFIRM_WINDOW_MS / 1000 },
   justSent: 'That was just sent, so it is on its way. Nothing more to do.',
   sentTask: 'The owner said yes. The task card was sent to the team; it shows on the board in about a minute.',
-  sentRun: (name) => `The owner said yes. The job ${name} was started.`,
+  // A system note is the board's own words only: never a name from the repo (a workflow's name is
+  // the team's text), and never a refusal's text. A job is named by its slug, held to the slug shape.
+  sentRun: (slug) => `The owner said yes. The job ${VOICE_NOTE_SLUG.test(slug) ? `${slug} ` : ''}was started.`,
   no: 'The owner said no. Nothing was sent.',
   expired: 'The card ran out after 60 seconds without a yes. Nothing was sent.',
   replaced: 'That card was replaced by a newer one. Nothing was sent for it.',
   unclear: "Didn't catch a clear yes - tap Yes.",
   sending: 'Sending it…',
-  unreachable: 'the board could not be reached.'
+  unreachable: 'the board could not be reached.',
+  sayYes: 'Or say "yes".',
+  tapDetails: 'This one has details, so tap Yes to send it.',
+  tapLong: 'This one is long, so tap Yes to send it.'
 }
+const VOICE_NOTE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+// Why an order was not sent, for the model: fixed words chosen by the answer's status. The person sees
+// the board's own sentence in the sheet; the model never gets any text that came over the network.
+function voiceRefusalWords(result) {
+  const status = result?.status
+  if (status === 503) return "Fire is not set up on this board: the README's Orders by voice steps switch it on."
+  if (status === 401) return result?.payload?.needs === 'fire-key' ? 'The board needs its fire key, so the owner must tap Yes and type it.' : 'The owner is signed out of the board.'
+  if (status === 403) return 'The board refused it.'
+  if (status === 404) return 'That job or routine has no trigger link.'
+  if (status === 400) return 'The board found something wrong with the order.'
+  if (status === 502 || status === 504) return 'The routine did not answer.'
+  if (status === 0) return 'The board could not be reached.'
+  return `The board answered ${Number.isInteger(status) && status > 0 && status < 1000 ? status : 'nothing'}.`
+}
+// After any card appears or changes, Yes waits this long: a tap aimed at the card that was there a
+// moment ago must not land on the one that replaced it.
+const CARD_SETTLE_MS = 800
 // The orders sent from this device, newest first, for "is it done?": at most ten, kept on the device.
 const VOICE_ORDERS_STORE = 'agent-cockpit-voice-orders'
 const VOICE_ORDERS_KEPT = 10
@@ -4972,7 +5010,7 @@ function openVoice(deps, ui) {
     soundEndedAt: null, listenPending: null, noteIsCut: false,
     // Orders: what this call may propose, the card waiting for a yes, what was just sent, and each of
     // the person's turns as it began - when, and whether the mic rested or a reply played in it.
-    orders: { on: false }, card: null, sent: [], utterances: new Map(), hearingNow: null,
+    orders: { on: false }, card: null, cardSeq: 0, sent: [], utterances: new Map(), hearingNow: null,
     recheckedAt: -Infinity, recheckOk: false,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
@@ -5038,9 +5076,10 @@ function openVoice(deps, ui) {
     session.restTimer = deps.setTimeout(() => {
       session.restTimer = null
       if (session.stopped) return
-      // The sound's end was never heard: take it as ended.
+      // The sound's end was never heard: take it as ended, now - the yes rule's quiet counts from here.
       session.soundPlaying = false
       session.soundStartedAt = null
+      session.soundEndedAt = deps.now()
       wakeMic()
     }, wait)
   }
@@ -5248,6 +5287,7 @@ function openVoice(deps, ui) {
     if (!card) return
     deps.clearTimeout(card.expiry)
     deps.clearTimeout(card.tick)
+    deps.clearTimeout(card.settle)
     session.card = null
     ui.order?.(null)
     if (said && !session.stopped) tellModel(said)
@@ -5271,16 +5311,33 @@ function openVoice(deps, ui) {
       owners,
       owner: '',
       pick: '',
-      // "Or say yes" only where a spoken yes can count: allowed on this board, and no key to type.
-      sayYes: session.orders.spokenYes === true && keyReady()
+      // "Or say yes" only where a spoken yes can count: allowed on this board, no key to type, and an
+      // order it may approve (spokenYesFits); otherwise, plainly, why this one needs a tap.
+      say: session.orders.spokenYes !== true || !keyReady() ? ''
+        : spokenYesFits(order) ? VOICE_ORDER.sayYes
+          : order.details ? VOICE_ORDER.tapDetails : VOICE_ORDER.tapLong
     }
+  }
+
+  // A card has appeared or changed: Yes waits CARD_SETTLE_MS, and a yes must begin after this moment.
+  function settle(card) {
+    card.shownAt = deps.now()
+    ui.orderBusy?.(true)
+    deps.clearTimeout(card.settle)
+    card.settle = deps.setTimeout(() => {
+      card.settle = null
+      if (session.card === card && !card.busy) ui.orderBusy?.(false)
+    }, CARD_SETTLE_MS)
   }
 
   function openCard(order) {
     closeCard(VOICE_ORDER.replaced)
-    const card = { order, openedAt: deps.now(), busy: false, left: CONFIRM_WINDOW_MS / 1000, words: cardWords(order), expiry: null, tick: null }
+    session.cardSeq += 1
+    const card = { id: `card-${session.cardSeq}`, order, openedAt: deps.now(), shownAt: deps.now(), busy: false, left: CONFIRM_WINDOW_MS / 1000, words: cardWords(order), expiry: null, tick: null, settle: null }
+    card.words.id = card.id
     session.card = card
     ui.order?.(card.words)
+    settle(card)
     ui.orderTime?.(card.left)
     const countdown = () => {
       card.left -= 1
@@ -5313,6 +5370,7 @@ function openVoice(deps, ui) {
     card.words.owner = pick
     card.words.pick = `Picked by Jev${sure ? ` (${sure}% sure)` : ''}. Change it if you like.`
     ui.orderPick?.(pick, card.words.pick)
+    settle(card)
   }
 
   // A proposal: checked first (orderFrom), then shown. The model is told it waits for the owner.
@@ -5325,12 +5383,19 @@ function openVoice(deps, ui) {
     return { ...VOICE_ORDER.waiting }
   }
 
-  async function sendOrder(card, owner, how) {
-    // Both callers check card.busy first, and this sets it before anything waits: one send per card.
-    if (session.stopped || session.card !== card) return false
+  // One send per card, whoever asks - a tap, a second tap, a spoken yes during a tap's send: the guard
+  // is here, and busy is set before anything waits. True when this call started the send.
+  function sendOrder(card, owner, how) {
+    if (session.stopped || session.card !== card || card.busy) return false
     card.busy = true
+    deliverOrder(card, owner, how)
+    return true
+  }
+
+  async function deliverOrder(card, owner, how) {
     deps.clearTimeout(card.expiry)
     deps.clearTimeout(card.tick)
+    deps.clearTimeout(card.settle)
     ui.orderBusy?.(true)
     ui.orderNote?.(VOICE_ORDER.sending)
     const order = card.order
@@ -5346,7 +5411,7 @@ function openVoice(deps, ui) {
     } catch (error) {
       result = { ok: false, status: 0, payload: { error: VOICE_ORDER.unreachable } }
     }
-    if (session.stopped) return true
+    if (session.stopped) return
     closeCard(null)
     if (result?.ok) {
       deps.saveOrder?.({
@@ -5355,25 +5420,26 @@ function openVoice(deps, ui) {
         sentAt: new Date(sent.at).toISOString()
       })
       showOutcome(order.kind === 'task' ? `Sent: "${order.title}". It shows on the board in about a minute.` : `Started: ${order.name}.`)
-      tellModel(order.kind === 'task' ? VOICE_ORDER.sentTask : VOICE_ORDER.sentRun(order.name))
+      tellModel(order.kind === 'task' ? VOICE_ORDER.sentTask : VOICE_ORDER.sentRun(order.slug))
     } else {
       // Not sent, so not "just sent" either: the same order may be proposed again at once.
       session.sent = session.sent.filter((one) => one !== sent)
-      const said = typeof result?.payload?.error === 'string' && result.payload.error.trim() ? result.payload.error.trim().slice(0, 300) : `the board answered ${result?.status ?? 'nothing'}.`
+      const words = voiceRefusalWords(result)
+      const said = typeof result?.payload?.error === 'string' && result.payload.error.trim() ? result.payload.error.trim().slice(0, 300) : words
       showOutcome(`Not sent: ${said}`)
-      tellModel(`Not sent: ${said} Do not say it was sent.`)
+      tellModel(`Not sent: ${words} Do not say it was sent.`)
     }
     session.replyRetries = 1
     askForReply()
-    return true
   }
 
-  // The card's Yes, tapped: only a real, trusted click (or Enter or Space) by the person - confirmsYes.
-  function confirm(event, owner) {
+  // The card's Yes, tapped: only a real, trusted click (or Enter or Space) by the person - confirmsYes -
+  // on the Yes of THIS card (its id is on the button), once it has been up CARD_SETTLE_MS.
+  function confirm(event, owner, cardId) {
     const card = session.card
-    if (session.stopped || !card || card.busy || !confirmsYes(event)) return false
-    sendOrder(card, typeof owner === 'string' ? owner : '', 'tap')
-    return true
+    if (session.stopped || !card || !confirmsYes(event)) return false
+    if (cardId !== card.id || deps.now() - card.shownAt < CARD_SETTLE_MS) return false
+    return sendOrder(card, typeof owner === 'string' ? owner : '', 'tap')
   }
 
   // The card's No, or Esc.
@@ -5395,13 +5461,14 @@ function openVoice(deps, ui) {
     if (!record || !card || card.busy || session.orders.spokenYes !== true) return
     const verdict = spokenYesCounts({
       utterance: { startedAt: record.startedAt, transcript, suspect: record.suspect },
-      card: { openedAt: card.openedAt, open: true },
+      card: { openedAt: card.shownAt, open: true },
       mic: { mutedDuring: record.mutedDuring },
       sound: { playingDuring: record.soundDuring, endedAt: record.soundEndedAt },
       keyReady: keyReady(),
       now: deps.now()
     })
-    if (verdict === 'yes') sendOrder(card, ui.orderOwner?.() ?? card.words.owner, 'spoken')
+    if (verdict === 'yes' && !spokenYesFits(card.order)) ui.orderNote?.(card.words.say || VOICE_ORDER.unclear)
+    else if (verdict === 'yes') sendOrder(card, ui.orderOwner?.() ?? card.words.owner, 'spoken')
     else if (verdict === 'no') closeCard(VOICE_ORDER.no)
     else if (verdict === 'unclear') ui.orderNote?.(VOICE_ORDER.unclear)
   }

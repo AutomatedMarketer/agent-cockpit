@@ -370,6 +370,9 @@ test('the README says what orders by voice do, the yes rule word for word, and h
   assert.match(section, /A tap on \*\*Yes\*\* always works/)
   assert.match(section, /never .*a tool, a page or an email/i)
   assert.match(section, /VOICE_SPOKEN_YES=off/)
+  // What a spoken yes may approve (the coordinator's decision, 2026-10-10).
+  assert.match(section, /only a job run, or a task card with a title of 80 characters or less and no details/i)
+  assert.match(section, /This one has details, so tap Yes to send it\./)
   // Switching on, in order, and what it costs.
   assert.match(section, /task-intake/)
   assert.match(section, /FIRE_KEY/)

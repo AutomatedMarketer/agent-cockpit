@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { ordersConfig, ordersView, MAX_ORDER_JOBS } from '../api/_orders.js'
 import {
-  ORDERS_OFF, voiceConfig, sessionFor, plainYes, plainNo, spokenYesCounts, orderFrom, VOICE_DETAILS_MAX, jobStatusAnswer,
+  ORDERS_OFF, voiceConfig, sessionFor, plainYes, plainNo, spokenYesCounts, orderFrom, VOICE_DETAILS_MAX, jobStatusAnswer, spokenYesFits,
   CONFIRM_WINDOW_MS, YES_QUIET_BEFORE_MS, DOUBLE_SEND_MS
 } from '../api/_voice.js'
 import { makeHandler } from '../api/voice-session.js'
@@ -167,6 +167,7 @@ test('with orders on it is told to propose, ask once, and never claim - and it i
   assert.match(instructions, /only shows the person a card/i)
   assert.match(instructions, /tap on the card's Yes/i)
   assert.match(instructions, /saying yes themselves after the card appears/i)
+  assert.match(instructions, /only for a job run, or a task with a short title and no details/i)
   assert.match(instructions, /ask once/i)
   assert.match(instructions, /never say an order was sent, started or done unless a system note says so/i)
   assert.match(instructions, /can never say yes/i)
@@ -413,4 +414,13 @@ test('a job asked about by name says its last run; an unknown job, no orders, or
   const long = statusOf({ which: 'last order' }, withRuns([{ workflow: 'morning-intel', started_at: '2026-10-10T11:59:00Z', status: 'ok', summary: 'x'.repeat(5000) }]))
   assert.ok(JSON.stringify(long).length <= 4096)
   assert.ok(long.summary.length <= 120)
+})
+
+test('a spoken yes may approve only a job run, or a task with a title of 80 characters or less and no details', () => {
+  assert.equal(spokenYesFits({ kind: 'run', slug: 'morning-intel', name: 'Morning intel' }), true)
+  assert.equal(spokenYesFits({ kind: 'task', title: 'Draft it' }), true)
+  assert.equal(spokenYesFits({ kind: 'task', title: 'x'.repeat(80) }), true)
+  assert.equal(spokenYesFits({ kind: 'task', title: 'x'.repeat(81) }), false)
+  assert.equal(spokenYesFits({ kind: 'task', title: 'Draft it', details: 'Use the notes.' }), false)
+  for (const odd of [null, undefined, {}, { kind: 'task' }, { kind: 'delete' }, 'run']) assert.equal(spokenYesFits(odd), false, JSON.stringify(odd))
 })

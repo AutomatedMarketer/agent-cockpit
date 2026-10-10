@@ -389,7 +389,7 @@ out loud from what the board already shows, and you can talk over it to stop it.
 | | |
 |---|---|
 | **What it can do** | Read the board to you: who is working, what is due and gone quiet, the task board, plan limits and voice spend, your connections and Hermes. Open a screen. And, once the board's Run buttons are set up, send a task card to your team, run a job, and tell you "is it done?" - each only after you say yes on a card ([Orders by voice](#orders-by-voice)) |
-| **Saying yes** | Only you can: a tap on the card's **Yes**, or your own plain spoken yes after the card appears. Its own words, or anything it read, can never say yes for you |
+| **Saying yes** | Only you can: a tap on the card's **Yes**, or - for a job run or a short task - your own plain spoken yes after the card appears. Its own words, or anything it read, can never say yes for you |
 | **Its name** | The assistant's name from **Make it yours**, or "your assistant" |
 | **Its voice** | OpenAI's own voice by default. Fish, for a voice you choose, is an optional upgrade (below) |
 | **While you talk** | The panel above the button shows your words as it hears them, what it is looking up (*Checking what's due…*), what it is saying, and what this conversation has cost so far. The orb glows with its voice as it speaks, unless your device asks for less motion |
@@ -420,6 +420,12 @@ checks the board again and says running, finished, not filed yet, or that nothin
   the microphone was on for all of it, no reply was playing during it, and a moment of quiet came
   before it. Then it cannot be the assistant's own voice. Anything else - *"yes, but…"*, a yes over
   its voice - leaves the card up and asks for a tap. A plain *"no"* closes it
+- A spoken yes approves
+  only a job run, or a task card with a title of 80 characters or less and no details:
+  those you heard in full. Anything else needs a tap, and the card says so:
+  *"This one has details, so tap Yes to send it."*
+- Yes waits a moment after a card appears or changes (when Jev picks who does it, say), so a tap meant
+  for the card that was there cannot send the one that replaced it
 - A spoken yes works only when sending needs no key typed in: the fire key is already in this tab
   (the first tap on a Run button asks for it), or the board uses `PUBLIC_FIRE`. The card says *"Or say
   yes"* only then
@@ -735,7 +741,7 @@ Locally:
 npm test
 ```
 
-1796 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1803 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

@@ -319,7 +319,9 @@ function orderLines(orders) {
       ? ['To start a job now, call run_job. A job that is not in its list has no trigger link, so it cannot be started from here.']
       : ['No job can be started by voice: none has its own trigger link, so say that if asked.']),
     'Either one only shows the person a card. Nothing is sent until they say yes: a tap on the card\'s Yes' +
-      (orders.spokenYes ? ', or saying yes themselves after the card appears.' : '.'),
+      (orders.spokenYes
+        ? ', or saying yes themselves after the card appears - only for a job run, or a task with a short title and no details; anything longer needs the tap.'
+        : '.'),
     'After proposing, ask once, in one short sentence, whether to send it, then wait.',
     'Never say an order was sent, started or done unless a system note says so; then say what it says.',
     'When the person says yes to a card, say only "Sending it." and wait for the note.',
@@ -1100,6 +1102,16 @@ function onlyUnits(words, units) {
     at += match.length
   }
   return found
+}
+
+// What a spoken yes may approve at all (the coordinator's decision, 2026-10-10): a job run - a fixed
+// job, no words of its own - or a task card whose title is SPOKEN_TITLE_MAX characters or less and has
+// no details. Anything longer was not all heard before the yes, so it takes a tap.
+export const SPOKEN_TITLE_MAX = 80
+export function spokenYesFits(order) {
+  if (order?.kind === 'run') return typeof order.slug === 'string' && order.slug.length > 0
+  if (order?.kind !== 'task' || typeof order.title !== 'string') return false
+  return order.title.length <= SPOKEN_TITLE_MAX && !order.details
 }
 
 export const plainYes = (text) => onlyUnits(spokenWords(text), YES_UNITS)
