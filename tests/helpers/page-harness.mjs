@@ -9,8 +9,9 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-export const html = readFileSync(new URL('../../public/index.html', import.meta.url), 'utf8')
-export const script = html.match(/<script>([\s\S]*)<\/script>/)[1]
+import { html, script } from './page-source.mjs'
+
+export { html, script }
 
 function element(id = '', tag = 'div') {
   const classes = new Set()

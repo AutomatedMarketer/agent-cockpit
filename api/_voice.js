@@ -399,7 +399,7 @@ export function isMp3(bytes) {
 
 // --- shared with the page ------------------------------------------------------------------------
 // KEEP IN SYNC: everything between the two markers below is mirrored verbatim inside
-// public/index.html's inline script (the page has no module loading), with `export ` taken off.
+// public/app.js, the page's script (the page has no module loading), with `export ` taken off.
 // tests/voice-client.test.mjs holds the two copies together, byte for byte. So nothing in here may
 // import anything or reach for anything the page does not have.
 // voice-page:start

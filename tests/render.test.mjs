@@ -12,8 +12,9 @@ import { cssRules } from './helpers/css-rules.mjs'
    &mdash; both invisible to a regex over the source, both obvious the moment a screen is drawn.
    So the harness lives here now. */
 
-const html = readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8')
-const script = html.match(/<script>([\s\S]*)<\/script>/)[1]
+// `html` is the whole page as before the script moved out - markup and script - so a search
+// across it still finds both.
+import { pageSource as html, script, pageSource } from './helpers/page-source.mjs'
 
 // The smallest DOM the page needs. Elements record what was written to them, which is the whole
 // point: the assertions below read the rendered HTML rather than the source that produced it.
@@ -665,7 +666,7 @@ test('a row in the list is wired to scroll, not to navigate by hash', () => {
 
   // The handler, and its preventDefault, in the page source. Without the cancel, the browser
   // follows the href and the router sends the reader to Today.
-  const source = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+  const source = script
   const wiring = source.slice(source.indexOf("querySelectorAll('[data-job]')"))
   assert.ok(wiring.length, 'nothing binds a click handler to the seven-day rows any more')
   assert.match(wiring.slice(0, 400), /event\.preventDefault\(\)/, 'the row click no longer cancels hash navigation')
@@ -1720,7 +1721,7 @@ test('a filename in a hero reason keeps its real casing', () => {
 })
 
 test('the renderer no longer tries to fix the sentence itself', () => {
-  const page = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+  const page = pageSource
   assert.ok(
     !/why\[0\]\.toUpperCase/.test(page),
     'the view layer is capitalising again, which is what turned tiles.yml into Tiles.yml'

@@ -151,7 +151,7 @@ on *your* board without touching code, see [Make it yours](#make-it-yours) below
 to the built-in art itself, do both of these:
 
 1. Put a 480x480 `.webp` named `agent-<name>.webp` in `public/art/`
-2. Add its name to the `PORTRAITS` list in `public/index.html`
+2. Add its name to the `PORTRAITS` list in `public/app.js`
 
 The list is what decides. A file in `public/art/` that is not in the list is never shown.
 
@@ -539,7 +539,7 @@ Locally:
 npm test
 ```
 
-1653 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1655 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

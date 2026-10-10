@@ -355,7 +355,8 @@ test('only the person\'s own click or key - a real event the browser marks trust
 
 /* ---------- the page's copy ---------- */
 
-const pagePath = new URL('../public/index.html', import.meta.url)
+// The page's script, which carries the copy (it moved out of index.html into public/app.js).
+const scriptPath = new URL('../public/app.js', import.meta.url)
 const between = (source, label) => {
   const start = source.indexOf('// voice-page:start')
   const end = source.indexOf('// voice-page:end')
@@ -366,7 +367,7 @@ const between = (source, label) => {
 test('the page\'s copy of the voice helpers is api/_voice.js\'s, byte for byte', () => {
   const server = between(readFileSync(new URL('../api/_voice.js', import.meta.url), 'utf8'), 'api/_voice.js')
     .replace(/^export /gm, '')
-  const page = between(readFileSync(pagePath, 'utf8'), 'the page')
+  const page = between(readFileSync(scriptPath, 'utf8'), 'the page')
   assert.equal(page, server, 'the page copy has drifted from api/_voice.js')
   assert.match(page, /function takeSpeakable\(/)
   assert.match(page, /function costOf\(/)
@@ -374,8 +375,7 @@ test('the page\'s copy of the voice helpers is api/_voice.js\'s, byte for byte',
 })
 
 test('the page\'s inline script still parses with the voice helpers in it', () => {
-  const html = readFileSync(pagePath, 'utf8')
-  const script = html.match(/<script>([\s\S]*)<\/script>/)[1]
+  const script = readFileSync(scriptPath, 'utf8')
   assert.doesNotThrow(() => new Function(script))
 })
 

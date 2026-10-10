@@ -603,7 +603,7 @@ export function runsSince(runs, hours = OVERNIGHT_HOURS, now = Date.now()) {
 // --- agent identity colors ----------------------------------------------------------------
 //
 // KEEP IN SYNC: these two functions (AGENT_PALETTE, agentColorIndex) and scheduleWeekView
-// below are mirrored verbatim inside public/index.html's inline script, because the page
+// below are mirrored verbatim inside public/app.js, the page's script, because the page
 // ships with no module loading. Change them here, change them there.
 //
 // Eight distinct dark-theme-friendly hues. Agent color is IDENTITY only — status colors
@@ -671,12 +671,12 @@ export function scheduleWeekView(schedule) {
 
 // --- task text → { title, details } -------------------------------------------------------
 //
-// KEEP IN SYNC: mirrored verbatim inside public/index.html's inline script (same rule as
+// KEEP IN SYNC: mirrored verbatim inside public/app.js, the page's script (same rule as
 // the palette helpers above). The Add-task form is one textarea: the first line becomes
 // the card's title (clipped to the endpoint's 200-char cap), and when there is more than
 // the title — extra lines, or a clipped first line — the full text rides as details.
 // --- the week calendar -------------------------------------------------------------------
-// Mirrored verbatim in public/index.html. Monday-first, local time: the calendar answers
+// Mirrored verbatim in public/app.js. Monday-first, local time: the calendar answers
 // "did today's job run", and a UTC week would answer it for the wrong day either side of
 // midnight.
 

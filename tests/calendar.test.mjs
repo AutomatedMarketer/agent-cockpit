@@ -10,7 +10,10 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { weekDates, dateKey, ranOnDays, activityByDay } from '../api/_lib.js'
 
+// The markup and the script the page loads: the script moved out of index.html into public/app.js.
 const page = fileURLToPath(new URL('../public/index.html', import.meta.url))
+const pageScript = fileURLToPath(new URL('../public/app.js', import.meta.url))
+const readPage = async () => `${await readFile(page, 'utf8')}\n${await readFile(pageScript, 'utf8')}`
 
 /* ---------- weekDates ---------- */
 
@@ -129,7 +132,7 @@ test('activity spans any number of days, across a month boundary, and survives n
 /* ---------- the page ---------- */
 
 test('the calendar renders on the front screen, reading real runs', async () => {
-  const html = await readFile(page, 'utf8')
+  const html = await readPage()
   assert.match(
     html,
     /scheduleStripHtml\(data\.workflows, \{ dates: true, runs: data\.runs/,
@@ -138,13 +141,13 @@ test('the calendar renders on the front screen, reading real runs', async () => 
 })
 
 test('a pill still to come is never marked missed', async () => {
-  const html = await readFile(page, 'utf8')
+  const html = await readPage()
   assert.match(html, /if \(due\.getTime\(\) > nowMs\) return \{ klass: '', mark: '' \}/,
     'calling an 18:00 job missed at 09:00 is a lie the dashboard must not tell')
 })
 
 test('a new workflow is requested as a card, because this page never writes the repo', async () => {
-  const html = await readFile(page, 'utf8')
+  const html = await readPage()
   assert.match(html, /id="wf-open"/, 'the front screen needs a New workflow button')
   assert.match(html, /submitWorkflowRequest/)
   assert.match(html, /action: 'task'[\s\S]{0,400}for: 'orchestrator'/,
@@ -152,9 +155,8 @@ test('a new workflow is requested as a card, because this page never writes the 
 })
 
 test("the page's inline script parses - a broken escape ships a blank dashboard", async () => {
-  const html = await readFile(page, 'utf8')
-  const blocks = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((match) => match[1])
-  assert.ok(blocks.length, 'the page has no inline script')
+  const html = await readPage()
+  const blocks = [await readFile(pageScript, 'utf8')]
   for (const source of blocks) {
     // Compiles without running: catches syntax errors in browser-only code that node
     // cannot import. The tests below check behaviour; this one checks it loads at all.
@@ -163,7 +165,7 @@ test("the page's inline script parses - a broken escape ships a blank dashboard"
 })
 
 test('the mirrored helpers in the page match api/_lib.js exactly', async () => {
-  const html = await readFile(page, 'utf8')
+  const html = await readPage()
   const lib = await readFile(fileURLToPath(new URL('../api/_lib.js', import.meta.url)), 'utf8')
   const slice = (source, start, end) => {
     const from = source.indexOf(start)

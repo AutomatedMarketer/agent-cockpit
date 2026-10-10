@@ -112,6 +112,7 @@ test('no price lives anywhere but api/_voice-prices.js - not in another function
     .filter((name) => name.endsWith('.js') && name !== '_voice-prices.js')
     .map((name) => [`api/${name}`, readFileSync(new URL(`../api/${name}`, import.meta.url), 'utf8')])
   files.push(['public/index.html', readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')])
+  files.push(['public/app.js', readFileSync(new URL('../public/app.js', import.meta.url), 'utf8')])
   for (const [name, source] of files) {
     assert.doesNotMatch(source, RATE, `${name} writes a price of its own`)
     assert.doesNotMatch(source, PER_MILLION, `${name} writes a price of its own`)

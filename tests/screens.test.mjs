@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
    So this asserts the floor: the six that shipped still exist, and the page still knows how to
    show them. New screens are welcome. Missing ones are not. */
 
-const page = readFileSync(fileURLToPath(new URL('../public/index.html', import.meta.url)), 'utf8')
+import { pageSource as page } from './helpers/page-source.mjs'
 
 const SHIPPED_SCREENS = ['today', 'team', 'workflows', 'skills', 'memory', 'connections']
 

@@ -1541,8 +1541,9 @@ export function shapeConnections(register) {
 
 // A runtime's url is typed into runtimes.yml in the team repo and ends up in an href. Escaping the
 // text stops a quote breaking out of the attribute; it does nothing about the scheme, and the page
-// allows inline scripts, so `javascript:` ran on click. new URL() strips the leading whitespace and
-// control characters a browser would also ignore, so a disguised scheme is judged as the browser
+// allowed inline scripts then, so `javascript:` ran on click (the policy refuses inline script now
+// too). new URL() strips the leading whitespace and control characters a browser would also
+// ignore, so a disguised scheme is judged as the browser
 // will read it. Credentials are refused because a link on the board should not carry a password
 // into history and the Referer header.
 function safeRuntimeUrl(value) {

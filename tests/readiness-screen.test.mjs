@@ -60,7 +60,7 @@ test('the Readiness screen has a nav entry after Workflows, and somewhere to ren
 })
 
 test('the screen is registered for routing with the title Flight readiness, in nav order', () => {
-  const titles = /const TITLES = \{([^}]+)\}/.exec(html)[1]
+  const titles = /const TITLES = \{([^}]+)\}/.exec(script)[1]
   assert.ok(titles.includes("readiness: 'Flight readiness'"))
   assert.ok(titles.indexOf('workflows:') < titles.indexOf('readiness:') && titles.indexOf('readiness:') < titles.indexOf('skills:'))
 })

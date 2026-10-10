@@ -14,7 +14,7 @@ import { AGENT_PALETTE } from '../api/_lib.js'
 
 const pagePath = fileURLToPath(new URL('../public/index.html', import.meta.url))
 const html = readFileSync(pagePath, 'utf8')
-const script = html.match(/<script>([\s\S]*)<\/script>/)[1]
+const script = readFileSync(fileURLToPath(new URL('../public/app.js', import.meta.url)), 'utf8')
 
 // The same comment-stripped text cssRules reads, so a rule's `at` can be looked up in it.
 const sheet = sheetText()

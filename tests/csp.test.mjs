@@ -37,7 +37,7 @@ test('the policy is exactly this one: every directive, every source', () => {
   assert.deepEqual(policy(), {
     'default-src': ["'self'"],
     'style-src': ["'self'", "'unsafe-inline'"],
-    'script-src': ["'self'", "'unsafe-inline'"],
+    'script-src': ["'self'"],
     'img-src': ["'self'", 'data:', 'blob:'],
     'connect-src': ["'self'"],
     'object-src': ["'none'"],
@@ -45,6 +45,30 @@ test('the policy is exactly this one: every directive, every source', () => {
     'form-action': ["'none'"],
     'frame-ancestors': ["'none'"]
   })
+})
+
+test('no script runs unless it is a file on this site: no inline script at all (audit finding #4)', () => {
+  // With 'unsafe-inline', any slip that let markup into the page could run script there - and read
+  // whatever the page can. The board's script is its own file, /app.js, so nothing inline is needed.
+  assert.deepEqual(policy()['script-src'], ["'self'"])
+  const page = readFileSync(new URL('public/index.html', ROOT), 'utf8')
+  const tags = [...page.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)]
+  assert.equal(tags.length, 1, 'the page has more than one script tag')
+  assert.match(tags[0][0], /^<script src="\/app\.js"><\/script>$/, 'the one script tag is not /app.js')
+  assert.equal(tags[0][1], '', 'the script tag has inline code in it')
+  assert.ok(existsSync(fileURLToPath(new URL('public/app.js', ROOT))), 'public/app.js is missing')
+})
+
+test('no inline event handler anywhere: not in the page, not in markup the script writes', () => {
+  // An on...= attribute is inline script; the policy blocks it, so a button wired that way would
+  // silently do nothing. The script attaches every listener with addEventListener instead.
+  const page = readFileSync(new URL('public/index.html', ROOT), 'utf8')
+  const script = readFileSync(new URL('public/app.js', ROOT), 'utf8')
+  for (const [name, text] of [['index.html', page], ['app.js', script]]) {
+    const found = text.match(/<[a-z][^>]*\son[a-z]+\s*=/i)
+    assert.equal(found, null, `${name} has an inline handler: ${found?.[0]}`)
+    assert.doesNotMatch(text, /javascript:/i, `${name} has a javascript: address`)
+  }
 })
 
 test('plugins and embedded objects are refused outright', () => {
@@ -79,7 +103,7 @@ test('talking to the board needed no change to the policy, and the page still re
   for (const sources of Object.values(directives)) {
     for (const source of sources) assert.doesNotMatch(source, /openai|fish\.audio|wss:/i, `${source} was let into the policy`)
   }
-  const page = readFileSync(new URL('public/index.html', ROOT), 'utf8')
+  const page = readFileSync(new URL('public/index.html', ROOT), 'utf8') + readFileSync(new URL('public/app.js', ROOT), 'utf8')
   assert.doesNotMatch(page, /api\.openai\.com|api\.fish\.audio|wss:\/\//, 'the page addresses OpenAI or Fish itself')
   assert.doesNotMatch(page, /\bek_|client_secrets/, 'the page asks for an ephemeral key')
   for (const path of ['/api/voice-session', '/api/speak', '/api/voice-meter']) {

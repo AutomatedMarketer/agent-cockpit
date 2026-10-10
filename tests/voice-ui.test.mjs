@@ -52,7 +52,7 @@ test('the page has a dock for the orb outside every screen, hidden until the bra
   const { html } = await import('./helpers/page-harness.mjs')
   assert.match(html, /<div class="voice-dock" id="voice-dock" hidden><\/div>/)
   const dockAt = html.indexOf('id="voice-dock"')
-  assert.ok(dockAt > html.indexOf('</nav>') && dockAt < html.indexOf('<script>'), 'the dock is inside something that is redrawn')
+  assert.ok(dockAt > html.indexOf('</nav>') && dockAt < html.indexOf('<script src="/app.js">'), 'the dock is inside something that is redrawn')
 })
 
 /* ---------- what a screen reader is told ---------- */
