@@ -78,6 +78,36 @@ async function gh(path) {
   return response.json()
 }
 
+// The id of the commit at the head of the branch, and nothing else: one small call. null when GitHub
+// cannot say - the board is then read from the branch by name, and has no commit to offer.
+async function headCommit({ owner, repo, branch }) {
+  try {
+    const response = await fetch(`${GITHUB}/repos/${owner}/${repo}/commits/${branch}`, { headers: headers('application/vnd.github.sha') })
+    if (!response.ok) return null
+    const text = (await response.text()).trim()
+    return COMMIT_ID.test(text) ? text : null
+  } catch {
+    return null
+  }
+}
+
+// A whole commit id, lower case: what GitHub answers, and the only thing a caller may ask about.
+const COMMIT_ID = /^[0-9a-f]{40}$/
+
+// `?since=<commit>` from Vercel's parsed query or, failing that, the address. Anything that is not
+// one whole commit id is no `since` at all, so it can never be answered "unchanged".
+function sinceOf(request) {
+  let value = request?.query?.since
+  if (value === undefined && typeof request?.url === 'string') {
+    try {
+      value = new URL(request.url, 'http://board.invalid').searchParams.get('since') ?? undefined
+    } catch {
+      value = undefined
+    }
+  }
+  return typeof value === 'string' && COMMIT_ID.test(value) ? value : null
+}
+
 async function rawFile({ owner, repo, branch }, filePath) {
   const response = await fetch(
     `${GITHUB}/repos/${owner}/${repo}/contents/${encodeURI(filePath)}?ref=${branch}`,
@@ -2240,18 +2270,33 @@ export function shapeActivity(runs, now = Date.now(), cap = MAX_ACTIVITY_RUNS) {
 // --- the handler --------------------------------------------------------------------------
 
 export default async function handler(request, response) {
+  // Every answer this endpoint gives - the board, "nothing has changed", an error - sits behind the
+  // view key, and a shared cache keys on the address, not on the key: see ce0101e. So none is kept.
+  // Set before the key is checked, so the refusal carries it too.
+  response.setHeader('Cache-Control', 'private, no-store')
   const denied = viewGate(request)
   if (denied) {
     response.status(denied.status).json({ error: denied.error })
     return
   }
   try {
-    const settings = config()
-    const { owner, repo, branch } = settings
+    const base = config()
+    const { owner, repo, branch } = base
     const now = Date.now()
 
+    // The head of the branch, asked once. If the caller already holds this commit, that is the whole
+    // answer: one call to GitHub instead of about sixty. Otherwise the board is built from THIS
+    // commit - the tree and every file - so what is sent and the id it is sent with cannot disagree
+    // if somebody pushes in the middle of the read.
+    const head = await headCommit(base)
+    if (head !== null && head === sinceOf(request)) {
+      response.status(200).json({ unchanged: true, commit: head })
+      return
+    }
+    const settings = head === null ? base : { ...base, branch: head }
+
     // One tree call gives every path in the repo. Cheaper than walking directories.
-    const tree = await gh(`/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`)
+    const tree = await gh(`/repos/${owner}/${repo}/git/trees/${settings.branch}?recursive=1`)
     const blobs = (tree.tree ?? []).filter((node) => node.type === 'blob')
     const paths = blobs.map((node) => node.path)
     const sizes = Object.fromEntries(blobs.map((node) => [node.path, node.size ?? null]))
@@ -2466,10 +2511,12 @@ export default async function handler(request, response) {
 
     // Never a shared cache: this answer sits behind the view key, and a CDN keys its copy on the
     // URL, not the x-view-key header. A shared copy made for the owner was served to anyone
-    // without a key for up to six minutes (found live 2026-10-09).
-    response.setHeader('Cache-Control', 'private, no-store')
+    // without a key for up to six minutes (found live 2026-10-09). Set at the top of the handler.
     response.status(200).json({
       repo: { owner, repo, branch, url: `https://github.com/${owner}/${repo}` },
+      // What this answer was built from, for the page to ask "has it changed?" with. null when GitHub
+      // would not say, and then the page does not ask.
+      commit: head,
       agents: agents.sort((a, b) => a.slug.localeCompare(b.slug)),
       owner: ownerName ? { name: ownerName } : null,
       runs: runs.slice(0, MAX_RUNS_RETURNED),

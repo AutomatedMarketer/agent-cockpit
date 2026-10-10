@@ -6794,28 +6794,95 @@ function readinessShell(container) {
   const body = readinessNode('div', { cls: 'rd-body' })
   readinessReplace(container, [readinessNode('div', { cls: 'rd-head' }, stamp, counters, note, refresh), body])
   readinessRefs = { container, stamp, counters, note, refresh, body }
-  refresh.addEventListener('click', () => refreshBoard())
+  refresh.addEventListener('click', () => checkReadiness())
   return readinessRefs
 }
 
-// Reads the whole board again and draws it, keeping the reader where they were scrolled to: render()
-// ends in showScreen, which goes to the top. A failed read says so on the screen and changes nothing.
-async function refreshBoard() {
-  const result = await apiGet('/api/state')
-  if (result.status === 401) {
-    writeStore(VIEW_KEY_STORE, null)
-    renderUnlock('This dashboard needs its view key.')
+// Keeping the screen current. Every 60 seconds - only while the Readiness screen is showing and the
+// browser tab is in front - the page asks /api/state?since=<the commit it was built from>. If the
+// branch has not moved the answer is one small object (and one call to GitHub); if it has, it is the
+// whole board, built from the new commit. A full load every minute would pass GitHub's hourly limit
+// on two devices, so the one-call check is what makes watching possible at all. Between checks the
+// lights age on their own, from the instants the server sent. This is kept apart from boot() on
+// purpose, and the Refresh button is the same check, pressed.
+const READINESS_POLL_MS = 60_000
+let readinessTimer = null
+let readinessBusy = false
+let readinessCheckedAt = null
+let readinessFailed = false
+// Set when the board is locked again: there is nobody left to watch for.
+let readinessLocked = false
+
+// The server names the commit it read; one that does not (an older server, or GitHub would not say)
+// has nothing to ask "has it changed?" with, and is not watched.
+const readinessWatching = () => !readinessLocked && Boolean(data?.commit) && location.hash.slice(1) === 'readiness' && document.visibilityState !== 'hidden'
+
+function readinessUnschedule() {
+  if (readinessTimer === null) return
+  clearTimeout(readinessTimer)
+  readinessTimer = null
+}
+
+function readinessSchedule(delay) {
+  if (readinessTimer !== null || !readinessWatching()) return
+  readinessTimer = setTimeout(async () => {
+    readinessTimer = null
+    if (readinessWatching()) await checkReadiness()
+    readinessSchedule(READINESS_POLL_MS)
+  }, delay)
+}
+
+// Called when something that decides whether to watch has changed. `soon` is for coming back to the
+// screen or the tab: the lights have been ageing unseen, so look straight away.
+function readinessSync(soon = false) {
+  if (!readinessWatching()) {
+    readinessUnschedule()
     return
   }
-  if (!result.ok) {
-    if (readinessRefs) readinessRefs.stamp.textContent = `${readinessRefs.stamp.textContent} · COULD NOT REFRESH`
-    return
-  }
+  if (soon) readinessUnschedule()
+  readinessSchedule(soon ? 0 : READINESS_POLL_MS)
+}
+
+// A new board, drawn in place of the old. render() ends in showScreen, which goes to the top, so the
+// reader is put back where they were.
+function adoptBoard(payload) {
   const scrolledTo = window.scrollY
-  data = result.payload
+  readinessFailed = false
+  data = payload
   render()
   window.scrollTo(0, scrolledTo ?? 0)
 }
+
+async function checkReadiness() {
+  if (readinessBusy) return
+  readinessBusy = true
+  try {
+    const result = await apiGet(data?.commit ? `/api/state?since=${encodeURIComponent(data.commit)}` : '/api/state')
+    if (result.status === 401) {
+      writeStore(VIEW_KEY_STORE, null)
+      readinessLocked = true
+      renderUnlock('This dashboard needs its view key.')
+      return
+    }
+    if (!result.ok) throw new Error(`The check answered ${result.status}`)
+    if (result.payload?.unchanged === true) {
+      readinessFailed = false
+      readinessCheckedAt = Date.now()
+      renderReadiness()
+    } else {
+      readinessCheckedAt = Date.now()
+      adoptBoard(result.payload)
+    }
+  } catch (error) {
+    readinessFailed = true
+    renderReadiness()
+  } finally {
+    readinessBusy = false
+  }
+}
+
+window.addEventListener('hashchange', () => readinessSync(true))
+document.addEventListener('visibilitychange', () => readinessSync(true))
 
 function readinessCountsText(counts) {
   return `${counts.noGo} NO GO · ${counts.silent} SILENT · ${counts.go} GO`
@@ -6827,17 +6894,27 @@ function renderReadiness(nowMs = Date.now()) {
   const readiness = data.readiness
   if (!readiness || !Array.isArray(readiness.cards)) {
     readinessRefs = null
+    readinessUnschedule()
     container.textContent = 'This board does not have the Readiness wall yet. Redeploy it from the latest cockpit.'
     return
   }
   const refs = readinessShell(container)
   const aged = ageReadiness(readiness, nowMs)
   const macTime = readiness.macCheckedAt ? readinessWhen(readiness.macCheckedAt, 'time', nowMs) : null
-  refs.stamp.textContent = `JOBS CHECKED ${macTime ? macTime : 'NEVER'} · BOARD READ ${data.generatedAt ? readinessWhen(data.generatedAt, 'time', nowMs) : 'NEVER'}`
+  refs.stamp.textContent = [
+    `JOBS CHECKED ${macTime ? macTime : 'NEVER'}`,
+    `BOARD READ ${data.generatedAt ? readinessWhen(data.generatedAt, 'time', nowMs) : 'NEVER'}`,
+    readinessCheckedAt ? `CHECKED ${readinessWhen(new Date(readinessCheckedAt).toISOString(), 'time', nowMs)}` : null,
+    data.commit ? 'REFRESH 60 s auto' : 'REFRESH BY BUTTON',
+    readinessFailed ? 'COULD NOT CHECK' : null
+  ].filter(Boolean).join(' · ')
   // The counters are a live region: touched only when they change, so a screen reader hears a change
   // and not the page being drawn again.
   const counters = readinessCountsText(aged.counts)
   if (refs.counters.textContent !== counters) refs.counters.textContent = counters
+  // The tab's badge follows the lights as they age, not only when a whole board is drawn.
+  const badge = el('count-readiness')
+  if (badge) badge.textContent = aged.badge ? String(aged.badge) : ''
   refs.note.textContent = `Counted from each job's last report. Mac and Hermes jobs as of the Mac's check${macTime ? ` at ${macTime}` : ''}. ${aged.counts.faded} faded: their last report is older than their own schedule.`
 
   const sections = []
@@ -6862,6 +6939,7 @@ function renderReadiness(nowMs = Date.now()) {
   }
   for (const text of readinessNotes(readiness, aged.counts)) sections.push(readinessNode('p', { cls: 'rd-foot small muted', text }))
   readinessReplace(refs.body, sections)
+  readinessSync()
 }
 /* ---------- Readiness: end ---------- */
 

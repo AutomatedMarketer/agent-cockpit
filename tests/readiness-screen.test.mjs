@@ -90,7 +90,7 @@ test('the counters line, the note and the stamp say what the wall is made of', a
   const [note] = withClass(root, 'rd-note')
   assert.equal(flat(note.textContent), "Counted from each job's last report. Mac and Hermes jobs as of the Mac's check. 0 faded: their last report is older than their own schedule.")
   const [stamp] = withClass(root, 'rd-stamp')
-  assert.match(stamp.textContent, /^JOBS CHECKED NEVER · BOARD READ \d{1,2}:\d{2}\s?(AM|PM)$/)
+  assert.match(stamp.textContent, /^JOBS CHECKED NEVER · BOARD READ \d{1,2}:\d{2}\s?(AM|PM) · REFRESH BY BUTTON$/)
 })
 
 test('NO GO comes first in the page, then SILENT, then GO, each under a heading that says how many', async () => {
@@ -428,7 +428,7 @@ test('a refresh that fails says so on the screen and leaves the lights as they w
   await flush()
   withClass(page.node('readiness'), 'rd-refresh')[0].listeners.click[0]()
   await flush()
-  assert.match(withClass(page.node('readiness'), 'rd-stamp')[0].textContent, /COULD NOT REFRESH$/)
+  assert.match(withClass(page.node('readiness'), 'rd-stamp')[0].textContent, /COULD NOT CHECK$/)
   assert.equal(withClass(page.node('readiness'), 'rd-card').length, 1)
 })
 

@@ -111,14 +111,22 @@ const FILES = {
     'stack:\n  - name: last30days\n    plugin: last30days@last30days-skill\n    gives: What people said in the last 30 days\n    why: Training data is out of date\n    verify: "Run it on a topic you know"\n  - name: token-saver\n    skill: skills/pull-calendar/SKILL.md\n    gives: Cost awareness\n  - name: ghost\n    skill: skills/ghost/SKILL.md\n    gives: Listed but not in the repo\n'
 }
 
-function stubGitHub({ dropPaths = [], overrideFiles = {}, extraTree = [] } = {}) {
+// `head` is what the branch's newest commit answers when asked for just its id: left out, GitHub is
+// asked and says Not Found, which is how every test above saw it. `calls` records every request.
+function stubGitHub({ dropPaths = [], overrideFiles = {}, extraTree = [], head, calls } = {}) {
   const original = globalThis.fetch
   const tree = dropPaths.length || extraTree.length
     ? { ...TREE, tree: [...TREE.tree.filter((node) => !dropPaths.includes(node.path)), ...extraTree] }
     : TREE
   const files = { ...FILES, ...overrideFiles }
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, init = {}) => {
     const target = String(url)
+    calls?.push({ url: target, accept: init.headers?.Accept ?? null, authorization: init.headers?.Authorization ?? null })
+    if (target.includes('/commits/')) {
+      if (head === undefined) return new Response('Not Found', { status: 404 })
+      if (head instanceof Error) throw head
+      return new Response(head, { status: 200 })
+    }
     if (target.includes('/git/trees/')) {
       return new Response(JSON.stringify(tree), { status: 200 })
     }
@@ -158,7 +166,7 @@ async function run(env = {}, options = {}) {
   Object.assign(process.env, { GITHUB_OWNER: 'someone', GITHUB_REPO: 'my-agent-team', ...env })
   const response = fakeResponse()
   try {
-    await handler({}, response)
+    await handler(options.request ?? {}, response)
   } finally {
     restore()
     process.env = previous
@@ -1622,5 +1630,128 @@ test('the Readiness wall never carries a token, address or path planted in a job
 test('an answer that carries the Readiness wall is still never kept by a shared cache', async () => {
   const response = await run()
   assert.ok(response.body.readiness)
+  assert.equal(response.headers['Cache-Control'], 'private, no-store')
+})
+
+/* ---------- "has anything changed?": one call to GitHub, and nothing kept by a shared cache -----
+   The Readiness screen asks every 60 seconds. Nothing is cached between requests since the leak
+   fixed in ce0101e, so a full load (about sixty calls) every minute would pass GitHub's limit of
+   5,000 an hour on two devices. The screen sends the commit it was built from; if the branch is
+   still there the answer is one small object and one call. Both answers - and the refusal - say
+   private, no-store, because a shared cache keys on the address and not on the view key. */
+
+const SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+const NEWER = 'f0e1d2c3b4a5968778695a4b3c2d1e0f98765432'
+const commitCalls = (calls) => calls.filter((call) => call.url.includes('/commits/'))
+const otherCalls = (calls) => calls.filter((call) => !call.url.includes('/commits/'))
+
+test('a full load asks for the branch head first, builds everything from that commit, and says which', async () => {
+  const calls = []
+  const { body } = await run({}, { head: SHA, calls })
+  assert.equal(body.commit, SHA)
+  assert.equal(commitCalls(calls).length, 1)
+  assert.equal(commitCalls(calls)[0].url, 'https://api.github.com/repos/someone/my-agent-team/commits/main')
+  assert.equal(commitCalls(calls)[0].accept, 'application/vnd.github.sha')
+  // The tree and every file come from that commit, so the answer and its id cannot disagree.
+  const tree = otherCalls(calls).filter((call) => call.url.includes('/git/trees/'))
+  assert.deepEqual(tree.map((call) => call.url), [`https://api.github.com/repos/someone/my-agent-team/git/trees/${SHA}?recursive=1`])
+  const files = otherCalls(calls).filter((call) => call.url.includes('/contents/'))
+  assert.ok(files.length > 10)
+  for (const call of files) assert.ok(call.url.endsWith(`?ref=${SHA}`), `${call.url} was not read from the commit`)
+  // The page still links to the branch, not to a commit id.
+  assert.equal(body.repo.branch, 'main')
+})
+
+test('the head request carries the same token the rest do, and the configured branch', async () => {
+  const calls = []
+  await run({ GITHUB_TOKEN: 'test-token-value', GITHUB_BRANCH: 'release' }, { head: SHA, calls })
+  assert.equal(commitCalls(calls)[0].url, 'https://api.github.com/repos/someone/my-agent-team/commits/release')
+  assert.equal(commitCalls(calls)[0].authorization, 'Bearer test-token-value')
+})
+
+test('when GitHub cannot name the head, the board is still read - from the branch - and has no commit to offer', async () => {
+  for (const head of [undefined, new TypeError('offline'), '', 'not a sha', `${SHA}\n${SHA}`, SHA.toUpperCase(), SHA.slice(1)]) {
+    const calls = []
+    const { body, statusCode } = await run({}, { head, calls })
+    assert.equal(statusCode, 200, String(head))
+    assert.equal(body.commit, null, String(head))
+    assert.ok(otherCalls(calls).some((call) => call.url.includes('/git/trees/main?recursive=1')), 'the tree was not read from the branch')
+    for (const call of otherCalls(calls).filter((one) => one.url.includes('/contents/'))) assert.ok(call.url.endsWith('?ref=main'))
+    assert.ok(body.agents.length > 0)
+  }
+})
+
+test('since = the head: exactly one call to GitHub, a small answer, and no shared cache', async () => {
+  const calls = []
+  const response = await run({}, { head: SHA, calls, request: { query: { since: SHA } } })
+  assert.equal(calls.length, 1, `the unchanged answer made ${calls.length} calls`)
+  assert.equal(commitCalls(calls).length, 1)
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.body, { unchanged: true, commit: SHA })
+  assert.equal(response.headers['Cache-Control'], 'private, no-store')
+})
+
+test('since is read from the address too, as a plain Node server hands it over', async () => {
+  const calls = []
+  const response = await run({}, { head: SHA, calls, request: { url: `/api/state?since=${SHA}` } })
+  assert.deepEqual(response.body, { unchanged: true, commit: SHA })
+  assert.equal(calls.length, 1)
+})
+
+test('since is an old commit: the full board, built from the new one, says which, and no shared cache', async () => {
+  const calls = []
+  const response = await run({}, { head: NEWER, calls, request: { query: { since: SHA } } })
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.body.commit, NEWER)
+  assert.ok(response.body.agents.length > 0)
+  assert.equal(response.body.unchanged, undefined)
+  assert.equal(commitCalls(calls).length, 1, 'the head was asked for more than once')
+  for (const call of otherCalls(calls).filter((one) => one.url.includes('/contents/'))) assert.ok(call.url.endsWith(`?ref=${NEWER}`))
+  assert.equal(response.headers['Cache-Control'], 'private, no-store')
+})
+
+test('since when the head cannot be asked: the full board, never "unchanged"', async () => {
+  for (const head of [undefined, new TypeError('offline')]) {
+    const response = await run({}, { head, request: { query: { since: SHA } } })
+    assert.equal(response.statusCode, 200)
+    assert.equal(response.body.unchanged, undefined)
+    assert.ok(response.body.agents.length > 0)
+    assert.equal(response.body.commit, null)
+  }
+})
+
+test('a since that is not a whole commit id is ignored, so it can never answer "unchanged"', async () => {
+  for (const since of ['', 'main', SHA.slice(0, 7), SHA.toUpperCase(), `${SHA} `, [SHA, SHA], { 0: SHA }, 7, null, '../../x']) {
+    const response = await run({}, { head: SHA, request: { query: { since } } })
+    assert.equal(response.statusCode, 200, String(since))
+    assert.equal(response.body.unchanged, undefined, `${JSON.stringify(since)} answered unchanged`)
+    assert.equal(response.body.commit, SHA)
+  }
+})
+
+test('the unchanged answer carries nothing from the repo: no names, no files, no times', async () => {
+  const response = await run({}, { head: SHA, request: { query: { since: SHA } } })
+  assert.deepEqual(Object.keys(response.body).sort(), ['commit', 'unchanged'])
+})
+
+test('without the view key, a request gets 401 before any call to GitHub, and the refusal is never cached either', async () => {
+  for (const request of [{ headers: {} }, { headers: {}, query: { since: SHA } }, { headers: { 'x-view-key': 'wrong' }, query: { since: SHA } }]) {
+    const calls = []
+    const response = await run({ PUBLIC_DASHBOARD: '', VIEW_KEY: 'the-right-key' }, { head: SHA, calls, request })
+    assert.equal(response.statusCode, 401, JSON.stringify(request))
+    assert.equal(calls.length, 0, 'GitHub was called for a request that had no right to the answer')
+    assert.equal(response.headers['Cache-Control'], 'private, no-store')
+    assert.equal(response.body.unchanged, undefined)
+  }
+  // With the key, the same request is answered.
+  const calls = []
+  const response = await run({ PUBLIC_DASHBOARD: '', VIEW_KEY: 'the-right-key' }, { head: SHA, calls, request: { headers: { 'x-view-key': 'the-right-key' }, query: { since: SHA } } })
+  assert.equal(response.statusCode, 200)
+  assert.equal(response.body.unchanged, true)
+})
+
+test('a failure to read the repo is never kept by a shared cache either', async () => {
+  const response = await run({ GITHUB_OWNER: '' })
+  assert.equal(response.statusCode, 500)
   assert.equal(response.headers['Cache-Control'], 'private, no-store')
 })

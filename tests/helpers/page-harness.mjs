@@ -70,7 +70,7 @@ export const flush = async (times = 6) => {
 // `fetch(url, init)` answers the page's requests; left out, /api/state gets `payload` and everything
 // else an empty object. `given` is handed to `after`, a line of code run inside the page's own scope
 // once the script has loaded - the way a test sets a page variable the person would have set.
-export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after = '', given = {}, hash = '', media = {}, prompt, hostname = 'board.example', scrollY = 0 } = {}) {
+export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after = '', given = {}, hash = '', media = {}, prompt, hostname = 'board.example', scrollY = 0, timers, date } = {}) {
   for (const name of expose) assert.match(name, /^[A-Za-z_$][\w$]*$/, `${name} is not a name`)
   const nodes = new Map()
   const node = (id) => {
@@ -123,8 +123,11 @@ export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after
     sessionStorage: memoryStorage(),
     fetch: recordingFetch,
     console,
-    setTimeout,
-    clearTimeout
+    // `timers` stands in for the clock that schedules: a test that boots a page which polls hands in
+    // its own, or the page would keep the test process alive for a minute. `date` pins `Date`.
+    setTimeout: timers?.setTimeout ?? setTimeout,
+    clearTimeout: timers?.clearTimeout ?? clearTimeout,
+    ...(date ? { Date: date } : {})
   }
   const run = new Function(
     ...Object.keys(context),
@@ -134,7 +137,7 @@ export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after
      ; return { ${expose.join(', ')} };`
   )
   const exposed = run(...Object.values(context), given)
-  return { nodes, node, document, documentListeners, windowListeners, created, requests, scrolls, storage: local, exposed }
+  return { nodes, node, document, documentListeners, windowListeners, created, requests, scrolls, location: context.location, storage: local, exposed }
 }
 
 // Every class a piece of markup uses.
