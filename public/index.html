@@ -6885,6 +6885,7 @@ const READINESS_BACKOFF_CAP_MS = 15 * 60_000
 const READINESS_WAIT_CAP_MS = 60 * 60_000
 let readinessFailures = 0
 let readinessWaitMs = 0
+let readinessAttemptedAt = 0
 const readinessDelay = () => Math.min(Math.max(Math.min(READINESS_POLL_MS * 2 ** readinessFailures, READINESS_BACKOFF_CAP_MS), readinessWaitMs), READINESS_WAIT_CAP_MS)
 const readinessDelayWords = () => (readinessDelay() < 120_000 ? `${Math.round(readinessDelay() / 1000)} s` : `${Math.ceil(readinessDelay() / 60_000)} min`)
 // Set when the board is locked again: there is nobody left to watch for.
@@ -6909,15 +6910,20 @@ function readinessSchedule(delay) {
   }, delay)
 }
 
-// Called when something that decides whether to watch has changed. `soon` is for coming back to the
-// screen or the tab: the lights have been ageing unseen, so look straight away.
+// Coming back to the screen or the tab: the lights have been ageing unseen, so look straight away -
+// unless the last check failed. Then the back-off (or GitHub's Retry-After) is still running, and it
+// is measured from that last attempt, not from now: on a phone every app switch is a "coming back",
+// and each one would otherwise send a check through a rate limit.
+const readinessResumeDelay = () => (readinessFailures > 0 ? Math.max(0, readinessDelay() - (Date.now() - readinessAttemptedAt)) : 0)
+
+// Called when something that decides whether to watch has changed. `soon` is for coming back.
 function readinessSync(soon = false) {
   if (!readinessWatching()) {
     readinessUnschedule()
     return
   }
   if (soon) readinessUnschedule()
-  readinessSchedule(soon ? 0 : readinessDelay())
+  readinessSchedule(soon ? readinessResumeDelay() : readinessDelay())
 }
 
 // A new board, drawn in place of the old. render() ends in showScreen, which goes to the top, so the
@@ -6933,6 +6939,7 @@ function adoptBoard(payload) {
 async function checkReadiness() {
   if (readinessBusy) return
   readinessBusy = true
+  readinessAttemptedAt = Date.now()
   try {
     const result = await apiGet(data?.commit ? `/api/state?since=${encodeURIComponent(data.commit)}` : '/api/state')
     if (result.status === 401) {

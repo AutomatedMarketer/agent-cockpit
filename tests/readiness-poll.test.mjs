@@ -409,3 +409,65 @@ test('a Retry-After date that has already passed asks for no wait, so the back-o
   await timers.fire()
   assert.deepEqual(timers.delays(), [120_000])
 })
+
+/* ---------- coming back during a wait --------------------------------------------------------- */
+
+test('coming back to the tab after a failed check waits out what is left of the back-off, from the last attempt', async () => {
+  const { page, timers, clock, stateRequests } = board({ answers: [ageing(), FAIL, { unchanged: true, commit: SHA }] })
+  await flush()
+  await timers.fire() // the first check fails at NOW; the next is due in 120 s
+  assert.deepEqual(timers.delays(), [120_000])
+  clock.now = NOW + 30_000
+  await visibility(page, 'hidden')
+  assert.equal(timers.pending.size, 0)
+  await visibility(page, 'visible')
+  assert.deepEqual(timers.delays(), [90_000], 'it checked at once, or waited the whole back-off again')
+  // Switching away and back again changes nothing: still measured from the same attempt.
+  clock.now = NOW + 50_000
+  await visibility(page, 'hidden')
+  await visibility(page, 'visible')
+  assert.deepEqual(timers.delays(), [70_000])
+  assert.equal(stateRequests().length, 2, 'a request was sent while waiting')
+  // Once the wait is over, coming back checks at once.
+  clock.now = NOW + 500_000
+  await visibility(page, 'hidden')
+  await visibility(page, 'visible')
+  assert.deepEqual(timers.delays(), [0])
+})
+
+test('coming back to the screen during a Retry-After waits for it, not for a minute', async () => {
+  const { page, timers, clock, stateRequests } = board({ answers: [ageing(), { status: 429, body: {}, headers: { 'retry-after': '300' } }, { unchanged: true, commit: SHA }] })
+  await flush()
+  await timers.fire()
+  assert.deepEqual(timers.delays(), [300_000])
+  clock.now = NOW + 100_000
+  await hashChange(page, '#today')
+  assert.equal(timers.pending.size, 0)
+  await hashChange(page, '#readiness')
+  assert.deepEqual(timers.delays(), [200_000])
+  assert.equal(stateRequests().length, 2)
+})
+
+test('coming back after a check that worked still refreshes at once', async () => {
+  const { page, timers, clock } = board({ answers: [ageing(), { unchanged: true, commit: SHA }] })
+  await flush()
+  await timers.fire()
+  clock.now = NOW + 5_000
+  await visibility(page, 'hidden')
+  await visibility(page, 'visible')
+  assert.deepEqual(timers.delays(), [0])
+  await hashChange(page, '#today')
+  await hashChange(page, '#readiness')
+  assert.deepEqual(timers.delays(), [0])
+})
+
+test('Refresh pressed during a wait is the reader asking, and is still sent', async () => {
+  const { timers, clock, readiness, stateRequests } = board({ answers: [ageing(), FAIL, { unchanged: true, commit: SHA }] })
+  await flush()
+  await timers.fire()
+  clock.now = NOW + 10_000
+  withClass(readiness(), 'rd-refresh')[0].listeners.click[0]()
+  await flush()
+  assert.equal(stateRequests().length, 3)
+  assert.deepEqual(timers.delays(), [60_000])
+})
