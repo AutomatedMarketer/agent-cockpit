@@ -1432,3 +1432,119 @@ test('the board data is never kept by a shared cache, because it sits behind the
   assert.equal(response.statusCode, 200)
   assert.equal(response.headers['Cache-Control'], 'private, no-store')
 })
+
+/* ---------- the jobs snapshot reaches the payload, and nothing planted in it does --------------
+   .agent-team/status/jobs/<computer>.json, through the real handler: the Readiness screen's input.
+   A token, an email, an address and a home path planted in every place a hand-edited file could
+   put one, the keys a launchd plist and a Hermes job carry that the collector never writes
+   (arguments, environment, the prompt), and a Hermes job named after its prompt. */
+
+const jobsPath = '.agent-team/status/jobs/mac-mini.json'
+const jobsReading = (planted = null) => {
+  const takenAt = new Date(Date.now() - 3600_000).toISOString().replace(/\.\d+Z$/, 'Z')
+  const extra = planted ? { ProgramArguments: ['--token', planted], EnvironmentVariables: { KEY: planted }, prompt: planted, last_error: planted, path: planted } : {}
+  return {
+    schema: 'agent-status/jobs/v1',
+    takenAt,
+    computer: planted ?? 'Mac Mini',
+    timezone: 'America/New_York',
+    ...extra,
+    launchd: {
+      status: 'found',
+      items: [
+        { label: 'local.donna.story-belt-daily', cadence: { kind: 'slots', slots: [{ minute: 15, hour: 6, ...extra }], ...extra }, state: 'loaded', lastExit: 0, ...extra },
+        ...(planted ? [{ label: `local.${planted}`, cadence: { kind: 'always' }, state: 'running' }] : [])
+      ],
+      hidden: 0,
+      more: 0,
+      ...extra
+    },
+    hermes: {
+      status: 'found',
+      items: [
+        { profile: 'default', id: 'a1b2c3d4e5f6', name: 'Hermes job a1b2c3d4e5f6', enabled: true, cadence: { kind: 'unknown' }, lastResult: 'ok', ...extra },
+        ...(planted ? [{ profile: 'default', id: 'b2c3d4e5f6a1', name: planted, enabled: true, cadence: { kind: 'unknown' }, lastResult: 'ok' }] : [])
+      ],
+      hidden: 0,
+      more: 0
+    }
+  }
+}
+
+test('a jobs file in the repo reaches the payload as jobs, re-checked', async () => {
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: jobsPath }],
+    overrideFiles: { [jobsPath]: JSON.stringify(jobsReading()) }
+  })
+  assert.equal(body.jobs.status, 'ok')
+  const [computer] = body.jobs.computers
+  assert.equal(computer.computer, 'Mac Mini')
+  assert.equal(computer.freshness, 'fresh')
+  assert.deepEqual(computer.launchd.items.map((item) => item.label), ['local.donna.story-belt-daily'])
+  assert.deepEqual(computer.hermes.items.map((item) => item.name), ['Hermes job a1b2c3d4e5f6'])
+})
+
+test('a repo with no jobs file says so in the payload', async () => {
+  const { body } = await run()
+  assert.equal(body.jobs.status, 'none')
+  assert.deepEqual(body.jobs.computers, [])
+})
+
+test('/api/state never carries a token, email, address, path or prompt planted in a jobs file', async () => {
+  const planted = [
+    ['sk', 'ant', 'oat01', 'Zm9vYmFyYmF6cXV4'.repeat(3)].join('-'),
+    'ey' + 'J' + 'hbGciOiJIUzI1NiJ9.' + 'eyJlbWFpbCI6ImZha2UifQ',
+    'fake.person' + '@' + 'example.com',
+    ['5f0c2b1e', '9a7d', '4c3b', '8e21', '0d6f4a9b7c55'].join('-'),
+    'Bear' + 'er ' + 'abc123def456',
+    'https://' + 'api.example.com/v1?key=' + 'Zm9vYmFyYmF6cXV4',
+    '/Users/' + 'fakeperson' + '/.hermes/SOUL.md',
+    'C:' + '\\Users\\' + 'fakeperson' + '\\AppData\\Local\\hermes'
+  ]
+  for (const value of planted) {
+    const { body, statusCode } = await run({}, {
+      extraTree: [{ type: 'blob', path: jobsPath }],
+      overrideFiles: { [jobsPath]: JSON.stringify(jobsReading(value)) }
+    })
+    assert.equal(statusCode, 200)
+    assert.ok(!JSON.stringify(body).includes(value), `"${value.slice(0, 12)}..." reached /api/state`)
+    // Still read, not thrown away whole: the honest jobs around the planted values survive, and the
+    // ones that carried a planted name are counted as hidden.
+    const [computer] = body.jobs.computers
+    assert.deepEqual(computer.launchd.items.map((item) => item.label), ['local.donna.story-belt-daily'])
+    assert.equal(computer.launchd.hidden, 1)
+    assert.deepEqual(computer.hermes.items.map((item) => item.id), ['a1b2c3d4e5f6'])
+    assert.equal(computer.hermes.hidden, 1)
+  }
+})
+
+test('a jobs file the tree says is over 64 KB is not used, and only five are fetched', async () => {
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: jobsPath, size: 64 * 1024 + 1 }],
+    overrideFiles: { [jobsPath]: JSON.stringify(jobsReading()) }
+  })
+  assert.equal(body.jobs.status, 'unusable')
+  assert.match(body.jobs.why, /too big/)
+  const paths = ['a', 'b', 'c', 'd', 'e', 'f'].map((slug) => `.agent-team/status/jobs/${slug}.json`)
+  const { body: many } = await run({}, {
+    extraTree: paths.map((path) => ({ type: 'blob', path })),
+    overrideFiles: Object.fromEntries(paths.map((path) => [path, JSON.stringify(jobsReading())]))
+  })
+  assert.equal(many.jobs.read, 5)
+  assert.equal(many.jobs.skipped, 1)
+  assert.equal(many.jobs.computers.length, 3)
+})
+
+test('a Hermes job named after its own prompt never reaches the payload, and is counted as hidden', async () => {
+  const prompt = 'Dr Smith HIV test results for the patient on Friday'
+  const reading = jobsReading()
+  reading.hermes.items.push({ profile: 'default', id: 'b2c3d4e5f6a1', name: prompt, enabled: true, cadence: { kind: 'unknown' }, lastResult: 'ok' })
+  reading.hermes.items.push({ profile: 'default', id: 'c3d4e5f6a1b2', name: `Hermes job c3d4e5f6a1b2 ${prompt}`, enabled: true, cadence: { kind: 'unknown' }, lastResult: 'ok' })
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: jobsPath }],
+    overrideFiles: { [jobsPath]: JSON.stringify(reading) }
+  })
+  assert.ok(!JSON.stringify(body).includes('Smith'))
+  assert.deepEqual(body.jobs.computers[0].hermes.items.map((item) => item.name), ['Hermes job a1b2c3d4e5f6'])
+  assert.equal(body.jobs.computers[0].hermes.hidden, 2)
+})

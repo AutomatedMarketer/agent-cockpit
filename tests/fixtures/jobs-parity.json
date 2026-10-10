@@ -1,0 +1,404 @@
+{
+  "about": "Shared contract for the jobs snapshot (the Readiness wall: every scheduled job on a Mac and in Hermes, one light each). The same bytes live in agent-team-template and agent-cockpit; a test in each repo checks they match. The collector writes `sample`-shaped files; the board reads them. The Mac works out, in the job's own timezone, the two most recent times each job was expected to run (dueAt, dueBeforeAt) and writes them down - the board never works them out from a schedule it cannot see and says a job is late only when dueAt is there. Names, times, numbers and states only: a job's arguments, environment settings, folders, prompts, error text and logs have no key here, so they cannot reach a file.",
+  "schema": "agent-status/jobs/v1",
+  "folder": ".agent-team/status/jobs",
+  "computerSlug": "^[a-z0-9-]{1,32}$",
+  "staleAfterHours": 8,
+  "maxFilesRead": 5,
+  "maxFileBytes": 65536,
+  "maxComputersShown": 3,
+  "statuses": [
+    "found",
+    "not found",
+    "unavailable"
+  ],
+  "caps": {
+    "launchd": 60,
+    "hermes": 40,
+    "slots": 48
+  },
+  "graceMinutes": 30,
+  "lookbackDays": 32,
+  "launchdStates": [
+    "running",
+    "loaded",
+    "not loaded"
+  ],
+  "hermesResults": [
+    "ok",
+    "error",
+    "unknown"
+  ],
+  "hermesJobName": "Hermes job {id}",
+  "whyCodes": {
+    "unreadable": "could not be read",
+    "refused": "refused by the safety check"
+  },
+  "exitCode": {
+    "min": -255,
+    "max": 255
+  },
+  "cadence": {
+    "kinds": [
+      "always",
+      "every",
+      "slots",
+      "unknown"
+    ],
+    "everyMinutes": { "min": 1, "max": 44640 },
+    "slot": {
+      "minute": { "min": 0, "max": 59 },
+      "hour": { "min": 0, "max": 23 },
+      "weekday": { "min": 0, "max": 6 },
+      "day": { "min": 1, "max": 31 }
+    },
+    "slotRule": "A slot is one minute of the hour. With an hour it is one time of day; without, it is every hour. With a weekday (0 is Sunday) it is that day of the week; with a day (1 to 31) that day of the month; with neither, every day. A slot never has both a weekday and a day. Slots are written in order of day, weekday, hour, then minute, a missing value first."
+  },
+  "allowedKeys": {
+    "file": ["schema", "takenAt", "computer", "timezone", "launchd", "hermes"],
+    "blockFound": ["status", "items", "hidden", "more"],
+    "blockNotFound": ["status", "why"],
+    "launchdItem": ["label", "cadence", "state", "lastExit", "lastReportAt", "dueAt", "dueBeforeAt", "self", "disabled"],
+    "hermesItem": ["profile", "id", "name", "enabled", "cadence", "lastRunAt", "lastResult", "dueAt", "dueBeforeAt"],
+    "cadence": {
+      "always": ["kind"],
+      "every": ["kind", "minutes"],
+      "slots": ["kind", "slots"],
+      "unknown": ["kind"]
+    },
+    "slot": ["minute", "hour", "weekday", "day"]
+  },
+  "requiredKeys": {
+    "file": ["schema", "takenAt", "computer", "timezone", "launchd", "hermes"],
+    "launchdItem": ["label", "cadence", "state"],
+    "hermesItem": ["profile", "id", "name", "enabled", "cadence", "lastResult"]
+  },
+  "keysRead": {
+    "plist": ["Label", "StartCalendarInterval", "StartInterval", "KeepAlive", "RunAtLoad", "Disabled", "StandardOutPath", "StandardErrorPath"],
+    "hermesJob": ["id", "enabled", "state", "paused_at", "schedule", "last_run_at", "last_status"],
+    "hermesSchedule": ["kind", "expr", "minutes", "timezone"],
+    "note": "Read means used. A jobs file is one JSON file, so it is parsed whole in memory; only these keys are then used. A Hermes job's name, prompt, skills and script are not among them - not used, kept or written, in any form. Of these, a plist's log paths are only stat-ed, and state and paused_at only decide whether a job is paused; none of those is written."
+  },
+  "names": {
+    "hermesId": "^[0-9a-f]{12}$",
+    "hermesIdRule": "A Hermes job id is exactly what Hermes makes: 12 lowercase hexadecimal characters (cron/jobs.py, uuid4().hex[:12]). Anything else - a word-like id, a longer or shorter one, capitals, a uuid - is not published; the job is counted in hidden.",
+    "hermesIdAccept": ["a1b2c3d4e5f6", "b2c3d4e5f6a1", "0123456789ab", "000000000000", "ffffffffffff"],
+    "hermesIdRefuse": [
+      { "id": "dr-smith-hiv-test-results", "why": "words: an id that spells out something is not one Hermes made" },
+      { "id": "task-runner", "why": "words" },
+      { "id": "A1B2C3D4E5F6", "why": "capitals" },
+      { "id": "a1b2c3d4e5f", "why": "11 characters" },
+      { "id": "a1b2c3d4e5f67", "why": "13 characters" },
+      { "id": "a1b2c3d4e5fg", "why": "a character that is not hexadecimal" },
+      { "id": "a1b2c3d4-e5f", "why": "a dash" },
+      { "id": "0f0e0d0c-1111-2222-3333-444455556666", "why": "a uuid" },
+      { "id": "", "why": "empty" },
+      { "id": " a1b2c3d4e5f", "why": "a space" }
+    ],
+    "label": "^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$",
+    "labelRule": "A launchd label is held to this form and to the connection-name rule from tests/fixtures/connections-parity.json on top (no at sign, slash, backslash, key or token start, uuid, stretch of 24 or more characters without a separator, and not this computer's username, name or home folder). One that fails is not written; it is counted in hidden. A Hermes job id is held to hermesId instead (see hermesIdRule). A Hermes profile is held to the connection-name rule and Hermes's profile rule as it is. A Hermes job has no name of its own in the file: see hermesJobName.",
+    "labelAccept": [
+      "local.donna.story-belt-daily",
+      "local.donna.agent-status-collector",
+      "com.donna.blog-watch",
+      "ai.hermes.gateway-donna",
+      "com.example.Weekly_Report",
+      "a1b2c3d4e5f6",
+      "nightly-brief",
+      "job_7"
+    ],
+    "labelRefuse": [
+      { "name": "", "why": "empty" },
+      { "name": "local.donna@host.job", "why": "an at sign" },
+      { "name": "local/donna.job", "why": "a slash" },
+      { "name": "local\\donna.job", "why": "a backslash" },
+      { "name": ".hidden.job", "why": "does not start with a letter or number" },
+      { "name": "local donna job", "why": "a space" },
+      { "name": "local.über.job", "why": "a letter a launchd label does not use" },
+      { "name": "0f0e0d0c-1111-2222-3333-444455556666", "why": "a uuid" },
+      { "name": "local.desk-helper", "why": "contains sk- by accident, refused all the same" },
+      { "name": "local.bearer-bot", "why": "an authorization header word" },
+      { "name": "local.eyJhbGciOiJIUzI1NiJ9", "why": "the start of a signed token" },
+      { "name": "local.abcdefghijklmnopqrstuvwxyz0123", "why": "a stretch of 24 or more characters without a separator" },
+      { "name": "local.donna.a-very-long-label-that-keeps-going-past-sixty-characters", "why": "longer than 60 characters" }
+    ]
+  },
+  "cronExamples": [
+    {"expr": "30 6 * * *", "cadence": {"kind": "slots", "slots": [{"minute": 30, "hour": 6}]}},
+    {"expr": "  30   6 * * *  ", "cadence": {"kind": "slots", "slots": [{"minute": 30, "hour": 6}]}},
+    {"expr": "0 0 * * *", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 0}]}},
+    {"expr": "0 */6 * * *", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 0}, {"minute": 0, "hour": 6}, {"minute": 0, "hour": 12}, {"minute": 0, "hour": 18}]}},
+    {"expr": "0 */5 * * *", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 0}, {"minute": 0, "hour": 5}, {"minute": 0, "hour": 10}, {"minute": 0, "hour": 15}, {"minute": 0, "hour": 20}]}},
+    {"expr": "*/15 * * * *", "cadence": {"kind": "every", "minutes": 15}},
+    {"expr": "*/2 * * * *", "cadence": {"kind": "every", "minutes": 2}},
+    {"expr": "* * * * *", "cadence": {"kind": "every", "minutes": 1}},
+    {"expr": "0,30 * * * *", "cadence": {"kind": "every", "minutes": 30}},
+    {"expr": "5 * * * *", "cadence": {"kind": "slots", "slots": [{"minute": 5}]}},
+    {"expr": "5,35 * * * *", "cadence": {"kind": "slots", "slots": [{"minute": 5}, {"minute": 35}]}},
+    {"expr": "*/7 * * * *", "cadence": {"kind": "slots", "slots": [{"minute": 0}, {"minute": 7}, {"minute": 14}, {"minute": 21}, {"minute": 28}, {"minute": 35}, {"minute": 42}, {"minute": 49}, {"minute": 56}]}},
+    {"expr": "10-14 3 * * *", "cadence": {"kind": "slots", "slots": [{"minute": 10, "hour": 3}, {"minute": 11, "hour": 3}, {"minute": 12, "hour": 3}, {"minute": 13, "hour": 3}, {"minute": 14, "hour": 3}]}},
+    {"expr": "45 7 * * 1-5", "cadence": {"kind": "slots", "slots": [{"minute": 45, "hour": 7, "weekday": 1}, {"minute": 45, "hour": 7, "weekday": 2}, {"minute": 45, "hour": 7, "weekday": 3}, {"minute": 45, "hour": 7, "weekday": 4}, {"minute": 45, "hour": 7, "weekday": 5}]}},
+    {"expr": "0 9 * * 1", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "weekday": 1}]}},
+    {"expr": "0 9 * * 7", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "weekday": 0}]}},
+    {"expr": "0 9 * * 0,7", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "weekday": 0}]}},
+    {"expr": "0 9 * * 5-7", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "weekday": 0}, {"minute": 0, "hour": 9, "weekday": 5}, {"minute": 0, "hour": 9, "weekday": 6}]}},
+    {"expr": "0 12 * * 1-5/2", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 12, "weekday": 1}, {"minute": 0, "hour": 12, "weekday": 3}, {"minute": 0, "hour": 12, "weekday": 5}]}},
+    {"expr": "0 9 1 * *", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "day": 1}]}},
+    {"expr": "0 9 31 * *", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "day": 31}]}},
+    {"expr": "*/15 0-11 * * *", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 0}, {"minute": 15, "hour": 0}, {"minute": 30, "hour": 0}, {"minute": 45, "hour": 0}, {"minute": 0, "hour": 1}, {"minute": 15, "hour": 1}, {"minute": 30, "hour": 1}, {"minute": 45, "hour": 1}, {"minute": 0, "hour": 2}, {"minute": 15, "hour": 2}, {"minute": 30, "hour": 2}, {"minute": 45, "hour": 2}, {"minute": 0, "hour": 3}, {"minute": 15, "hour": 3}, {"minute": 30, "hour": 3}, {"minute": 45, "hour": 3}, {"minute": 0, "hour": 4}, {"minute": 15, "hour": 4}, {"minute": 30, "hour": 4}, {"minute": 45, "hour": 4}, {"minute": 0, "hour": 5}, {"minute": 15, "hour": 5}, {"minute": 30, "hour": 5}, {"minute": 45, "hour": 5}, {"minute": 0, "hour": 6}, {"minute": 15, "hour": 6}, {"minute": 30, "hour": 6}, {"minute": 45, "hour": 6}, {"minute": 0, "hour": 7}, {"minute": 15, "hour": 7}, {"minute": 30, "hour": 7}, {"minute": 45, "hour": 7}, {"minute": 0, "hour": 8}, {"minute": 15, "hour": 8}, {"minute": 30, "hour": 8}, {"minute": 45, "hour": 8}, {"minute": 0, "hour": 9}, {"minute": 15, "hour": 9}, {"minute": 30, "hour": 9}, {"minute": 45, "hour": 9}, {"minute": 0, "hour": 10}, {"minute": 15, "hour": 10}, {"minute": 30, "hour": 10}, {"minute": 45, "hour": 10}, {"minute": 0, "hour": 11}, {"minute": 15, "hour": 11}, {"minute": 30, "hour": 11}, {"minute": 45, "hour": 11}]}}
+  ],
+  "cronUnknown": [
+    {"expr": "", "why": "empty"},
+    {"expr": "30 6 * *", "why": "four fields"},
+    {"expr": "30 6 * * * *", "why": "six fields"},
+    {"expr": "@daily", "why": "a nickname"},
+    {"expr": "0 6 * * MON", "why": "a weekday name"},
+    {"expr": "0 6 * jan *", "why": "a month name"},
+    {"expr": "0 6 * 10 *", "why": "one month"},
+    {"expr": "0 6 1 * 1", "why": "a day of the month and a weekday together"},
+    {"expr": "0 9 1 * 0-6", "why": "a day of the month and a weekday range that covers every day: cron says or, so it runs daily"},
+    {"expr": "0 9 1 * 0-7", "why": "the same with 7 as Sunday"},
+    {"expr": "0 9 15 * */2", "why": "a day of the month and a weekday step"},
+    {"expr": "0 6 1,15 * *", "why": "a list of days of the month"},
+    {"expr": "0 6 1-5 * *", "why": "a range of days of the month"},
+    {"expr": "*/0 * * * *", "why": "a step of zero"},
+    {"expr": "60 * * * *", "why": "a minute past 59"},
+    {"expr": "0 24 * * *", "why": "an hour past 23"},
+    {"expr": "0 6 32 * *", "why": "a day past 31"},
+    {"expr": "0 6 0 * *", "why": "day zero"},
+    {"expr": "0 6 * * 8", "why": "a weekday past 7"},
+    {"expr": "5-1 * * * *", "why": "a range backwards"},
+    {"expr": "0 6 * * *x", "why": "trailing text"},
+    {"expr": "a b c d e", "why": "not numbers"},
+    {"expr": "5/10 * * * *", "why": "a start with a step and no range"},
+    {"expr": "* 6 * * *", "why": "every minute of one hour: sixty slots"},
+    {"expr": "0,30 8-17 * * 1-5", "why": "a hundred slots, over the cap of 48"},
+    {"expr": "0,1,2,3,4,5,6 0-6 * * *", "why": "forty-nine slots, one over the cap"}
+  ],
+  "calendarExamples": [
+    {"calendar": {"Hour": 6, "Minute": 15}, "cadence": {"kind": "slots", "slots": [{"minute": 15, "hour": 6}]}},
+    {"calendar": {"Minute": 0}, "cadence": {"kind": "slots", "slots": [{"minute": 0}]}},
+    {"calendar": [{"Hour": 0, "Minute": 0}, {"Hour": 3, "Minute": 0}, {"Hour": 6, "Minute": 0}, {"Hour": 9, "Minute": 0}, {"Hour": 12, "Minute": 0}, {"Hour": 15, "Minute": 0}, {"Hour": 18, "Minute": 0}, {"Hour": 21, "Minute": 0}], "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 0}, {"minute": 0, "hour": 3}, {"minute": 0, "hour": 6}, {"minute": 0, "hour": 9}, {"minute": 0, "hour": 12}, {"minute": 0, "hour": 15}, {"minute": 0, "hour": 18}, {"minute": 0, "hour": 21}]}},
+    {"calendar": {"Weekday": 1, "Hour": 9, "Minute": 0}, "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "weekday": 1}]}},
+    {"calendar": {"Weekday": 7, "Hour": 9, "Minute": 0}, "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "weekday": 0}]}},
+    {"calendar": {"Day": 1, "Hour": 9, "Minute": 0}, "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "day": 1}]}},
+    {"calendar": [{"Weekday": 1, "Hour": 7, "Minute": 45}, {"Weekday": 2, "Hour": 7, "Minute": 45}, {"Weekday": 3, "Hour": 7, "Minute": 45}, {"Weekday": 4, "Hour": 7, "Minute": 45}, {"Weekday": 5, "Hour": 7, "Minute": 45}], "cadence": {"kind": "slots", "slots": [{"minute": 45, "hour": 7, "weekday": 1}, {"minute": 45, "hour": 7, "weekday": 2}, {"minute": 45, "hour": 7, "weekday": 3}, {"minute": 45, "hour": 7, "weekday": 4}, {"minute": 45, "hour": 7, "weekday": 5}]}},
+    {"calendar": [{"Hour": 6, "Minute": 15}, {"Hour": 6, "Minute": 15}], "cadence": {"kind": "slots", "slots": [{"minute": 15, "hour": 6}]}},
+    {"calendar": [{"Hour": 9, "Minute": 0}, {"Hour": 6, "Minute": 15}], "cadence": {"kind": "slots", "slots": [{"minute": 15, "hour": 6}, {"minute": 0, "hour": 9}]}}
+  ],
+  "calendarUnknown": [
+    {"calendar": {}, "why": "no minute: every minute"},
+    {"calendar": [], "why": "an empty list"},
+    {"calendar": {"Hour": 6}, "why": "no minute: every minute of the hour"},
+    {"calendar": {"Minute": 0, "Month": 10}, "why": "a month"},
+    {"calendar": {"Minute": 0, "Day": 1, "Weekday": 1}, "why": "a day and a weekday together"},
+    {"calendar": {"Minute": 60}, "why": "a minute past 59"},
+    {"calendar": {"Minute": "0"}, "why": "a minute written as text"},
+    {"calendar": {"Minute": 0.5}, "why": "a minute that is not whole"},
+    {"calendar": {"Minute": 0, "Hour": 24}, "why": "an hour past 23"},
+    {"calendar": {"Minute": 0, "Weekday": 8}, "why": "a weekday past 7"},
+    {"calendar": {"Minute": 0, "Day": 0}, "why": "day zero"},
+    {"calendar": {"Minute": 0, "Foo": 1}, "why": "a key launchd does not have"},
+    {"calendar": "daily", "why": "text"},
+    {"calendar": null, "why": "nothing"},
+    {"calendar": 5, "why": "a number"},
+    {"calendar": [null], "why": "a list with nothing in it"},
+    {"calendar": [{"Minute": 0, "Hour": 0}, {"Minute": 1, "Hour": 0}, {"Minute": 2, "Hour": 0}, {"Minute": 3, "Hour": 0}, {"Minute": 4, "Hour": 0}, {"Minute": 5, "Hour": 0}, {"Minute": 6, "Hour": 0}, {"Minute": 0, "Hour": 1}, {"Minute": 1, "Hour": 1}, {"Minute": 2, "Hour": 1}, {"Minute": 3, "Hour": 1}, {"Minute": 4, "Hour": 1}, {"Minute": 5, "Hour": 1}, {"Minute": 6, "Hour": 1}, {"Minute": 0, "Hour": 2}, {"Minute": 1, "Hour": 2}, {"Minute": 2, "Hour": 2}, {"Minute": 3, "Hour": 2}, {"Minute": 4, "Hour": 2}, {"Minute": 5, "Hour": 2}, {"Minute": 6, "Hour": 2}, {"Minute": 0, "Hour": 3}, {"Minute": 1, "Hour": 3}, {"Minute": 2, "Hour": 3}, {"Minute": 3, "Hour": 3}, {"Minute": 4, "Hour": 3}, {"Minute": 5, "Hour": 3}, {"Minute": 6, "Hour": 3}, {"Minute": 0, "Hour": 4}, {"Minute": 1, "Hour": 4}, {"Minute": 2, "Hour": 4}, {"Minute": 3, "Hour": 4}, {"Minute": 4, "Hour": 4}, {"Minute": 5, "Hour": 4}, {"Minute": 6, "Hour": 4}, {"Minute": 0, "Hour": 5}, {"Minute": 1, "Hour": 5}, {"Minute": 2, "Hour": 5}, {"Minute": 3, "Hour": 5}, {"Minute": 4, "Hour": 5}, {"Minute": 5, "Hour": 5}, {"Minute": 6, "Hour": 5}, {"Minute": 0, "Hour": 6}, {"Minute": 1, "Hour": 6}, {"Minute": 2, "Hour": 6}, {"Minute": 3, "Hour": 6}, {"Minute": 4, "Hour": 6}, {"Minute": 5, "Hour": 6}, {"Minute": 6, "Hour": 6}], "why": "forty-nine slots, one over the cap of 48"}
+  ],
+  "intervalExamples": [
+    {"seconds": 900, "cadence": {"kind": "every", "minutes": 15}},
+    {"seconds": 3600, "cadence": {"kind": "every", "minutes": 60}},
+    {"seconds": 30, "cadence": {"kind": "every", "minutes": 1}},
+    {"seconds": 10, "cadence": {"kind": "every", "minutes": 1}},
+    {"seconds": 90, "cadence": {"kind": "every", "minutes": 2}},
+    {"seconds": 61, "cadence": {"kind": "every", "minutes": 1}},
+    {"seconds": 89, "cadence": {"kind": "every", "minutes": 1}},
+    {"seconds": 91, "cadence": {"kind": "every", "minutes": 2}},
+    {"seconds": 150, "cadence": {"kind": "every", "minutes": 3}},
+    {"seconds": 59, "cadence": {"kind": "every", "minutes": 1}},
+    {"seconds": 86400, "cadence": {"kind": "every", "minutes": 1440}},
+    {"seconds": 2592000, "cadence": {"kind": "every", "minutes": 43200}},
+    {"seconds": 2678400, "cadence": {"kind": "every", "minutes": 44640}},
+    {"seconds": 0, "cadence": {"kind": "unknown"}},
+    {"seconds": -5, "cadence": {"kind": "unknown"}},
+    {"seconds": "900", "cadence": {"kind": "unknown"}},
+    {"seconds": null, "cadence": {"kind": "unknown"}},
+    {"seconds": 2700000, "cadence": {"kind": "unknown"}}
+  ],
+  "dueExamples": [
+    {"why": "an ordinary daily job: the last two mornings", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 15, "hour": 6}]}, "takenAt": "2026-10-09T15:00:00Z", "dueAt": "2026-10-09T10:15:00Z", "dueBeforeAt": "2026-10-08T10:15:00Z"},
+    {"why": "a run exactly at the check time minus the grace still counts", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 15, "hour": 6}]}, "takenAt": "2026-10-09T10:45:00Z", "dueAt": "2026-10-09T10:15:00Z", "dueBeforeAt": "2026-10-08T10:15:00Z"},
+    {"why": "one second earlier it is still inside its grace, so yesterday's is the last", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 15, "hour": 6}]}, "takenAt": "2026-10-09T10:44:59Z", "dueAt": "2026-10-08T10:15:00Z", "dueBeforeAt": "2026-10-07T10:15:00Z"},
+    {"why": "spring forward 2027-03-14: 02:30 does not exist, so that day has no run", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 30, "hour": 2}]}, "takenAt": "2027-03-14T12:00:00Z", "dueAt": "2027-03-13T07:30:00Z", "dueBeforeAt": "2027-03-12T07:30:00Z"},
+    {"why": "spring forward: 03:30 exists, in daylight time", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 30, "hour": 3}]}, "takenAt": "2027-03-14T12:00:00Z", "dueAt": "2027-03-14T07:30:00Z", "dueBeforeAt": "2027-03-13T08:30:00Z"},
+    {"why": "the day after spring forward: the skipped day stays skipped", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 30, "hour": 2}]}, "takenAt": "2027-03-15T12:00:00Z", "dueAt": "2027-03-15T06:30:00Z", "dueBeforeAt": "2027-03-13T07:30:00Z"},
+    {"why": "fall back 2026-11-01: 01:30 happens twice and the earlier one is the run", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 30, "hour": 1}]}, "takenAt": "2026-11-01T12:00:00Z", "dueAt": "2026-11-01T05:30:00Z", "dueBeforeAt": "2026-10-31T05:30:00Z"},
+    {"why": "fall back: 06:00 is after the change, in standard time", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 6}]}, "takenAt": "2026-11-01T12:00:00Z", "dueAt": "2026-11-01T11:00:00Z", "dueBeforeAt": "2026-10-31T10:00:00Z"},
+    {"why": "the day after fall back: yesterday's run was at the new offset", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 6}]}, "takenAt": "2026-11-02T12:00:00Z", "dueAt": "2026-11-02T11:00:00Z", "dueBeforeAt": "2026-11-01T11:00:00Z"},
+    {"why": "London falls back 2026-10-25: 01:30 happens twice and the earlier (summer time) one is the run", "zone": "Europe/London", "cadence": {"kind": "slots", "slots": [{"minute": 30, "hour": 1}]}, "takenAt": "2026-10-25T12:00:00Z", "dueAt": "2026-10-25T00:30:00Z", "dueBeforeAt": "2026-10-24T00:30:00Z"},
+    {"why": "Sydney springs forward 2026-10-04: 02:30 does not exist that day", "zone": "Australia/Sydney", "cadence": {"kind": "slots", "slots": [{"minute": 30, "hour": 2}]}, "takenAt": "2026-10-04T01:00:00Z", "dueAt": "2026-10-02T16:30:00Z", "dueBeforeAt": "2026-10-01T16:30:00Z"},
+    {"why": "a zone with no daylight saving and a half-hour offset", "zone": "Asia/Kolkata", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 6}]}, "takenAt": "2026-10-09T15:00:00Z", "dueAt": "2026-10-09T00:30:00Z", "dueBeforeAt": "2026-10-08T00:30:00Z"},
+    {"why": "weekdays on a Monday: this morning's run is still inside its grace, so Friday and Thursday are the last two", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 45, "hour": 7, "weekday": 1}, {"minute": 45, "hour": 7, "weekday": 2}, {"minute": 45, "hour": 7, "weekday": 3}, {"minute": 45, "hour": 7, "weekday": 4}, {"minute": 45, "hour": 7, "weekday": 5}]}, "takenAt": "2026-10-12T12:00:00Z", "dueAt": "2026-10-09T11:45:00Z", "dueBeforeAt": "2026-10-08T11:45:00Z"},
+    {"why": "weekly on Mondays at 09:00, checked on a Wednesday", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "weekday": 1}]}, "takenAt": "2026-10-14T15:00:00Z", "dueAt": "2026-10-12T13:00:00Z", "dueBeforeAt": "2026-10-05T13:00:00Z"},
+    {"why": "monthly on the 1st: the one before is more than 32 days back, so there is only one", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "day": 1}]}, "takenAt": "2026-10-09T15:00:00Z", "dueAt": "2026-10-01T13:00:00Z"},
+    {"why": "monthly on the 31st, checked in early November: only October's, in summer time", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "day": 31}]}, "takenAt": "2026-11-05T15:00:00Z", "dueAt": "2026-10-31T13:00:00Z"},
+    {"why": "monthly on the 31st, checked in December: no 31st in the look-back, so no due time", "zone": "America/New_York", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 9, "day": 31}]}, "takenAt": "2026-12-05T15:00:00Z"},
+    {"why": "every hour at :20", "zone": "UTC", "cadence": {"kind": "slots", "slots": [{"minute": 20}]}, "takenAt": "2026-10-09T15:00:00Z", "dueAt": "2026-10-09T14:20:00Z", "dueBeforeAt": "2026-10-09T13:20:00Z"},
+    {"why": "the look-back reaches back exactly 32 days: an expected run that far back counts", "zone": "UTC", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 0, "day": 1}]}, "takenAt": "2026-10-03T00:30:00Z", "dueAt": "2026-10-01T00:00:00Z", "dueBeforeAt": "2026-09-01T00:00:00Z"},
+    {"why": "one second further and it does not", "zone": "UTC", "cadence": {"kind": "slots", "slots": [{"minute": 0, "hour": 0, "day": 1}]}, "takenAt": "2026-10-03T00:30:01Z", "dueAt": "2026-10-01T00:00:00Z"},
+    {"why": "every 15 minutes: placed as far back as the interval allows", "zone": "America/New_York", "cadence": {"kind": "every", "minutes": 15}, "takenAt": "2026-10-09T15:00:00Z", "dueAt": "2026-10-09T14:15:00Z", "dueBeforeAt": "2026-10-09T14:00:00Z"},
+    {"why": "every day as an interval", "zone": "America/New_York", "cadence": {"kind": "every", "minutes": 1440}, "takenAt": "2026-10-09T15:00:00Z", "dueAt": "2026-10-08T14:30:00Z", "dueBeforeAt": "2026-10-07T14:30:00Z"},
+    {"why": "every 30 days: the second is more than 32 days back, so there is only one", "zone": "America/New_York", "cadence": {"kind": "every", "minutes": 43200}, "takenAt": "2026-10-09T15:00:00Z", "dueAt": "2026-09-09T14:30:00Z"},
+    {"why": "always on has no due time", "zone": "America/New_York", "cadence": {"kind": "always"}, "takenAt": "2026-10-09T15:00:00Z"},
+    {"why": "an unknown schedule has no due time", "zone": "America/New_York", "cadence": {"kind": "unknown"}, "takenAt": "2026-10-09T15:00:00Z"}
+  ],
+  "rules": [
+    "a block (launchd, hermes) with any status other than found carries only status and an optional why; why is one of whyCodes - never a message and never a word of what was refused. If the safety check refuses the whole jobs file, both blocks are written unavailable with the refused code, the timezone is UTC, and the other parts are written as usual",
+    "launchd is not found when the computer is not a Mac or has no ~/Library/LaunchAgents folder; only that user folder is read, never /Library; hermes is not found when Hermes is not on the computer",
+    "launchd state is running when launchctl lists the label with a process, loaded when it lists it without one, and not loaded when it does not list it; lastExit is launchctl's last exit status and is written only for a job that is listed",
+    "lastReportAt on a launchd job is the newest modified time of its two log files (standard out and standard error); the files are never opened and their paths are never kept",
+    "self is written only as true, on the row for the collector's own LaunchAgent; disabled is written only as true, from the plist's Disabled key, and only when launchctl does not list the job (a loaded job is on)",
+    "cadence is always for a job with KeepAlive true, or with RunAtLoad true while it has a process (a job that ran once at login and exited, or is loaded and not running, is unknown, so its light comes from its exit status); every for a StartInterval, or a cron minute step that divides an hour; slots for calendar entries or cron lists, at most caps.slots slots; unknown for anything else, including a KeepAlive that is a condition (restart on failure, while the network is up), a calendar and an interval at once, a month, a day of the month together with a weekday (for cron whenever both are written, neither is a bare *, even a weekday range that covers every day), a calendar entry with no minute, a cron form that is not minute, hour, weekday and a day of the month, or a Hermes timezone other than the computer's",
+    "dueAt and dueBeforeAt are the two most recent times the job was expected to run, at or before takenAt minus graceMinutes, worked out on the Mac in the job's own timezone looking back lookbackDays days; a daylight-saving gap skips the slot and an overlap takes the earlier instant",
+    "for cadence every the phase is not known, so dueAt is takenAt minus graceMinutes minus N minutes and dueBeforeAt minus 2N minutes",
+    "dueAt and dueBeforeAt are left out when the cadence is always or unknown and when the job is switched off (a disabled launchd job, a Hermes job with enabled false); dueBeforeAt is also left out when fewer than two expected runs fall in the look-back, and dueAt too when none does (a job that runs only on the 31st can go a whole look-back with no due time at all); dueBeforeAt is always earlier than dueAt",
+    "a Hermes job is read from cron/jobs.json in the Hermes home and in each profile; only its id, enabled, whether it is paused (state, paused_at), schedule (kind, expr, minutes, timezone), last_run_at and last_status are used - its name, prompt, skills, script, destination, origin, model and every word of error text are not used, kept or written, and have no key",
+    "A Hermes job's stored name is never published. Hermes copies the first 50 characters of the prompt into the name of a job nobody named, and does not rename the job when its prompt is edited, so a stored name can carry an old prompt and nothing on the Mac can tell. Every Hermes job is published as hermesJobName with its id (12 hex characters) in place of {id}; the gate refuses any other name. The board shows that name until the owner gives the job one in jobs.yml (id hermes:<profile>/<id>), which the board applies - the name then lives in the team repo, where the owner wrote it on purpose. A Hermes job is listed by its profile and then its id",
+    "a Hermes schedule is a cron expression, or an interval of N minutes; Hermes reads a cron expression in the timezone set by the profile's config.yaml (the top-level timezone line) or else the computer's, so a profile or job that names a timezone other than the computer's, or a kind other than cron and interval, has cadence unknown",
+    "a Hermes job that runs once (schedule kind at or once) is written with enabled false and cadence unknown; a job is on unless its enabled says otherwise (Hermes reads a record with no enabled key as on) or it has a pause marker - its state is paused, or it has a paused_at time - which Hermes treats as not firing even when enabled is true",
+    "a Hermes last_status is written as ok, error or unknown and nothing else: ok for ok; error for error, delivery_failed, blocked_config or interrupted, in any case; every other word, and no word, is unknown",
+    "a Hermes job in a profile is listed by the profile's name, with the default profile (the Hermes home itself) first, then the other profiles A to Z",
+    "hidden counts every job the collector withheld: a plist or jobs file that could not be read, a label, or a Hermes id that is not 12 lowercase hex characters, or an id that fails the safety rule (a Hermes job's stored name is never involved), a profile that fails it, and an id seen twice. The shared name rule refuses any text with sk- in it, because that is how a key starts, so task-runner, desk-helper and risk-monitor are withheld too. The rule is not loosened, and renaming in jobs.yml cannot help, because the board never sees the name; rename the job where it is made. Jobs past the cap are counted in more. The board re-checks every name, adds what it drops to hidden, and should say how many jobs were hidden by the safety rule",
+    "when the computer's timezone is not one this collector knows, timezone is UTC, every schedule is still written, and no due times are",
+    "the file never says whether a job is on time or late; the board works that out from dueAt, dueBeforeAt and the last report or run",
+    "a file older than staleAfterHours is shown as not checked since its time, never as a light",
+    "the board shows at most maxComputersShown computers, newest takenAt first"
+  ],
+  "sample": {
+    "schema": "agent-status/jobs/v1",
+    "takenAt": "2026-10-09T15:00:00Z",
+    "computer": "Mac Mini",
+    "timezone": "America/New_York",
+    "launchd": {
+      "status": "found",
+      "items": [
+        {
+          "label": "local.donna.agent-status-collector",
+          "cadence": {
+            "kind": "slots",
+            "slots": [
+              { "minute": 0, "hour": 0 },
+              { "minute": 0, "hour": 3 },
+              { "minute": 0, "hour": 6 },
+              { "minute": 0, "hour": 9 },
+              { "minute": 0, "hour": 12 },
+              { "minute": 0, "hour": 15 },
+              { "minute": 0, "hour": 18 },
+              { "minute": 0, "hour": 21 }
+            ]
+          },
+          "state": "loaded",
+          "lastExit": 0,
+          "lastReportAt": "2026-10-09T13:00:41Z",
+          "dueAt": "2026-10-09T13:00:00Z",
+          "dueBeforeAt": "2026-10-09T10:00:00Z",
+          "self": true
+        },
+        {
+          "label": "local.donna.story-belt-daily",
+          "cadence": { "kind": "slots", "slots": [{ "minute": 15, "hour": 6 }] },
+          "state": "loaded",
+          "lastExit": 0,
+          "lastReportAt": "2026-10-09T10:15:22Z",
+          "dueAt": "2026-10-09T10:15:00Z",
+          "dueBeforeAt": "2026-10-08T10:15:00Z"
+        },
+        {
+          "label": "com.donna.blog-watch",
+          "cadence": { "kind": "every", "minutes": 15 },
+          "state": "loaded",
+          "lastExit": 0,
+          "lastReportAt": "2026-10-09T14:52:10Z",
+          "dueAt": "2026-10-09T14:15:00Z",
+          "dueBeforeAt": "2026-10-09T14:00:00Z"
+        },
+        {
+          "label": "local.donna.weekday-brief",
+          "cadence": {
+            "kind": "slots",
+            "slots": [
+              { "minute": 45, "hour": 7, "weekday": 1 },
+              { "minute": 45, "hour": 7, "weekday": 2 },
+              { "minute": 45, "hour": 7, "weekday": 3 },
+              { "minute": 45, "hour": 7, "weekday": 4 },
+              { "minute": 45, "hour": 7, "weekday": 5 }
+            ]
+          },
+          "state": "not loaded",
+          "lastReportAt": "2026-10-08T11:45:20Z",
+          "dueAt": "2026-10-09T11:45:00Z",
+          "dueBeforeAt": "2026-10-08T11:45:00Z"
+        },
+        {
+          "label": "local.donna.security-changelog",
+          "cadence": { "kind": "always" },
+          "state": "running",
+          "lastReportAt": "2026-10-09T14:50:02Z"
+        },
+        {
+          "label": "local.donna.paused-draft",
+          "cadence": { "kind": "slots", "slots": [{ "minute": 0, "hour": 9, "weekday": 1 }] },
+          "state": "not loaded",
+          "disabled": true
+        }
+      ],
+      "hidden": 1,
+      "more": 0
+    },
+    "hermes": {
+      "status": "found",
+      "items": [
+        {
+          "profile": "default",
+          "id": "a1b2c3d4e5f6",
+          "name": "Hermes job a1b2c3d4e5f6",
+          "enabled": true,
+          "cadence": { "kind": "slots", "slots": [{ "minute": 30, "hour": 6 }] },
+          "lastRunAt": "2026-10-09T10:30:04Z",
+          "lastResult": "ok",
+          "dueAt": "2026-10-09T10:30:00Z",
+          "dueBeforeAt": "2026-10-08T10:30:00Z"
+        },
+        {
+          "profile": "donna",
+          "id": "b2c3d4e5f6a1",
+          "name": "Hermes job b2c3d4e5f6a1",
+          "enabled": true,
+          "cadence": {
+            "kind": "slots",
+            "slots": [
+              { "minute": 0, "hour": 0 },
+              { "minute": 0, "hour": 6 },
+              { "minute": 0, "hour": 12 },
+              { "minute": 0, "hour": 18 }
+            ]
+          },
+          "lastRunAt": "2026-10-09T10:00:09Z",
+          "lastResult": "error",
+          "dueAt": "2026-10-09T10:00:00Z",
+          "dueBeforeAt": "2026-10-09T04:00:00Z"
+        },
+        {
+          "profile": "donna",
+          "id": "c3d4e5f6a1b2",
+          "name": "Hermes job c3d4e5f6a1b2",
+          "enabled": false,
+          "cadence": { "kind": "unknown" },
+          "lastResult": "unknown"
+        }
+      ],
+      "hidden": 0,
+      "more": 0
+    }
+  }
+}

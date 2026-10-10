@@ -987,6 +987,259 @@ export function shapeHermes(files, now = Date.now(), found = null) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The Readiness wall's jobs: every LaunchAgent on a Mac and every Hermes cron job, as the status
+// collector writes them to .agent-team/status/jobs/<computer>.json.
+//
+// KEEP IN SYNC with scripts/lib/status/jobs-schema.mjs in agent-team-template.
+// tests/fixtures/jobs-parity.json is the shared contract, the same bytes in both repos, and
+// tests/jobs.test.mjs holds the board to it.
+//
+// The same terms as the Connections wall and the Hermes card: the file comes through a repo that
+// anybody with push access can edit, and the answer goes to a browser on a board that can be
+// public, so every name is checked again here and the output is BUILT from the keys the board
+// knows. Two things are the board's own and never the file's. Whether a job is on time or late: the
+// file only says when it was last expected (dueAt, dueBeforeAt) and when it last reported. And a
+// Hermes job's name: the only one accepted is "Hermes job <id>", because Hermes copies the start of
+// a job's prompt into the name of a job nobody named, and a name that says anything else may be
+// that prompt. The owner names a job in jobs.yml, on purpose, and the board applies it.
+export const JOBS_SCHEMA = 'agent-status/jobs/v1'
+export const JOBS_FOLDER = '.agent-team/status/jobs'
+export const JOBS_COMPUTER_SLUG = /^[a-z0-9-]{1,32}$/
+export const JOBS_STALE_AFTER_HOURS = 8
+export const JOBS_MAX_FILES = 5
+export const JOBS_MAX_BYTES = 65536
+export const JOBS_MAX_COMPUTERS = 3
+export const JOBS_STATUSES = ['found', 'not found', 'unavailable']
+export const JOBS_CAPS = { launchd: 60, hermes: 40, slots: 48 }
+export const JOBS_GRACE_MINUTES = 30
+export const JOBS_LOOKBACK_DAYS = 32
+export const JOBS_LAUNCHD_STATES = ['running', 'loaded', 'not loaded']
+export const JOBS_HERMES_RESULTS = ['ok', 'error', 'unknown']
+export const JOBS_HERMES_NAME = 'Hermes job {id}'
+export const JOBS_WHY_CODES = { unreadable: 'could not be read', refused: 'refused by the safety check' }
+export const JOBS_EXIT_CODE = { min: -255, max: 255 }
+export const JOBS_CADENCE = {
+  kinds: ['always', 'every', 'slots', 'unknown'],
+  everyMinutes: { min: 1, max: 44640 },
+  slot: { minute: { min: 0, max: 59 }, hour: { min: 0, max: 23 }, weekday: { min: 0, max: 6 }, day: { min: 1, max: 31 } }
+}
+// What the board reads, and nothing else. The output is built from these, key by key.
+export const JOBS_ALLOWED_KEYS = {
+  file: ['schema', 'takenAt', 'computer', 'timezone', 'launchd', 'hermes'],
+  blockFound: ['status', 'items', 'hidden', 'more'],
+  blockNotFound: ['status', 'why'],
+  launchdItem: ['label', 'cadence', 'state', 'lastExit', 'lastReportAt', 'dueAt', 'dueBeforeAt', 'self', 'disabled'],
+  hermesItem: ['profile', 'id', 'name', 'enabled', 'cadence', 'lastRunAt', 'lastResult', 'dueAt', 'dueBeforeAt'],
+  cadence: { always: ['kind'], every: ['kind', 'minutes'], slots: ['kind', 'slots'], unknown: ['kind'] },
+  slot: ['minute', 'hour', 'weekday', 'day']
+}
+export const JOBS_REQUIRED_KEYS = {
+  file: ['schema', 'takenAt', 'computer', 'timezone', 'launchd', 'hermes'],
+  launchdItem: ['label', 'cadence', 'state'],
+  hermesItem: ['profile', 'id', 'name', 'enabled', 'cadence', 'lastResult']
+}
+export const JOBS_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$/
+// Exactly what Hermes makes (uuid4().hex[:12]). An id that spells out a word is not one it made.
+export const JOBS_HERMES_ID = /^[0-9a-f]{12}$/
+const JOBS_MAX_COUNT = 1e7
+
+export function isJobsFile(path) {
+  const prefix = `${JOBS_FOLDER}/`
+  if (typeof path !== 'string' || !path.startsWith(prefix) || !path.endsWith('.json')) return false
+  return JOBS_COMPUTER_SLUG.test(path.slice(prefix.length, -'.json'.length))
+}
+
+// A label is held to the launchd form and to the connection-name rule on top: the board cannot
+// refuse the owner's username or computer name the way the collector does, but it can refuse a
+// token, an address, a uuid and a path, which is what a hand-edited file would try.
+export const isJobLabel = (value) => typeof value === 'string' && JOBS_LABEL.test(value) && isConnectionName(value)
+export const isHermesJobId = (value) => typeof value === 'string' && JOBS_HERMES_ID.test(value)
+
+const isJobsCount = (value) => Number.isInteger(value) && value >= 0 && value <= JOBS_MAX_COUNT
+const inRange = (value, range) => Number.isInteger(value) && value >= range.min && value <= range.max
+
+// A time the board can date anything by, as the collector writes it. One later than now is not a
+// time anybody could have taken, the same rule the envelope applies to the file's own time.
+function jobTime(value, now) {
+  const ms = isoMs(value)
+  return Number.isFinite(ms) && ms <= now ? isoSeconds(ms) : null
+}
+
+// A schedule the board can read, rebuilt from the keys it knows; anything else is "unknown", which
+// the screen says plainly, because a guessed schedule would be judged as late or on time for no reason.
+function jobCadence(raw) {
+  const unknown = { kind: 'unknown' }
+  if (!isPlainObject(raw) || typeof raw.kind !== 'string' || !JOBS_CADENCE.kinds.includes(raw.kind)) return unknown
+  if (raw.kind === 'always') return { kind: 'always' }
+  if (raw.kind === 'every') return inRange(raw.minutes, JOBS_CADENCE.everyMinutes) ? { kind: 'every', minutes: raw.minutes } : unknown
+  if (raw.kind !== 'slots') return unknown
+  if (!Array.isArray(raw.slots) || !raw.slots.length || raw.slots.length > JOBS_CAPS.slots) return unknown
+  const slots = []
+  for (const slot of raw.slots) {
+    if (!isPlainObject(slot) || !inRange(slot.minute, JOBS_CADENCE.slot.minute)) return unknown
+    for (const part of ['hour', 'weekday', 'day']) {
+      if (slot[part] !== undefined && !inRange(slot[part], JOBS_CADENCE.slot[part])) return unknown
+    }
+    // A day of the month and a day of the week together are two different rules, not one.
+    if (slot.weekday !== undefined && slot.day !== undefined) return unknown
+    slots.push({ minute: slot.minute, hour: slot.hour ?? null, weekday: slot.weekday ?? null, day: slot.day ?? null })
+  }
+  return { kind: 'slots', slots }
+}
+
+// The two most recent expected runs. Kept only where the contract gives them: a job with no
+// schedule to judge, or one switched off, has none; and a pair that is not at least the grace
+// before the check, not within the look-back, or not in order, is not one the board will judge by.
+function jobDueTimes(raw, cadence, off, takenMs, now) {
+  const none = { dueAt: null, dueBeforeAt: null }
+  if (off || (cadence.kind !== 'slots' && cadence.kind !== 'every')) return none
+  const dueAt = jobTime(raw.dueAt, now)
+  if (dueAt === null) return none
+  const dueMs = Date.parse(dueAt)
+  if (dueMs > takenMs - JOBS_GRACE_MINUTES * 60_000 || dueMs < takenMs - JOBS_LOOKBACK_DAYS * 86400_000) return none
+  const before = jobTime(raw.dueBeforeAt, now)
+  return { dueAt, dueBeforeAt: before !== null && Date.parse(before) < dueMs ? before : null }
+}
+
+function launchdJob(raw, takenMs, now) {
+  if (!isJobLabel(raw.label) || typeof raw.state !== 'string' || !JOBS_LAUNCHD_STATES.includes(raw.state)) return null
+  const cadence = jobCadence(raw.cadence)
+  // A job launchctl lists is on, whatever its plist says; "disabled" is only the reason one is not.
+  const disabled = raw.disabled === true && raw.state === 'not loaded'
+  return {
+    label: raw.label,
+    cadence,
+    state: raw.state,
+    // Written only for a job that is listed; for one that is not, there is no exit to report.
+    lastExit: raw.state !== 'not loaded' && inRange(raw.lastExit, JOBS_EXIT_CODE) ? raw.lastExit : null,
+    lastReportAt: jobTime(raw.lastReportAt, now),
+    ...jobDueTimes(raw, cadence, disabled, takenMs, now),
+    self: raw.self === true,
+    disabled
+  }
+}
+
+function hermesJob(raw, takenMs, now) {
+  if (!isProfileName(raw.profile) || !isHermesJobId(raw.id)) return null
+  // The stored name is never shown, so a name that is anything but the standard one means the file
+  // was not written by the collector, or was changed afterwards: the job is not shown.
+  if (raw.name !== fillWords(JOBS_HERMES_NAME, { id: raw.id })) return null
+  if (typeof raw.enabled !== 'boolean' || typeof raw.lastResult !== 'string' || !JOBS_HERMES_RESULTS.includes(raw.lastResult)) return null
+  const cadence = jobCadence(raw.cadence)
+  return {
+    profile: raw.profile,
+    id: raw.id,
+    name: raw.name,
+    enabled: raw.enabled,
+    cadence,
+    lastRunAt: jobTime(raw.lastRunAt, now),
+    lastResult: raw.lastResult,
+    ...jobDueTimes(raw, cadence, !raw.enabled, takenMs, now)
+  }
+}
+
+// A block that is not "found" says so and, at most, why - and the why is one of two fixed phrases,
+// never the file's own words, because the file's own words are the one place a message could carry
+// something it should not.
+function jobsBlock(raw, shapeJob, cap) {
+  const empty = (status, why = null) => ({ status, why, items: [], hidden: 0, more: 0 })
+  // Absent is "not found"; present but not a block is a file the board cannot vouch for.
+  if (raw === undefined) return empty('not found')
+  if (!isPlainObject(raw)) return empty('unavailable')
+  if (raw.status === undefined || raw.status === 'not found') return empty('not found', knownWhy(raw.why))
+  if (raw.status !== 'found') return empty('unavailable', raw.status === 'unavailable' ? knownWhy(raw.why) : null)
+  if (!Array.isArray(raw.items) || !isJobsCount(raw.hidden) || !isJobsCount(raw.more)) return empty('unavailable')
+  const kept = keepEntries(raw.items, cap, shapeJob.read, shapeJob.keyOf)
+  return { status: 'found', why: null, items: kept.kept, hidden: raw.hidden + kept.hidden, more: raw.more + kept.more }
+}
+const knownWhy = (why) => (typeof why === 'string' && Object.values(JOBS_WHY_CODES).includes(why) ? why : null)
+
+// An IANA zone name this runtime knows, or none. Only used to say which clock a schedule reads on.
+function jobsTimezone(value) {
+  if (typeof value !== 'string' || !TIMEZONE_NAME.test(value)) return null
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: value })
+    return value
+  } catch {
+    return null
+  }
+}
+
+function readJobsFile(body, now) {
+  const envelope = readStatusEnvelope(body, now, { schema: JOBS_SCHEMA, maxBytes: JOBS_MAX_BYTES, noun: 'jobs' })
+  if (!envelope.usable) return envelope
+  const { parsed, takenMs } = envelope
+  const stale = now - takenMs > JOBS_STALE_AFTER_HOURS * 3600_000
+  return {
+    usable: true,
+    takenMs,
+    computer: {
+      computer: cleanUsageName(parsed.computer),
+      takenAt: isoSeconds(takenMs),
+      freshness: stale ? 'stale' : 'fresh',
+      timezone: jobsTimezone(parsed.timezone),
+      launchd: jobsBlock(parsed.launchd, { read: (item) => launchdJob(item, takenMs, now), keyOf: (job) => job.label }, JOBS_CAPS.launchd),
+      hermes: jobsBlock(parsed.hermes, { read: (item) => hermesJob(item, takenMs, now), keyOf: (job) => `${job.profile}/${job.id}` }, JOBS_CAPS.hermes)
+    }
+  }
+}
+
+export function shapeJobs(files, now = Date.now(), found = null) {
+  return shapeStatusFiles(files, now, found, {
+    maxFiles: JOBS_MAX_FILES, maxComputers: JOBS_MAX_COMPUTERS, noneWhy: 'No jobs reading has been taken yet.', read: readJobsFile
+  })
+}
+
+// jobs.yml: the owner's names and hiding, by the id the starter file explains. The board only reads
+// it. A name is held to the connection-name rule - it is printed on a board that can be public - and
+// a hide always applies, because hiding is the safe direction. An entry the board cannot use is
+// counted, not guessed at. The names come back on a bare object so that no id can reach for a method.
+export const JOBS_OVERRIDE_MAX = 200
+const OVERRIDE_SLUG = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/
+const OVERRIDE_ROUTINE = /^[^\u0000-\u001f\u007f]{1,100}$/u
+
+function overrideIdOk(id) {
+  if (typeof id !== 'string') return false
+  const colon = id.indexOf(':')
+  const kind = id.slice(0, colon)
+  const rest = id.slice(colon + 1)
+  if (kind === 'launchd') return isJobLabel(rest)
+  if (kind === 'workflow') return OVERRIDE_SLUG.test(rest)
+  if (kind === 'routine') return OVERRIDE_ROUTINE.test(rest) && rest === rest.trim()
+  if (kind === 'hermes') {
+    const slash = rest.indexOf('/')
+    return slash > 0 && isProfileName(rest.slice(0, slash)) && isHermesJobId(rest.slice(slash + 1))
+  }
+  return false
+}
+
+export function shapeJobOverrides(doc) {
+  const names = Object.create(null)
+  const hidden = []
+  let ignored = 0
+  const entries = isPlainObject(doc) && Array.isArray(doc.jobs) ? doc.jobs : []
+  const seen = new Set()
+  entries.forEach((entry, index) => {
+    if (index >= JOBS_OVERRIDE_MAX || !isPlainObject(entry) || !overrideIdOk(entry.id) || seen.has(entry.id)) {
+      ignored += 1
+      return
+    }
+    const wantsHide = entry.hide === true
+    const named = entry.name !== undefined
+    const nameOk = typeof entry.name === 'string' && isConnectionName(entry.name)
+    if (!wantsHide && !nameOk) {
+      ignored += 1
+      return
+    }
+    seen.add(entry.id)
+    if (wantsHide) hidden.push(entry.id)
+    if (nameOk) names[entry.id] = entry.name
+    else if (named) ignored += 1
+  })
+  return { names, hidden, ignored }
+}
+
+// ---------------------------------------------------------------------------------------------
 // What the owner pays: `subscriptions:` in stack.yml, written by /onboard or by hand, as
 // `{ name, service, price, currency, per }`.
 //
@@ -1743,7 +1996,7 @@ export function isCalendarDay(value) {
 //   3. Otherwise (a status is present but no finished_at), the run still counts as running
 //      for 30 minutes after started_at — that covers logs written up front with a
 //      provisional status. Past 30 minutes the status is trusted as the result.
-const RUNNING_GRACE_MINUTES = 30
+export const RUNNING_GRACE_MINUTES = 30
 const TERMINAL_STATUSES = ['ok', 'partial', 'blocked', 'failed']
 const UP_NEXT_WINDOW_MS = 48 * 3600_000
 const DONE_WINDOW_MS = 14 * 86400_000
@@ -2040,8 +2293,11 @@ export default async function handler(request, response) {
     const foundBody = async (path) => ((sizes[path] ?? 0) > FOUND_MAX_BYTES ? null : rawFile(settings, path))
     const hermesPaths = paths.filter((path) => isHermesFile(path)).sort()
     const hermesBody = async (path) => ((sizes[path] ?? 0) > HERMES_MAX_BYTES ? null : rawFile(settings, path))
+    // The Readiness wall's jobs, on the same terms again: five fetched, none the tree calls too big.
+    const jobsPaths = paths.filter((path) => isJobsFile(path)).sort()
+    const jobsBody = async (path) => ((sizes[path] ?? 0) > JOBS_MAX_BYTES ? null : rawFile(settings, path))
 
-    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles, foundFiles, hermesFiles] =
+    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles, foundFiles, hermesFiles, jobsFiles] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
@@ -2060,7 +2316,8 @@ export default async function handler(request, response) {
         hasRoutineSnapshot ? rawFile(settings, ROUTINE_SNAPSHOT) : null,
         Promise.all(usagePaths.slice(0, USAGE_MAX_FILES).map(async (path) => [path, await usageBody(path)])),
         Promise.all(foundPaths.slice(0, FOUND_MAX_FILES).map(async (path) => [path, await foundBody(path)])),
-        Promise.all(hermesPaths.slice(0, HERMES_MAX_FILES).map(async (path) => [path, await hermesBody(path)]))
+        Promise.all(hermesPaths.slice(0, HERMES_MAX_FILES).map(async (path) => [path, await hermesBody(path)])),
+        Promise.all(jobsPaths.slice(0, JOBS_MAX_FILES).map(async (path) => [path, await jobsBody(path)]))
       ])
 
     const unparseable = []
@@ -2191,6 +2448,7 @@ export default async function handler(request, response) {
     // Proved is matched in from the register here, after both are read, and from nowhere else.
     const found = matchProved(shapeFound(foundFiles, now, foundPaths.length), connections)
     const hermes = shapeHermes(hermesFiles, now, hermesPaths.length)
+    const jobs = shapeJobs(jobsFiles, now, jobsPaths.length)
     const hero = shapeHero(tiles, ledger)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, connections, verdicts: verdictPaths.length, onboarding, now })
 
@@ -2223,6 +2481,7 @@ export default async function handler(request, response) {
       subscriptions,
       found,
       hermes,
+      jobs,
       routines: {
         takenAt: snapshot.takenAt,
         usable: snapshot.usable,
