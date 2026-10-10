@@ -35,7 +35,14 @@
      nothing on the dark chip, where the palette's bright hues read fine, and most of the way on the
      light one, where amber and teal would be close to invisible. The --kpi tokens are the three
      number cards on Today. --on-art and --scrim are words laid over a picture and the wash under
-     them; the pictures are the same in both themes, so these two are too. */
+     them; the pictures are the same in both themes, so these two are too.
+
+     --elev-1, -2 and -3 are depth at rest, under a pointer, and for the things that float (the
+     voice sheet, the orb): in dark a lighter top edge and a drop you barely see, in light a soft
+     drop tinted with the ink. --shadow is the resting step. The --orb tokens are the voice orb's
+     colour per state, all hues already on the board. --tile-ink is how far a tool tile's letter is
+     pulled from the tool's own colour toward the ink, the way --agent-ink does for owner chips.
+     --mark-mono is the only colour a brand mark that may not be recoloured is ever drawn in. */
   :root {
     color-scheme: dark;
     --bg: #0b0f17;
@@ -57,7 +64,17 @@
     --kpi-work: #5fd3a6;
     --kpi-agents: #a48bf5;
     --kpi-ledger: #f5b14c;
-    --shadow: 0 1px 0 rgba(255, 255, 255, .04) inset, 0 20px 40px -24px rgba(0, 0, 0, .6);
+    --elev-1: 0 1px 0 rgba(255, 255, 255, .045) inset, 0 20px 40px -24px rgba(0, 0, 0, .6);
+    --elev-2: 0 1px 0 rgba(255, 255, 255, .07) inset, 0 26px 48px -22px rgba(0, 0, 0, .72);
+    --elev-3: 0 1px 0 rgba(255, 255, 255, .08) inset, 0 30px 64px -20px rgba(0, 0, 0, .8);
+    --shadow: var(--elev-1);
+    --orb-idle: var(--accent);
+    --orb-listen: var(--ok);
+    --orb-think: var(--kpi-agents);
+    --orb-speak: var(--accent);
+    --orb-error: var(--warn);
+    --tile-ink: 55%;
+    --mark-mono: #ffffff;
   }
   @media (prefers-color-scheme: light) {
     :root:not([data-theme="dark"]) {
@@ -81,7 +98,17 @@
       --kpi-work: #1f8f66;
       --kpi-agents: #6a4fd1;
       --kpi-ledger: #b8730c;
-      --shadow: 0 1px 2px rgba(20, 30, 60, .06), 0 16px 32px -24px rgba(20, 30, 60, .25);
+      --elev-1: 0 1px 2px rgba(20, 30, 60, .06), 0 16px 32px -24px rgba(20, 30, 60, .25);
+      --elev-2: 0 2px 4px rgba(20, 30, 60, .07), 0 22px 40px -22px rgba(20, 30, 60, .32);
+      --elev-3: 0 4px 10px rgba(20, 30, 60, .08), 0 30px 60px -22px rgba(20, 30, 60, .4);
+      --shadow: var(--elev-1);
+      --orb-idle: var(--accent);
+      --orb-listen: var(--ok);
+      --orb-think: var(--kpi-agents);
+      --orb-speak: var(--accent);
+      --orb-error: var(--warn);
+      --tile-ink: 75%;
+      --mark-mono: #000000;
     }
   }
   /* Word for word the block above. The test holds them identical, so a value changed in one place
@@ -107,7 +134,17 @@
     --kpi-work: #1f8f66;
     --kpi-agents: #6a4fd1;
     --kpi-ledger: #b8730c;
-    --shadow: 0 1px 2px rgba(20, 30, 60, .06), 0 16px 32px -24px rgba(20, 30, 60, .25);
+    --elev-1: 0 1px 2px rgba(20, 30, 60, .06), 0 16px 32px -24px rgba(20, 30, 60, .25);
+    --elev-2: 0 2px 4px rgba(20, 30, 60, .07), 0 22px 40px -22px rgba(20, 30, 60, .32);
+    --elev-3: 0 4px 10px rgba(20, 30, 60, .08), 0 30px 60px -22px rgba(20, 30, 60, .4);
+    --shadow: var(--elev-1);
+    --orb-idle: var(--accent);
+    --orb-listen: var(--ok);
+    --orb-think: var(--kpi-agents);
+    --orb-speak: var(--accent);
+    --orb-error: var(--warn);
+    --tile-ink: 75%;
+    --mark-mono: #000000;
   }
 
   /* Inter, served from this site: the content security policy allows fonts from nowhere else, and
@@ -126,9 +163,47 @@
   }
 
   /* --radius is a panel's corner; --radius-sm is everything that sits on one - buttons, inset cards,
-     fields - so a card inside a panel never has the same curve as the panel around it. */
+     fields - so a card inside a panel never has the same curve as the panel around it. --radius-lg
+     is the banners and, on a wide screen, the number cards.
+
+     The look-and-feel numbers (plan 2026-10-10, section 2) sit here too, because they do not change
+     with the theme. Type: display words light and tight, numbers a step heavier, nothing under
+     .625rem and body text never under 16px. Motion: every duration on the board is one of these, so
+     its pace is one block of values - and every rule that uses them sits in the motion block at the
+     end of this sheet, which a device that asked for less motion never applies. */
   :root {
-    --radius: 16px;
+    --space-1: .25rem;
+    --space-2: .5rem;
+    --space-3: .75rem;
+    --space-4: 1rem;
+    --space-5: 1.5rem;
+    --space-6: 2rem;
+    --space-7: 3rem;
+    --fs-label: .625rem;
+    --fs-meta: .75rem;
+    --fs-small: .8125rem;
+    --fs-body: 1rem;
+    --fs-h2: 1.375rem;
+    --fs-display: clamp(1.75rem, 1rem + 2.4vw, 2.75rem);
+    --fs-number: clamp(2.25rem, 3.6vw, 3.5rem);
+    --fw-display: 480;
+    --fw-number: 500;
+    --track-display: -.045em;
+    --dur-1: 140ms;
+    --dur-2: 220ms;
+    --dur-3: 320ms;
+    --dur-press: 90ms;
+    --dur-fold: 180ms;
+    --dur-draw: 600ms;
+    --dur-shimmer: 1.4s;
+    --dur-ripple: 1.6s;
+    --dur-turn: 2.4s;
+    --dur-breath: 6s;
+    --dur-drift: 40s;
+    --ease-out: cubic-bezier(.22, .8, .24, 1);
+    --ease-std: cubic-bezier(.4, 0, .2, 1);
+    --radius: 18px;
+    --radius-lg: 22px;
     --radius-sm: 11px;
     --nav-row: 3.2rem;
     --nav-h: calc(var(--nav-row) * 2); /* the phone nav is two rows; see nav .tabs */
@@ -499,7 +574,7 @@
      `cursor: pointer` is invisible on the phone this board is built to be read on - so on the
      device that matters there was nothing at all saying a tap did anything. This is that sign. */
   .agent-card .runcount { display: block; margin-top: .35rem; color: var(--muted); font-size: .75rem; }
-  .agent-card .chev { display: inline-block; margin-left: .35rem; transition: transform .15s ease; }
+  .agent-card .chev { display: inline-block; margin-left: .35rem; }
   .agent-card[open] .chev { transform: rotate(90deg); }
   .agent-runs { border-top: 1px solid var(--line); }
   /* Add agent sits at the TOP of Team, under the banner and above the cards. It was the last tile
@@ -729,15 +804,12 @@
   .why > summary::after {
     content: ""; width: .38rem; height: .38rem; margin-top: -.15rem;
     border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
-    transform: rotate(45deg); transition: transform .15s ease;
+    transform: rotate(45deg);
   }
   details.why[open] > summary::after { transform: rotate(225deg); margin-top: .2rem; }
   .why > summary:hover { text-decoration: underline; }
   .why > summary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; border-radius: 4px; }
   details.why > p { margin: -.3rem 0 .9rem; max-width: 62ch; color: var(--muted); }
-  @media (prefers-reduced-motion: reduce) {
-    .why > summary::after, .agent-card .chev { transition: none; }
-  }
 
   /* Light or dark. A real button with role="switch", so a screen reader says "Light theme, on" and
      a keyboard can reach it. The button is the full 2.75rem a thumb needs; the track and knob are
@@ -756,13 +828,9 @@
   .theme-switch::after {
     content: ""; position: absolute; left: .5rem; top: 50%; width: 1.1rem; height: 1.1rem;
     transform: translateY(-50%); border-radius: 50%; background: var(--muted);
-    transition: transform .2s ease;
   }
   .theme-switch[aria-checked="true"]::after { transform: translate(1.4rem, -50%); background: var(--warn); }
   .theme-switch:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
-  @media (prefers-reduced-motion: reduce) {
-    .theme-switch::after { transition: none; }
-  }
 
   /* Desktop: the same nav markup becomes a fixed LEFT sidebar, and the brand, captions, counts
      and profile hidden above come back. Below 48rem none of this exists. Pure CSS. */
@@ -842,15 +910,6 @@
      be spared - waits for a window at least 46rem tall. */
   @media (min-width: 48rem) and (min-height: 46rem) {
     .side-art { display: block; }
-  }
-  /* A slow drift across the picture, only for someone whose device has not asked for less motion.
-     Written as no-preference rather than switched off under reduce, so it cannot run there at all. */
-  @keyframes side-art-drift {
-    from { transform: scale(1.35) translateX(0); }
-    to { transform: scale(1.35) translateX(-9%); }
-  }
-  @media (min-width: 48rem) and (min-height: 46rem) and (prefers-reduced-motion: no-preference) {
-    .side-art img { animation: side-art-drift 30s ease-in-out infinite alternate; }
   }
 
   /* Agent identity colors — set inline from AGENT_PALETTE. Identity (who owns this) is a
@@ -1114,7 +1173,7 @@
   .found-group > summary::after {
     content: ""; width: .38rem; height: .38rem; margin: -.15rem .2rem 0 auto;
     border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
-    transform: rotate(45deg); transition: transform .15s ease;
+    transform: rotate(45deg);
   }
   .found-group[open] > summary::after { transform: rotate(225deg); margin-top: .2rem; }
   .found-group > summary:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; border-radius: 4px; }
@@ -1144,9 +1203,6 @@
   .found-note { margin: .45rem 0 .2rem; font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
   .card > .found-note { margin-top: .6rem; }
   .found-wall > .found-note { margin: .6rem 0 0; }
-  @media (prefers-reduced-motion: reduce) {
-    .found-group > summary::after { transition: none; }
-  }
 
   /* Hermes: a card per computer that runs it, at the top of Connections and on its own page. The
      state is the biggest thing on the card, in words; its colour repeats the word. A profile is a
@@ -1319,20 +1375,6 @@
   .voice-orb[data-state="speaking"] { background: var(--accent); color: var(--panel); }
   .voice-orb[data-state="error"] { border-color: var(--warn); color: var(--warn); }
   .voice-orb[aria-disabled="true"] { border-color: var(--line); color: var(--muted); cursor: default; }
-  /* The ring breathes while it listens, only for someone whose device has not asked for less motion:
-     written as no-preference, like the sidebar's picture, so it cannot run anywhere else. */
-  @keyframes voice-pulse {
-    0%, 100% { box-shadow: 0 0 0 .3rem color-mix(in srgb, var(--accent) 35%, transparent); }
-    50% { box-shadow: 0 0 0 .7rem color-mix(in srgb, var(--accent) 10%, transparent); }
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    .voice-orb[data-state="listening"] { animation: voice-pulse 1.8s ease-in-out infinite; }
-    /* While it speaks, the glow follows how loud the reply really is: --voice-level, 0 to 1, which
-       the page writes only on a device like this one (voiceLevel). */
-    .voice-orb[data-state="speaking"] {
-      box-shadow: 0 0 0 calc(.15rem + var(--voice-level, 0) * .75rem) color-mix(in srgb, var(--accent) 30%, transparent), var(--shadow);
-    }
-  }
   .voice-sheet {
     width: 100%; max-height: min(60vh, 28rem); overflow-y: auto; margin: 0; padding: .9rem 1rem;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
@@ -1358,6 +1400,37 @@
   /* From 1024px the sheet is docked beside the orb at a reading width. */
   @media (min-width: 64rem) {
     .voice-sheet { width: 22rem; }
+  }
+
+  /* Motion - every moving rule on the board, and nowhere else (plan 2026-10-10, section 3).
+     One block, for someone whose device has not asked for less motion: written this way round, a
+     device that asks for less never meets a moving rule, rather than meeting one and a second rule
+     that has to switch it off. At the END of the sheet, because a media query adds no specificity and
+     these override rules above. Under reduce nothing here exists, and every state still differs by
+     shape and words. tests/motion.test.mjs holds all of this. */
+  @media (prefers-reduced-motion: no-preference) {
+    .agent-card .chev, .why > summary::after, .found-group > summary::after { transition: transform var(--dur-1) var(--ease-std); }
+    .theme-switch::after { transition: transform var(--dur-2) var(--ease-std); }
+
+    /* A slow drift across the sidebar's picture, only where the picture shows at all. */
+    @keyframes side-art-drift {
+      from { transform: scale(1.35) translateX(0); }
+      to { transform: scale(1.35) translateX(-9%); }
+    }
+    @media (min-width: 48rem) and (min-height: 46rem) {
+      .side-art img { animation: side-art-drift var(--dur-drift) ease-in-out infinite alternate; }
+    }
+
+    /* The orb's ring breathes while it listens. While it speaks, the glow follows how loud the reply
+       really is: --voice-level, 0 to 1, which the page writes only on a device like this one. */
+    @keyframes voice-pulse {
+      0%, 100% { box-shadow: 0 0 0 .3rem color-mix(in srgb, var(--accent) 35%, transparent); }
+      50% { box-shadow: 0 0 0 .7rem color-mix(in srgb, var(--accent) 10%, transparent); }
+    }
+    .voice-orb[data-state="listening"] { animation: voice-pulse var(--dur-ripple) ease-in-out infinite; }
+    .voice-orb[data-state="speaking"] {
+      box-shadow: 0 0 0 calc(.15rem + var(--voice-level, 0) * .75rem) color-mix(in srgb, var(--accent) 30%, transparent), var(--shadow);
+    }
   }
 </style>
 </head>

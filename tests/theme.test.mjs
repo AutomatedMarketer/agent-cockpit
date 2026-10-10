@@ -69,6 +69,40 @@ test('the light theme sets every token the dark one does, the same values in bot
     'the light theme does not set exactly the tokens the dark one does - a missing one stays dark on a light page')
 })
 
+/* The look-and-feel tokens (plan 2026-10-10, section 2). Colour-bearing ones - shadows, the orb's
+   state colours, the tile letter and the plain mark - sit in every theme block; the test above
+   holds the blocks to the same keys and the two light copies to the same values. The rest - space,
+   type, radius, motion - do not change with the theme, so they sit once in the unconditional
+   :root that also holds --radius. */
+const COLOUR_TOKENS = ['--elev-1', '--elev-2', '--elev-3', '--orb-idle', '--orb-listen', '--orb-think', '--orb-speak', '--orb-error', '--tile-ink', '--mark-mono']
+const PLAIN_TOKENS = [
+  '--space-1', '--space-2', '--space-3', '--space-4', '--space-5', '--space-6', '--space-7',
+  '--fs-label', '--fs-meta', '--fs-small', '--fs-body', '--fs-h2', '--fs-display', '--fs-number',
+  '--fw-display', '--fw-number', '--track-display',
+  '--radius', '--radius-lg', '--radius-sm',
+  '--dur-1', '--dur-2', '--dur-3', '--ease-out', '--ease-std'
+]
+
+test('every look-and-feel token exists: colour ones in each theme block, the rest once in the plain :root', () => {
+  const { dark, byOs, byChoice } = tokenBlocks()
+  for (const [name, block] of [['dark', dark], ['light by the phone', byOs], ['light by choice', byChoice]]) {
+    const set = declarations(block)
+    for (const token of COLOUR_TOKENS) assert.ok(set[token], `${token} is not set in the ${name} block`)
+  }
+  const plain = cssRules().filter((rule) => !rule.inMedia && rule.selector === ':root' && rule.at !== dark.at)
+  assert.equal(plain.length, 1, 'expected one plain :root block beside the dark tokens')
+  const set = declarations(plain[0])
+  for (const token of PLAIN_TOKENS) assert.ok(set[token], `${token} is not in the plain :root block`)
+  // The orb's states use hues the board already has, so every one of them is already measured above.
+  for (const token of COLOUR_TOKENS.filter((one) => one.startsWith('--orb-'))) {
+    assert.match(declarations(dark)[token], /^var\(--(accent|ok|warn|kpi-agents)\)$/, `${token} is not one of the board's own hues`)
+  }
+  // Radius: the plan's own values, not a copied 19px.
+  assert.equal(set['--radius'], '18px')
+  assert.equal(set['--radius-lg'], '22px')
+  assert.equal(set['--radius-sm'], '11px')
+})
+
 // --- contrast, measured -------------------------------------------------------------------------
 
 const channel = (value) => {
