@@ -1539,9 +1539,12 @@
   .voice-order-pick { margin: 0 0 .5rem; font-size: .8125rem; color: var(--muted); }
   .voice-order-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .25rem 0 .5rem; }
   .voice-order-yes, .voice-order-no { flex: 1 1 8rem; justify-content: center; }
-  .voice-order-yes { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--panel)); }
+  /* Yes is the one filled button on the card: the thing to press, at a glance. */
+  button.fire.voice-order-yes { border-color: var(--accent); background: var(--accent); color: var(--panel); }
   .voice-order-say, .voice-order-time { margin: 0 0 .35rem; font-size: .8125rem; color: var(--muted); }
   .voice-order-note { margin: 0; font-size: .8125rem; }
+  /* While a card waits, the sheet may grow, so on a phone its Yes is in sight without scrolling. */
+  .voice-sheet:has(.voice-order:not([hidden])) { max-height: min(80vh, 38rem); }
   .voice-order-note:empty { display: none; }
   .voice-mode { margin: 0 0 .5rem; font-size: .8125rem; }
   .voice-toggle { margin: 0 .5rem .5rem 0; }

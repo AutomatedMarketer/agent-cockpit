@@ -4556,9 +4556,6 @@ function voiceDockHtml() {
     : ''
   return `<section class="voice-sheet" id="voice-sheet" aria-label="Talking to ${name}" hidden>
       <p class="voice-state" id="voice-state" role="status" aria-live="polite"></p>
-      <p class="voice-line"><span class="voice-who">You</span><span class="voice-said" id="voice-you"></span></p>
-      <p class="voice-line"><span class="voice-who" id="voice-who">${name}</span><span class="voice-said" id="voice-said"></span></p>
-      <p class="voice-note" id="voice-note" role="status" aria-live="polite"></p>
       <section class="voice-order" id="voice-order" role="group" aria-labelledby="voice-order-title" hidden>
         <h3 class="voice-order-title" id="voice-order-title"></h3>
         <p class="voice-order-what" id="voice-order-what"></p>
@@ -4575,6 +4572,9 @@ function voiceDockHtml() {
         <p class="voice-order-time" id="voice-order-time" aria-hidden="true"></p>
         <p class="voice-order-note" id="voice-order-note" role="status" aria-live="polite"></p>
       </section>
+      <p class="voice-line"><span class="voice-who">You</span><span class="voice-said" id="voice-you"></span></p>
+      <p class="voice-line"><span class="voice-who" id="voice-who">${name}</span><span class="voice-said" id="voice-said"></span></p>
+      <p class="voice-note" id="voice-note" role="status" aria-live="polite"></p>
       <p class="voice-cost" id="voice-cost"></p>
       <p class="voice-mouth">${escapeHtml(mouth)}</p>
       ${mode}
@@ -4650,6 +4650,9 @@ const voiceUi = {
     el('voice-order-note').textContent = ''
     this.orderBusy(false)
     box.hidden = !card
+    // The card is at the top of the sheet; a sheet scrolled down a long conversation is put back
+    // there, so Yes is in sight on a phone. The focus stays where it was.
+    if (card) el('voice-sheet').scrollTop = 0
   },
   orderTime(seconds) { el('voice-order-time').textContent = `${seconds} s to answer` },
   // Jev's pick: the picker set to it, and a line saying who picked it and how sure it was.

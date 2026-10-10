@@ -166,14 +166,19 @@ test('the order card is in the sheet, hidden until there is an order: a group wi
   assert.match(markup, /<p class="voice-order-note" id="voice-order-note" role="status" aria-live="polite"><\/p>/)
   // The countdown is not read out every second.
   assert.match(markup, /<p class="voice-order-time" id="voice-order-time" aria-hidden="true"><\/p>/)
-  assert.ok(markup.indexOf('id="voice-order"') < markup.indexOf('id="voice-stop"'), 'the card is under Stop')
+  // At the top of the sheet, under the state line: on a phone the sheet scrolls, and Yes must not be
+  // below the fold of it.
+  assert.ok(markup.indexOf('id="voice-state"') < markup.indexOf('id="voice-order"'), 'the card is above the state line')
+  assert.ok(markup.indexOf('id="voice-order"') < markup.indexOf('id="voice-you"'), 'the card is under the conversation, where a phone has to scroll to it')
 })
 
 test('the card shows exactly what will be sent, as text: never markup, never the focus', async () => {
   const page = await boot(brandAnswer({ voice: VOICE_ON }), { expose: ['voiceUi'] })
   const { voiceUi } = page.exposed
+  page.node('voice-sheet').scrollTop = 480
   voiceUi.order(CARD)
   assert.equal(page.node('voice-order').hidden, false)
+  assert.equal(page.node('voice-sheet').scrollTop, 0, 'a card appeared out of sight in a scrolled sheet')
   assert.equal(page.node('voice-order-title').textContent, 'Send to the team?')
   assert.equal(page.node('voice-order-what').textContent, CARD.what)
   for (const [id, words] of [['voice-order-text', CARD.text], ['voice-order-details', CARD.details]]) {
@@ -232,6 +237,13 @@ test('the card fits a phone: its buttons wrap and are thumb-sized, long words br
   assert.equal(valuesOf('.voice-order-details')['overflow-wrap'], 'anywhere')
   assert.ok(rem(valuesOf('.voice-order-owner')['min-height']) >= 2.75, 'the owner picker is under a thumb\'s height')
   assert.equal(valuesOf('.voice-order-owner')['max-width'], '100%')
+  // Yes is the one filled button, and its rule outranks the board's shared button rule (button.fire),
+  // which a bare .voice-order-yes would lose to.
+  const yes = rules.find((rule) => rule.selector === 'button.fire.voice-order-yes' && !rule.inMedia)
+  assert.match(yes?.body ?? '', /background:\s*var\(--accent\)/)
+  // A sheet holding a card may grow, so Yes is not below its fold on a phone.
+  const grown = rules.find((rule) => rule.selector === '.voice-sheet:has(.voice-order:not([hidden]))' && !rule.inMedia)
+  assert.match(grown?.body ?? '', /max-height:\s*min\(80vh, 38rem\)/)
   const orderRules = rules.filter((rule) => /\.voice-order/.test(rule.selector))
   assert.ok(orderRules.length >= 5)
   for (const rule of orderRules) {
