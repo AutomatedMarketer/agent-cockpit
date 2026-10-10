@@ -1520,6 +1520,29 @@
   .voice-note { margin: 0 0 .5rem; font-size: .8125rem; }
   .voice-note:empty { display: none; }
   .voice-stop { margin-top: .25rem; }
+  /* An order the assistant proposed, waiting for the owner's yes. One column at any width; the two
+     buttons wrap rather than squeeze, and a long title breaks rather than pushing the sheet sideways. */
+  .voice-order {
+    margin: 0 0 .75rem; padding: .75rem .85rem; border: 1px solid var(--accent);
+    border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  }
+  .voice-order-title { margin: 0 0 .35rem; font-size: 1rem; font-weight: 600; }
+  .voice-order-what { margin: 0 0 .5rem; font-size: .8125rem; color: var(--muted); }
+  .voice-order-text { margin: 0 0 .35rem; font-weight: 600; overflow-wrap: anywhere; }
+  .voice-order-details { margin: 0 0 .5rem; font-size: .875rem; overflow-wrap: anywhere; white-space: pre-line; }
+  .voice-order-for { display: block; margin: .25rem 0; font-size: .8125rem; color: var(--muted); }
+  .voice-order-owner {
+    display: block; width: 100%; max-width: 100%; min-height: 2.9rem; margin: 0 0 .5rem; padding: .5rem .6rem;
+    font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  }
+  .voice-order-owner[hidden] { display: none; }
+  .voice-order-pick { margin: 0 0 .5rem; font-size: .8125rem; color: var(--muted); }
+  .voice-order-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .25rem 0 .5rem; }
+  .voice-order-yes, .voice-order-no { flex: 1 1 8rem; justify-content: center; }
+  .voice-order-yes { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--panel)); }
+  .voice-order-say, .voice-order-time { margin: 0 0 .35rem; font-size: .8125rem; color: var(--muted); }
+  .voice-order-note { margin: 0; font-size: .8125rem; }
+  .voice-order-note:empty { display: none; }
   .voice-mode { margin: 0 0 .5rem; font-size: .8125rem; }
   .voice-toggle { margin: 0 .5rem .5rem 0; }
   .voice-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }

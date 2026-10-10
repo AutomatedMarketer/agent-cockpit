@@ -4439,6 +4439,22 @@ function voiceDockHtml() {
       <p class="voice-line"><span class="voice-who">You</span><span class="voice-said" id="voice-you"></span></p>
       <p class="voice-line"><span class="voice-who" id="voice-who">${name}</span><span class="voice-said" id="voice-said"></span></p>
       <p class="voice-note" id="voice-note" role="status" aria-live="polite"></p>
+      <section class="voice-order" id="voice-order" role="group" aria-labelledby="voice-order-title" hidden>
+        <h3 class="voice-order-title" id="voice-order-title"></h3>
+        <p class="voice-order-what" id="voice-order-what"></p>
+        <p class="voice-order-text" id="voice-order-text" hidden></p>
+        <p class="voice-order-details" id="voice-order-details" hidden></p>
+        <label class="voice-order-for" id="voice-order-for-label" for="voice-order-for" hidden>Who does it</label>
+        <select class="voice-order-owner" id="voice-order-for"></select>
+        <p class="voice-order-pick" id="voice-order-pick" hidden></p>
+        <div class="voice-order-actions">
+          <button class="fire voice-order-yes" type="button" id="voice-order-yes">Yes, send it</button>
+          <button class="fire voice-order-no" type="button" id="voice-order-no">No</button>
+        </div>
+        <p class="voice-order-say" id="voice-order-say" hidden>Or say "yes".</p>
+        <p class="voice-order-time" id="voice-order-time" aria-hidden="true"></p>
+        <p class="voice-order-note" id="voice-order-note" role="status" aria-live="polite"></p>
+      </section>
       <p class="voice-cost" id="voice-cost"></p>
       <p class="voice-mouth">${escapeHtml(mouth)}</p>
       ${mode}
@@ -4483,7 +4499,44 @@ const voiceUi = {
   cost(text) { el('voice-cost').textContent = text },
   note(text) { el('voice-note').textContent = text },
   who(name) { el('voice-who').textContent = name },
-  level(value) { el('voice-orb')?.style.setProperty('--voice-level', String(value)) }
+  level(value) { el('voice-orb')?.style.setProperty('--voice-level', String(value)) },
+  // The order card: `card` is { heading, what, text, details, owners: [{ value, label }], owner, pick,
+  // sayYes }, or null to take it away. Every word is set as text; the owner list is built from option
+  // elements, never markup. Nothing here moves the focus: the person finds the card, it does not find them.
+  order(card) {
+    const box = el('voice-order')
+    const owners = card && Array.isArray(card.owners) ? card.owners : []
+    const set = (id, words) => {
+      el(id).textContent = words ?? ''
+      el(id).hidden = !words
+    }
+    el('voice-order-title').textContent = card?.heading ?? ''
+    el('voice-order-what').textContent = card?.what ?? ''
+    set('voice-order-text', card?.text)
+    set('voice-order-details', card?.details)
+    set('voice-order-pick', card?.pick)
+    const select = el('voice-order-for')
+    select.replaceChildren(...owners.map((owner) => {
+      const option = document.createElement('option')
+      option.value = owner.value
+      option.textContent = owner.label
+      return option
+    }))
+    select.value = card?.owner ?? ''
+    select.hidden = owners.length === 0
+    el('voice-order-for-label').hidden = owners.length === 0
+    el('voice-order-say').hidden = card?.sayYes !== true
+    el('voice-order-time').textContent = ''
+    el('voice-order-note').textContent = ''
+    this.orderBusy(false)
+    box.hidden = !card
+  },
+  orderTime(seconds) { el('voice-order-time').textContent = `${seconds} s to answer` },
+  orderNote(words) { el('voice-order-note').textContent = words },
+  orderBusy(busy) {
+    el('voice-order-yes').disabled = busy === true
+    el('voice-order-no').disabled = busy === true
+  }
 }
 
 // A tap on the orb: ends a live call, or starts one. A browser that cannot listen is told why.

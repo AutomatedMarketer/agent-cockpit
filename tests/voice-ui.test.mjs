@@ -139,6 +139,106 @@ test('the reply\'s loudness reaches the orb as --voice-level, a number and nothi
   assert.equal(page.node('voice-orb').style['--voice-level'], '0.42')
 })
 
+/* ---------- the order card ---------- */
+// Phone-first: one column in the sheet, two thumb-sized buttons, the exact words it will send. The
+// button is the only control that sends; the card never takes the focus, and Esc answers No.
+
+const CARD = {
+  heading: 'Send to the team?',
+  what: 'A task card goes to your team. It shows on the board about a minute after you say yes.',
+  text: '<img src=x onerror=alert(1)>Draft this week\'s newsletter',
+  details: '<script>bad()</script>Use the notes from Monday.',
+  owners: [{ value: '', label: 'Let the orchestrator choose' }, { value: 'research', label: '<b>Scout</b>' }],
+  owner: 'research',
+  pick: '',
+  sayYes: true
+}
+
+test('the order card is in the sheet, hidden until there is an order: a group with a heading, a Yes, a No and a polite note', async () => {
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { expose: ['voiceDockHtml'] })
+  const markup = page.exposed.voiceDockHtml()
+  assert.match(markup, /<section class="voice-order" id="voice-order" role="group" aria-labelledby="voice-order-title" hidden>/)
+  assert.match(markup, /<h3 class="voice-order-title" id="voice-order-title"><\/h3>/)
+  assert.match(markup, /<button class="fire voice-order-yes" type="button" id="voice-order-yes">Yes, send it<\/button>/)
+  assert.match(markup, /<button class="fire voice-order-no" type="button" id="voice-order-no">No<\/button>/)
+  assert.match(markup, /<label class="voice-order-for" id="voice-order-for-label" for="voice-order-for" hidden>/)
+  assert.match(markup, /<select class="voice-order-owner" id="voice-order-for"><\/select>/)
+  assert.match(markup, /<p class="voice-order-note" id="voice-order-note" role="status" aria-live="polite"><\/p>/)
+  // The countdown is not read out every second.
+  assert.match(markup, /<p class="voice-order-time" id="voice-order-time" aria-hidden="true"><\/p>/)
+  assert.ok(markup.indexOf('id="voice-order"') < markup.indexOf('id="voice-stop"'), 'the card is under Stop')
+})
+
+test('the card shows exactly what will be sent, as text: never markup, never the focus', async () => {
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { expose: ['voiceUi'] })
+  const { voiceUi } = page.exposed
+  voiceUi.order(CARD)
+  assert.equal(page.node('voice-order').hidden, false)
+  assert.equal(page.node('voice-order-title').textContent, 'Send to the team?')
+  assert.equal(page.node('voice-order-what').textContent, CARD.what)
+  for (const [id, words] of [['voice-order-text', CARD.text], ['voice-order-details', CARD.details]]) {
+    assert.equal(page.node(id).textContent, words)
+    assert.equal(page.node(id).innerHTML, '', `${id} was given markup`)
+    assert.equal(page.node(id).hidden, false)
+  }
+  const options = page.node('voice-order-for').children
+  assert.deepEqual(options.map((option) => [option.tagName, option.value, option.textContent]), [
+    ['OPTION', '', 'Let the orchestrator choose'], ['OPTION', 'research', '<b>Scout</b>']
+  ])
+  assert.ok(options.every((option) => option.innerHTML === ''), 'an agent name was put in as markup')
+  assert.equal(page.node('voice-order-for').value, 'research')
+  assert.equal(page.node('voice-order-for-label').hidden, false)
+  assert.equal(page.node('voice-order-say').hidden, false)
+  assert.equal(page.node('voice-order-yes').disabled, false)
+  for (const id of ['voice-order-yes', 'voice-order-no', 'voice-order-for', 'voice-order']) {
+    assert.equal(page.node(id).focused, 0, `${id} took the focus on its own`)
+  }
+  voiceUi.orderTime(37)
+  assert.equal(page.node('voice-order-time').textContent, '37 s to answer')
+  voiceUi.orderNote('Sending it…')
+  assert.equal(page.node('voice-order-note').textContent, 'Sending it…')
+  voiceUi.orderBusy(true)
+  assert.equal(page.node('voice-order-yes').disabled, true)
+  assert.equal(page.node('voice-order-no').disabled, true)
+  voiceUi.orderBusy(false)
+  assert.equal(page.node('voice-order-yes').disabled, false)
+})
+
+test('a run card has no owner to pick and no title line; "or say yes" shows only when a spoken yes can count; gone is gone', async () => {
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { expose: ['voiceUi'] })
+  const { voiceUi } = page.exposed
+  voiceUi.order({ heading: 'Run Morning intel?', what: 'Starts this job now, and uses one run of your plan.', text: '', details: '', owners: [], owner: '', pick: '', sayYes: false })
+  assert.equal(page.node('voice-order-title').textContent, 'Run Morning intel?')
+  assert.equal(page.node('voice-order-text').hidden, true)
+  assert.equal(page.node('voice-order-details').hidden, true)
+  assert.equal(page.node('voice-order-for-label').hidden, true)
+  assert.deepEqual(page.node('voice-order-for').children, [])
+  assert.equal(page.node('voice-order-say').hidden, true, '"or say yes" shown where only a tap can send')
+  voiceUi.order(CARD)
+  voiceUi.orderNote('Sent.')
+  voiceUi.order(null)
+  assert.equal(page.node('voice-order').hidden, true)
+  for (const id of ['voice-order-title', 'voice-order-what', 'voice-order-text', 'voice-order-details', 'voice-order-time', 'voice-order-note']) {
+    assert.equal(page.node(id).textContent, '', `${id} kept the last card's words`)
+  }
+  assert.deepEqual(page.node('voice-order-for').children, [])
+})
+
+test('the card fits a phone: its buttons wrap and are thumb-sized, long words break, colours are the board\'s tokens', () => {
+  const actions = valuesOf('.voice-order-actions')
+  assert.equal(actions.display, 'flex')
+  assert.equal(actions['flex-wrap'], 'wrap')
+  assert.equal(valuesOf('.voice-order-text')['overflow-wrap'], 'anywhere')
+  assert.equal(valuesOf('.voice-order-details')['overflow-wrap'], 'anywhere')
+  assert.ok(rem(valuesOf('.voice-order-owner')['min-height']) >= 2.75, 'the owner picker is under a thumb\'s height')
+  assert.equal(valuesOf('.voice-order-owner')['max-width'], '100%')
+  const orderRules = rules.filter((rule) => /\.voice-order/.test(rule.selector))
+  assert.ok(orderRules.length >= 5)
+  for (const rule of orderRules) {
+    assert.doesNotMatch(rule.body, /#[0-9a-f]{3,8}\b|rgb\(/i, `${rule.selector} uses a colour that is not a token`)
+  }
+})
+
 /* ---------- unavailable ---------- */
 
 test('a browser that cannot use a microphone shows the orb as unavailable, and a tap says why instead of failing', async () => {
