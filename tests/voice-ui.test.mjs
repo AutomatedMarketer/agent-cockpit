@@ -430,3 +430,55 @@ test('a tap or Esc the call takes as a late interrupt does not end it', async ()
   for (const listener of page.documentListeners.filter((entry) => entry.type === 'keydown')) listener.handler({ key: 'Escape' })
   assert.deepEqual(late.stopped, [])
 })
+
+/* ---------- the orb as a lit sphere (look and feel, T5) ----------
+   Our own drawing, in CSS: a highlight from the top left, a body in the state's colour, an edge
+   that falls toward the page. Each state picks its colour from the orb tokens (hues the board
+   already has), and keeps the shape it always had - a broken ring while it connects or thinks, a
+   ring around it while it listens, filled while it speaks - so colour is never the only sign. */
+
+const orbRules = () => rules.filter((rule) => /\.voice-orb/.test(rule.selector))
+
+test('the orb is a lit sphere: highlight, body and edge, in its own --orb colour', () => {
+  const orb = valuesOf('.voice-orb')
+  assert.equal(orb['--orb'], 'var(--orb-idle)')
+  const layers = (orb.background ?? '').match(/radial-gradient\(/g) ?? []
+  assert.equal(layers.length, 3, 'the sphere is not three layers')
+  for (const token of ['--on-art', '--orb', '--bg']) assert.ok(orb.background.includes(`var(${token})`), `the sphere does not use ${token}`)
+  assert.match(orb['box-shadow'] ?? '', /var\(--elev-3\)/, 'the orb does not float')
+  assert.ok(orbRules().every((rule) => !/\b(white|black)\b|#[0-9a-f]{3,8}\b|rgba?\(/i.test(rule.body)), 'an orb rule writes a colour of its own')
+})
+
+test('each orb state sets its own colour from the orb tokens', () => {
+  const colourOf = (state) => Object.assign({}, ...unconditional(`.voice-orb[data-state="${state}"]`).map(declared))['--orb']
+  assert.equal(colourOf('listening'), 'var(--orb-listen)')
+  assert.equal(colourOf('connecting'), 'var(--orb-think)')
+  assert.equal(colourOf('thinking'), 'var(--orb-think)')
+  assert.equal(colourOf('speaking'), 'var(--orb-speak)')
+  assert.equal(colourOf('error'), 'var(--orb-error)')
+})
+
+test('the orb keeps its shapes: a broken ring for connecting and thinking, filled while it speaks', () => {
+  for (const state of ['connecting', 'thinking']) {
+    const ring = rules.filter((rule) => !rule.inMedia && rule.selector.split(',').map((one) => one.trim()).includes(`.voice-orb[data-state="${state}"]::before`))
+    assert.ok(ring.some((rule) => declared(rule)['border-style'] === 'dashed'), `${state} has lost its broken ring`)
+  }
+  const speaking = Object.assign({}, ...unconditional('.voice-orb[data-state="speaking"]').map(declared))
+  assert.match(speaking.background ?? '', /var\(--orb\) \d+%/, 'speaking is no longer filled')
+})
+
+test('the orb moves only by transform: it breathes, ripples, turns and swells with the reply, never resized', () => {
+  const moving = orbRules().filter((rule) => /prefers-reduced-motion: no-preference/.test(rule.condition ?? ''))
+  const body = moving.map((rule) => `${rule.selector} { ${rule.body} }`).join('\n')
+  assert.match(body, /data-state="idle"[^{]*\{[^}]*animation:\s*orb-breathe var\(--dur-breath\)/, 'idle does not breathe')
+  assert.match(body, /data-state="listening"\]::after \{[^}]*animation:\s*orb-ripple var\(--dur-ripple\)/, 'listening does not ripple')
+  assert.match(body, /data-state="thinking"\]::before \{[^}]*animation:\s*orb-turn var\(--dur-turn\)/, 'thinking does not turn')
+  const speaking = moving.filter((rule) => /data-state="speaking"/.test(rule.selector) && /transform/.test(rule.body))
+  assert.equal(speaking.length, 1, 'speaking does not swell with the reply')
+  assert.match(declared(speaking[0]).transform, /^scale\(calc\(1 \+ var\(--voice-level, 0\) \* \.09\)\)$/)
+  // The orb itself in a state - not its icon, which has a size of its own inside it.
+  const onTheOrb = (rule) => rule.selector.split(',').map((one) => one.trim()).some((one) => /^\.voice-orb(\[[^\]]+\]|:[\w-]+(\([^)]*\))?)+$/.test(one))
+  for (const rule of orbRules().filter(onTheOrb)) {
+    assert.ok(!('width' in declared(rule)) && !('height' in declared(rule)), `${rule.selector} resizes the orb, which moves the page around it`)
+  }
+})

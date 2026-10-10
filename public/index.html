@@ -1387,20 +1387,47 @@
      the Voice spend card and the footer can still be scrolled clear of it during a call. */
   .voice-on .wrap { padding-bottom: 5.5rem; }
   .voice-open .wrap { padding-bottom: calc(min(60vh, 28rem) + 6rem + env(safe-area-inset-bottom, 0px)); }
+  /* The orb is a lit sphere, drawn here in three layers: a highlight from the top left, a body in the
+     state's own colour (--orb, from the orb tokens), and an edge that falls toward the page. Its ring
+     is a layer of its own (::before), so a broken ring can turn without turning the microphone. */
   .voice-orb {
+    --orb: var(--orb-idle);
+    position: relative;
     width: 3.5rem; height: 3.5rem; min-width: 2.75rem; min-height: 2.75rem; padding: 0; flex: none;
     display: grid; place-items: center; border-radius: 50%; cursor: pointer;
-    border: 2px solid var(--accent); background: var(--panel); color: var(--accent); box-shadow: var(--shadow);
+    border: 0; color: var(--orb);
+    background:
+      radial-gradient(circle at 32% 26%, color-mix(in srgb, var(--on-art) 42%, transparent) 0, transparent 34%),
+      radial-gradient(circle at 50% 62%, color-mix(in srgb, var(--orb) 26%, var(--panel)) 0, transparent 72%),
+      radial-gradient(circle at 50% 50%, var(--panel) 48%, color-mix(in srgb, var(--orb) 22%, var(--bg)) 100%);
+    box-shadow: var(--elev-3), 0 0 1.25rem -.25rem color-mix(in srgb, var(--orb) 45%, transparent);
   }
-  .voice-orb .ico { width: 1.5rem; height: 1.5rem; }
+  .voice-orb::before {
+    content: ""; position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+    border: 2px solid var(--orb);
+  }
+  .voice-orb .ico { position: relative; width: 1.5rem; height: 1.5rem; }
   .voice-orb:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
-  /* Each state has a shape of its own as well as its words, so colour is never the only sign: a
-     broken ring while it connects or thinks, a still ring while it listens, filled while it speaks. */
-  .voice-orb[data-state="connecting"], .voice-orb[data-state="thinking"] { border-style: dashed; }
-  .voice-orb[data-state="listening"] { box-shadow: 0 0 0 .3rem color-mix(in srgb, var(--accent) 35%, transparent); }
-  .voice-orb[data-state="speaking"] { background: var(--accent); color: var(--panel); }
-  .voice-orb[data-state="error"] { border-color: var(--warn); color: var(--warn); }
-  .voice-orb[aria-disabled="true"] { border-color: var(--line); color: var(--muted); cursor: default; }
+  /* Each state has a shape of its own as well as its words and its colour, so colour is never the
+     only sign: a broken ring while it connects or thinks, a ring around it while it listens, filled
+     while it speaks. */
+  .voice-orb[data-state="connecting"] { --orb: var(--orb-think); }
+  .voice-orb[data-state="thinking"] { --orb: var(--orb-think); }
+  .voice-orb[data-state="connecting"]::before, .voice-orb[data-state="thinking"]::before { border-style: dashed; }
+  .voice-orb[data-state="listening"] {
+    --orb: var(--orb-listen);
+    box-shadow: 0 0 0 .3rem color-mix(in srgb, var(--orb) 35%, transparent), var(--elev-3);
+  }
+  .voice-orb[data-state="speaking"] {
+    --orb: var(--orb-speak);
+    color: var(--panel);
+    background:
+      radial-gradient(circle at 32% 26%, color-mix(in srgb, var(--on-art) 50%, transparent) 0, transparent 36%),
+      radial-gradient(circle at 50% 50%, var(--orb) 55%, color-mix(in srgb, var(--orb) 65%, var(--bg)) 100%);
+  }
+  .voice-orb[data-state="error"] { --orb: var(--orb-error); }
+  .voice-orb[aria-disabled="true"] { --orb: var(--muted); cursor: default; box-shadow: var(--elev-1); }
+  .voice-orb[aria-disabled="true"]::before { border-color: var(--line); }
   .voice-sheet {
     width: 100%; max-height: min(60vh, 28rem); overflow-y: auto; margin: 0; padding: .9rem 1rem;
     background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
@@ -1509,15 +1536,31 @@
       .side-art img { animation: side-art-drift var(--dur-drift) ease-in-out infinite alternate; }
     }
 
-    /* The orb's ring breathes while it listens. While it speaks, the glow follows how loud the reply
-       really is: --voice-level, 0 to 1, which the page writes only on a device like this one. */
-    @keyframes voice-pulse {
-      0%, 100% { box-shadow: 0 0 0 .3rem color-mix(in srgb, var(--accent) 35%, transparent); }
-      50% { box-shadow: 0 0 0 .7rem color-mix(in srgb, var(--accent) 10%, transparent); }
+    /* The orb. Idle, it breathes. Listening, a ring ripples out from it. Connecting or thinking,
+       its broken ring turns. Speaking, it swells and glows with how loud the reply really is:
+       --voice-level, 0 to 1, which the page writes only on a device like this one. An error is still.
+       Only transform and opacity move, so the page around it never shifts. */
+    @keyframes orb-breathe {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.035); }
     }
-    .voice-orb[data-state="listening"] { animation: voice-pulse var(--dur-ripple) ease-in-out infinite; }
+    @keyframes orb-ripple {
+      from { transform: scale(1); opacity: .55; }
+      to { transform: scale(1.55); opacity: 0; }
+    }
+    @keyframes orb-turn {
+      to { transform: rotate(1turn); }
+    }
+    .voice-orb[data-state="idle"]:not([aria-disabled="true"]) { animation: orb-breathe var(--dur-breath) ease-in-out infinite; }
+    .voice-orb[data-state="listening"]::after {
+      content: ""; position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+      border: 2px solid var(--orb); animation: orb-ripple var(--dur-ripple) var(--ease-out) infinite;
+    }
+    .voice-orb[data-state="connecting"]::before, .voice-orb[data-state="thinking"]::before { animation: orb-turn var(--dur-turn) linear infinite; }
     .voice-orb[data-state="speaking"] {
-      box-shadow: 0 0 0 calc(.15rem + var(--voice-level, 0) * .75rem) color-mix(in srgb, var(--accent) 30%, transparent), var(--shadow);
+      transform: scale(calc(1 + var(--voice-level, 0) * .09));
+      transition: transform var(--dur-press) linear;
+      box-shadow: 0 0 0 calc(.15rem + var(--voice-level, 0) * .75rem) color-mix(in srgb, var(--orb) 30%, transparent), var(--elev-3);
     }
   }
 </style>
