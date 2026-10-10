@@ -950,15 +950,78 @@ export function voiceToolAnswer(name, args, view) {
 }
 
 // --- the owner's yes ---
-// THE hook every later action goes through (voice orders, Phase 11). Only the person's own click on
-// the card, or Enter or Space on it, says yes: a real Event that the browser itself marks isTrusted.
-// Never the model's words, a tool's result, a page or an email the team read, a click a script made
-// (isTrusted is false on those), or an object merely shaped like an event. The owner's own spoken
-// "yes" will come through here too, from the transcript of THEIR audio only, and is not accepted yet.
+// One of the two ways an order card is answered yes (voice orders, Phase 11). Only the person's own
+// click on the card, or Enter or Space on it, says yes: a real Event that the browser itself marks
+// isTrusted. Never the model's words, a tool's result, a page or an email the team read, a click a
+// script made (isTrusted is false on those), or an object merely shaped like an event. The other way is
+// the owner's own spoken yes, judged by spokenYesCounts below from the transcript of THEIR audio only.
 export function confirmsYes(event) {
   if (typeof Event !== 'function' || !(event instanceof Event) || event.isTrusted !== true) return false
   if (event.type === 'click') return true
   return event.type === 'keydown' && (event.key === 'Enter' || event.key === ' ')
+}
+
+// --- the owner's spoken yes ---
+// Nuno's rule (2026-10-10): a spoken yes counts only after the card appears, within 60 s, as a plain
+// yes, with the microphone open and no reply playing. A trusted tap always works. In full, every one of:
+//  1. the utterance began after the card appeared (the page matches the turn by its item id);
+//  2. within CONFIRM_WINDOW_MS of the card appearing, and the card is still open;
+//  3. the whole utterance is a plain yes (plainYes): a short affirmative and nothing else;
+//  4. the microphone was on for all of it (speakers mode rests it while a reply plays), no reply sound
+//     played during it, and the last one ended at least YES_QUIET_BEFORE_MS before it began - 300 ms of
+//     tail, 300 ms of the server's prefix padding and about 500 ms of event delay, to be tuned live;
+//  5. the echo guard did not take the turn for the assistant's own voice;
+//  6. sending needs no key typed in: a typed key needs hands, so then only a tap can send.
+// The answer: 'yes' sends; 'no' (a plain no, under the same echo rules) closes the card and sends
+// nothing; 'unclear' is a yes-sounding turn that did not count - the card stays and the panel asks
+// for a tap; null is a turn that had nothing to do with the card. It is never sent on a guess.
+export const CONFIRM_WINDOW_MS = 60_000
+export const YES_QUIET_BEFORE_MS = 1100
+// After a send, the same order proposed again within this long is not shown again: it is on its way.
+export const DOUBLE_SEND_MS = 15_000
+
+// The utterance as words: lower case, no punctuation, single spaces. Apostrophes stay ("don't").
+const spokenWords = (text) => (typeof text === 'string'
+  ? text.toLowerCase().replace(/[‘’]/g, "'").replace(/[^a-z' ]+/g, ' ').replace(/\s+/g, ' ').trim()
+  : '')
+const YES_UNITS = ['yes', 'yeah', 'yep', 'yup', 'sure', 'confirm', 'do it', 'go ahead', 'send it', 'go for it']
+const NO_UNITS = ['no', 'nope', 'nah', 'cancel', 'cancel it', "don't", 'do not', "don't send it", 'not now', 'never mind', 'stop']
+const POLITE = ['please', 'thanks', 'thank you']
+const SAID_MOST_WORDS = 5
+
+// Whether the words are made only of these units (and polite words), word by word from the start, with
+// at least one unit, and short.
+function onlyUnits(words, units) {
+  const tokens = words ? words.split(' ') : []
+  if (!tokens.length || tokens.length > SAID_MOST_WORDS) return false
+  const phrases = [...units, ...POLITE].map((unit) => unit.split(' ')).sort((a, b) => b.length - a.length)
+  let found = false
+  for (let at = 0; at < tokens.length;) {
+    const match = phrases.find((phrase) => phrase.every((word, n) => tokens[at + n] === word))
+    if (!match) return false
+    if (!POLITE.includes(match.join(' '))) found = true
+    at += match.length
+  }
+  return found
+}
+
+export const plainYes = (text) => onlyUnits(spokenWords(text), YES_UNITS)
+export const plainNo = (text) => onlyUnits(spokenWords(text), NO_UNITS)
+const soundsLikeYes = (text) => YES_UNITS.some((unit) => ` ${spokenWords(text)} `.includes(` ${unit} `))
+
+export function spokenYesCounts(heard) {
+  const { utterance, card, mic, sound, keyReady, now } = heard ?? {}
+  if (!utterance || typeof utterance !== 'object' || !card || typeof card !== 'object') return null
+  if (typeof utterance.transcript !== 'string' || card.open !== true) return null
+  const started = utterance.startedAt
+  if (!Number.isFinite(started) || !Number.isFinite(card.openedAt) || !Number.isFinite(now)) return null
+  if (started <= card.openedAt || now - card.openedAt > CONFIRM_WINDOW_MS) return null
+  const quiet = mic?.mutedDuring === false && sound?.playingDuring === false &&
+    (sound?.endedAt === null || (Number.isFinite(sound?.endedAt) && started - sound.endedAt >= YES_QUIET_BEFORE_MS))
+  const own = quiet && utterance.suspect === false
+  if (own && plainNo(utterance.transcript)) return 'no'
+  if (own && keyReady === true && plainYes(utterance.transcript)) return 'yes'
+  return soundsLikeYes(utterance.transcript) ? 'unclear' : null
 }
 
 // voice-page:end

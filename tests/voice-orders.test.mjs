@@ -10,7 +10,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { ordersConfig, ordersView, MAX_ORDER_JOBS } from '../api/_orders.js'
-import { ORDERS_OFF, voiceConfig, sessionFor } from '../api/_voice.js'
+import {
+  ORDERS_OFF, voiceConfig, sessionFor, plainYes, plainNo, spokenYesCounts,
+  CONFIRM_WINDOW_MS, YES_QUIET_BEFORE_MS, DOUBLE_SEND_MS
+} from '../api/_voice.js'
 import { makeHandler } from '../api/voice-session.js'
 import { STORE_ENV, NOON, connectedStore, asTheBoard, call } from './helpers/personalise-harness.mjs'
 import { OPENAI_KEY, SDP_OFFER, SDP_ANSWER } from './helpers/voice-fixtures.mjs'
@@ -210,4 +213,99 @@ test('the call\'s answer tells the page what orders it may show - behind the wri
   assert.equal(refused.statusCode, 401)
   assert.equal(refused.body.orders, undefined)
   assert.equal(refused.headers['Cache-Control'], 'private, no-store')
+})
+
+/* ---------- the owner's spoken yes ---------- */
+// Only the transcript of the owner's own microphone is ever judged here - never the model's words, a
+// tool's result, or anything the team read. And only when it cannot be the assistant's own voice.
+
+test('a plain yes is a short yes and nothing else; anything with a no, a wait or a "but" in it is not', () => {
+  for (const yes of ['yes', 'Yes.', 'YES!', 'yeah', 'yep', 'yup', 'sure', 'do it', 'go ahead', 'send it', 'confirm',
+    'yeah do it', 'Yes, please.', 'yes send it', 'sure, go ahead', 'yes yes']) {
+    assert.equal(plainYes(yes), true, yes)
+  }
+  for (const not of ['', '   ', 'no', 'yes but change the title', 'yes instead', 'actually yes', 'wait', 'yes wait',
+    'no yes', 'okay', 'ok', 'yes and also the brief', 'sure why not do the other one', 'yesterday', 'eyes',
+    'yes no', 'do not', 'yes, cancel that', 'it happened', 'yes, I mean no', 'go', 'yes '.repeat(6), 'please', 'thank you', 42, null]) {
+    assert.equal(plainYes(not), false, String(not))
+  }
+  for (const no of ['no', 'No.', 'nope', 'cancel', 'cancel it', "don't", 'do not', "don't send it", 'no thanks', 'not now', 'never mind', 'stop']) {
+    assert.equal(plainNo(no), true, no)
+  }
+  for (const not of ['yes', 'no but yes', 'nobody', 'wait', 'no, send it', '', null]) {
+    assert.equal(plainNo(not), false, String(not))
+  }
+})
+
+// One utterance and the card it answers, at the moment its words are known.
+const OPENED = 1_000_000
+const heard = (over = {}) => {
+  const base = {
+    utterance: { startedAt: OPENED + 5000, transcript: 'yes', suspect: false },
+    card: { openedAt: OPENED, open: true },
+    mic: { mutedDuring: false },
+    sound: { playingDuring: false, endedAt: OPENED + 2000 },
+    keyReady: true,
+    now: OPENED + 6000
+  }
+  return spokenYesCounts({
+    ...base,
+    ...over,
+    utterance: { ...base.utterance, ...over.utterance },
+    card: { ...base.card, ...over.card },
+    mic: { ...base.mic, ...over.mic },
+    sound: { ...base.sound, ...over.sound }
+  })
+}
+
+test('a spoken yes counts only after the card, within 60 s, as a plain yes, with the mic open and no reply sound in or just before it', () => {
+  assert.equal(CONFIRM_WINDOW_MS, 60_000)
+  assert.equal(YES_QUIET_BEFORE_MS, 1100)
+  assert.equal(DOUBLE_SEND_MS, 15_000)
+  assert.equal(heard(), 'yes')
+  assert.equal(heard({ utterance: { transcript: 'yeah do it' } }), 'yes')
+  // Started before the card appeared, or exactly with it: it was not an answer to the card.
+  assert.equal(heard({ utterance: { startedAt: OPENED - 1 } }), null)
+  assert.equal(heard({ utterance: { startedAt: OPENED } }), null)
+  // 60 s after the card appeared is the last moment.
+  assert.equal(heard({ utterance: { startedAt: OPENED + 59_000 }, now: OPENED + 60_000 }), 'yes')
+  assert.equal(heard({ utterance: { startedAt: OPENED + 59_000 }, now: OPENED + 60_100 }), null)
+  // The card already gone - sent, refused, expired or replaced.
+  assert.equal(heard({ card: { open: false } }), null)
+  // The microphone rested during it (speakers mode): part of it was never heard.
+  assert.equal(heard({ mic: { mutedDuring: true } }), 'unclear')
+  // A reply's sound playing during it, or ended 1.0 s before it began: it may be the assistant's voice.
+  assert.equal(heard({ sound: { playingDuring: true } }), 'unclear')
+  assert.equal(heard({ sound: { endedAt: OPENED + 4000 } }), 'unclear')
+  assert.equal(heard({ sound: { endedAt: OPENED + 3800 } }), 'yes', '1.2 s of quiet before it')
+  assert.equal(heard({ sound: { endedAt: null } }), 'yes', 'no reply has played at all')
+  assert.equal(heard({ sound: { endedAt: undefined } }), 'unclear', 'not knowing when the sound ended is not quiet')
+  // The echo guard flagged the turn.
+  assert.equal(heard({ utterance: { suspect: true } }), 'unclear')
+  // Sending needs a key prompt the person must type: only a tap can do that.
+  assert.equal(heard({ keyReady: false }), 'unclear')
+  // Not a plain yes: the card stays, and the panel asks for a tap.
+  assert.equal(heard({ utterance: { transcript: 'yes but make it Friday' } }), 'unclear')
+  // Nothing to do with the card at all.
+  assert.equal(heard({ utterance: { transcript: 'what is due today' } }), null)
+  assert.equal(heard({ utterance: { transcript: '' } }), null)
+})
+
+test('a plain no closes the card under the same echo rules - and never sends', () => {
+  assert.equal(heard({ utterance: { transcript: 'no' } }), 'no')
+  assert.equal(heard({ utterance: { transcript: 'cancel it' }, keyReady: false }), 'no', 'no needs no key')
+  assert.equal(heard({ utterance: { transcript: 'no' }, sound: { playingDuring: true } }), null, 'its own "no" closed the card')
+  assert.equal(heard({ utterance: { transcript: 'no' }, card: { open: false } }), null)
+})
+
+test('nothing but a whole utterance object is judged: the model\'s text, a tool result or a bare word never counts', () => {
+  for (const notHeard of [undefined, null, 'yes', { transcript: 'yes' }, { utterance: 'yes' }, { utterance: { transcript: 'yes' } }]) {
+    assert.equal(spokenYesCounts(notHeard), null, JSON.stringify(notHeard))
+  }
+  // A transcript that is not text.
+  assert.equal(heard({ utterance: { transcript: { text: 'yes' } } }), null)
+  assert.equal(heard({ utterance: { transcript: ['yes'] } }), null)
+  // Times that are not times.
+  assert.equal(heard({ utterance: { startedAt: 'soon' } }), null)
+  assert.equal(heard({ card: { openedAt: Number.NaN } }), null)
 })
