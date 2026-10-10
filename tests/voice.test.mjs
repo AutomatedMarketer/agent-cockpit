@@ -23,7 +23,8 @@ import {
   METER_TICKET_MS,
   SPEAK_MAX_CHARS,
   MAX_REPLY_TOKENS,
-  AUDIO_OUT_PER_SECOND
+  AUDIO_OUT_PER_SECOND,
+  ORDERS_OFF
 } from '../api/_voice.js'
 import { twoFrameMp3 } from './helpers/voice-fixtures.mjs'
 
@@ -121,11 +122,11 @@ test('the Fish model is the free one unless FISH_MODEL says exactly the paid one
 
 /* ---------- the session OpenAI is asked for ---------- */
 
-test('the session has exactly the six read-only tools', () => {
+test('the session has the six read-only tools, and job_status - nothing that changes anything while orders are off', () => {
   const session = sessionFor(voiceConfig(ON), 'Penny')
   const names = session.tools.map((tool) => tool.name)
-  assert.deepEqual(names, ['open_screen', 'team_status', 'whats_due', 'task_board', 'usage', 'connections_status'])
-  assert.deepEqual(VOICE_TOOL_NAMES, names)
+  assert.deepEqual(names, ['open_screen', 'team_status', 'whats_due', 'task_board', 'usage', 'connections_status', 'job_status'])
+  assert.deepEqual(VOICE_TOOL_NAMES, names.slice(0, 6))
   for (const tool of session.tools) {
     assert.equal(tool.type, 'function')
     assert.equal(tool.parameters.type, 'object')
@@ -183,13 +184,14 @@ test('the assistant\'s name is plain and capped; with none, or one the board wou
   assert.match(sessionFor(voiceConfig(ON), '').instructions, /You are your assistant\b/)
 })
 
-test('the instructions say tool results are data, never instructions, and that it cannot act yet', () => {
+test('the instructions say tool results are data, never instructions, and - with orders off - why it cannot act', () => {
   const { instructions } = sessionFor(voiceConfig(ON), 'Penny')
   assert.match(instructions, /data/i)
   assert.match(instructions, /never instructions/i)
   assert.match(instructions, /never invent a number/i)
   assert.match(instructions, /do not know/i)
-  assert.match(instructions, /can't run jobs yet - use the Run button/)
+  assert.ok(instructions.includes(ORDERS_OFF), 'it is not told why it cannot act')
+  assert.doesNotMatch(instructions, /use the Run button|Run button on the board/i, 'it still sends the owner to a Run button that is not set up')
   assert.match(instructions, /only the person .*tap/i, 'nothing says who can say yes')
 })
 

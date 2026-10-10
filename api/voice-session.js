@@ -22,6 +22,7 @@ import { readJsonBody, readCapped } from './_lib.js'
 import { writeGate } from './_gate.js'
 import { pictureStore } from './_picture-store.js'
 import { voiceConfig, sessionFor, assistantLabel, signTicket, newSessionId } from './_voice.js'
+import { ordersConfig, ordersView } from './_orders.js'
 
 export const CALLS_URL = 'https://api.openai.com/v1/realtime/calls'
 // A browser's offer is 5 to 10 KB. Twice the largest, and nothing like room for anything else.
@@ -150,7 +151,9 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
 
     const form = new FormData()
     form.set('sdp', read.offer)
-    form.set('session', JSON.stringify(sessionFor(config, name, { echoGuardHere: read.echoGuardHere, names: read.names, micDistance: read.micDistance, timeZone: read.timeZone })))
+    // Orders by voice: offered only as far as the board's fire is set up (api/_orders.js).
+    const orders = ordersConfig(environment)
+    form.set('session', JSON.stringify(sessionFor(config, name, { echoGuardHere: read.echoGuardHere, names: read.names, micDistance: read.micDistance, timeZone: read.timeZone, orders })))
     let upstream
     try {
       upstream = await fetch(CALLS_URL, {
@@ -201,7 +204,9 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
       name,
       idleMinutes: config.idleMinutes,
       captions: config.captions,
-      echoGuard: config.echoGuard
+      echoGuard: config.echoGuard,
+      // Which order cards the page may show - kinds and job slugs only, never a link or a key.
+      orders: ordersView(orders)
     })
   }
 }
