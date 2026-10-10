@@ -21,7 +21,8 @@
 //
 // Every answer carries `private, no-store`.
 
-import { viewGate, writeGate, readJsonBody } from './_lib.js'
+import { readJsonBody } from './_lib.js'
+import { viewGate, writeGate } from './_gate.js'
 import {
   pictureStore,
   failureAnswer,
@@ -156,7 +157,10 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
       response.status(405).json({ error: 'GET to read the voice meter, POST { "reports": [...] } to add to it.' })
       return
     }
-    const denied = method === 'GET' ? viewGate(request, environment) : writeGate(request, environment)
+    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
+    const denied = method === 'GET'
+      ? await viewGate(request, environment, { store: pictures })
+      : await writeGate(request, environment, 'application/json', { store: pictures })
     if (denied) {
       const { status, ...answer } = denied
       response.status(status).json(answer)
@@ -164,7 +168,6 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
     }
     const moment = now()
     const context = { env: environment, now: moment }
-    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
 
     if (method === 'GET') {
       if (!pictures) {

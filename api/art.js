@@ -19,7 +19,8 @@
 // - A version is never overwritten, so its answer can be cached forever - privately, because it
 //   sits behind the view key and must not be kept by a shared cache.
 
-import { viewGate, parseSlot, sniffImage } from './_lib.js'
+import { parseSlot, sniffImage } from './_lib.js'
+import { viewGate } from './_gate.js'
 import { pictureStore, isPictureVersion, NOT_CONNECTED, failureAnswer } from './_picture-store.js'
 
 const TYPES = { webp: 'image/webp', jpeg: 'image/jpeg', png: 'image/png' }
@@ -49,7 +50,8 @@ export function makeHandler({ store, env, loadSdk } = {}) {
       return
     }
 
-    const denied = viewGate(request, environment)
+    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
+    const denied = await viewGate(request, environment, { store: pictures })
     if (denied) {
       response.status(denied.status).json({ error: denied.error })
       return
@@ -61,7 +63,6 @@ export function makeHandler({ store, env, loadSdk } = {}) {
       return
     }
 
-    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
     if (!pictures) {
       response.status(503).json({ error: NOT_CONNECTED })
       return

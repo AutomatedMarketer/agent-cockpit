@@ -18,7 +18,8 @@
 // not on the view key, so anything it kept here could be handed to somebody without one.
 
 import { createHash } from 'node:crypto'
-import { writeGate, readJsonBody, readCapped } from './_lib.js'
+import { readJsonBody, readCapped } from './_lib.js'
+import { writeGate } from './_gate.js'
 import { pictureStore } from './_picture-store.js'
 import { voiceConfig, sessionFor, assistantLabel, signTicket, newSessionId } from './_voice.js'
 
@@ -126,7 +127,8 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
       return
     }
 
-    const denied = writeGate(request, environment)
+    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
+    const denied = await writeGate(request, environment, 'application/json', { store: pictures })
     if (denied) {
       const { status, ...answer } = denied
       response.status(status).json(answer)
@@ -143,7 +145,6 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
       return
     }
 
-    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
     const name = assistantLabel(await nameFrom(pictures, nameWaitMs))
     const apiKey = environment.OPENAI_API_KEY
 

@@ -2,7 +2,7 @@
 // without bouncing the reader out to GitHub. Read-only, same token discipline as
 // api/state.js: the token stays on the server and never reaches the browser.
 
-import { viewGate } from './_lib.js'
+import { viewGate } from './_gate.js'
 
 const GITHUB = 'https://api.github.com'
 const ALLOWED_EXTENSIONS = /\.(md|txt|json|ya?ml)$/i
@@ -34,7 +34,7 @@ export default async function handler(request, response) {
     response.status(405).json({ error: 'GET only: this endpoint reads one file and never changes it.' })
     return
   }
-  const denied = viewGate(request)
+  const denied = await viewGate(request)
   if (denied) {
     response.status(denied.status).json({ error: denied.error })
     return

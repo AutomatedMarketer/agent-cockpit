@@ -1,9 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 
-// --- the read gate -----------------------------------------------------------------
-// Vercel's own "Standard Protection" exempts production domains, and closing that gap on
-// their side costs $150/month. This closes it in the app instead, for nothing: the two
-// read endpoints serve a private repo, so they answer nobody without the key.
+// --- comparing keys -----------------------------------------------------------------
+// Every key this board checks - the view key, the edit key, the fire key - goes through this one
+// compare. The gates themselves live in _gate.js.
 //
 // Hash both sides to a fixed length first so timingSafeEqual never throws on a length
 // mismatch - a plain length check would itself leak the key's length through timing.
@@ -15,34 +14,11 @@ export function keysMatch(provided, expected) {
   )
 }
 
-// Returns null when the request may proceed, or {status, error} to send back.
-// Closed is the default. A deployment with no VIEW_KEY refuses to serve rather than
-// serving a private repo to the open web - the failure mode has to be silence, not
-// exposure. PUBLIC_DASHBOARD=true is the deliberate, documented way out.
-export function viewGate(request, env = process.env) {
-  if (env.PUBLIC_DASHBOARD === 'true') return null
-  const expected = env.VIEW_KEY
-  if (!expected) {
-    return {
-      status: 503,
-      error:
-        'This dashboard is not configured. Set VIEW_KEY in your hosting environment and ' +
-        'redeploy, or set PUBLIC_DASHBOARD=true if this repo is genuinely public.'
-    }
-  }
-  const provided = request?.headers?.['x-view-key'] ?? request?.headers?.['X-View-Key']
-  if (!keysMatch(typeof provided === 'string' ? provided : '', expected)) {
-    return { status: 401, error: 'Missing or wrong view key. Send it in the x-view-key header.' }
-  }
-  return null
-}
-
-// PUBLIC_FIRE promises "same-origin only", so enforce it: browsers stamp cross-site calls
-// with Sec-Fetch-Site and Origin, and we refuse anything that does not look like our own
-// page. Best-effort by nature (non-browser clients forge headers freely) — which is why the
-// README still says to keep PUBLIC_FIRE deployments behind Vercel's own access control.
-// Lives here rather than in fire.js because the picture-store writes run the same check;
-// fire.js re-exports it, so there is still exactly one answer to "is this our own page".
+// "Did this come from the board's own page?" Browsers stamp cross-site calls with Sec-Fetch-Site
+// and Origin, and we refuse anything that does not look like our own page. Best-effort by nature
+// (non-browser clients forge headers freely) - which is why the README calls PUBLIC_FIRE a
+// convenience, not a security boundary. Every change, fire, and the sign-in all run it; fire.js
+// re-exports it, so there is exactly one answer to "is this our own page".
 export function isSameOriginRequest(headers = {}) {
   const fetchSite = String(headers['sec-fetch-site'] ?? '').toLowerCase()
   if (fetchSite) return fetchSite === 'same-origin'
@@ -60,55 +36,6 @@ export function isSameOriginRequest(headers = {}) {
   // No Sec-Fetch-Site and no Origin: not a cross-site browser call (browsers always send
   // Origin on cross-origin POSTs). Curl-style clients land here — same as key mode allows.
   return true
-}
-
-// --- the write gate ----------------------------------------------------------------
-// The board's only write power is over its own picture store (spec 5c): pictures, names, the
-// art style. Never the business repo - the GitHub token stays read-only. Even so, a write is
-// held to more than a read, in this order, and the order is part of the contract: a stranger
-// with no key learns only that a key is missing, never which later check they would also fail.
-//
-// 1. The view gate. Anyone who can read the board is, by default, trusted to dress it: they can
-//    already read the business repo, and the worst a write does is change pictures the owner sees.
-// 2. EDIT_KEY, when set, so an owner can share a read-only board. When the board is open to
-//    everyone (PUBLIC_DASHBOARD=true) there is no first key at all, so writes stay off until
-//    EDIT_KEY is set - otherwise anyone with the URL could spend the owner's OpenAI money.
-// 3. Same origin, so another site's page cannot ride a viewer's browser into a write.
-// 4. The exact body type the endpoint reads. text/plain, urlencoded and multipart are what a
-//    cross-site form can send without the browser asking us first; JSON and octet-stream make
-//    the browser ask (a CORS preflight), and this board never answers yes.
-//
-// Returns null when the write may go ahead, or {status, error, needs?} to send back. `needs`
-// is how the page knows to ask for the edit key - and the only time it should.
-export function writeGate(request, env = process.env, bodyType = 'application/json') {
-  const denied = viewGate(request, env)
-  if (denied) return denied
-  const headers = request?.headers ?? {}
-  if (env.EDIT_KEY) {
-    const provided = headers['x-edit-key']
-    if (!keysMatch(typeof provided === 'string' ? provided : '', env.EDIT_KEY)) {
-      return {
-        status: 401,
-        needs: 'edit-key',
-        error: 'Missing or wrong edit key. Send it in the x-edit-key header.'
-      }
-    }
-  } else if (env.PUBLIC_DASHBOARD === 'true') {
-    return {
-      status: 403,
-      error:
-        'This board is open to everyone, so changes are off. Set EDIT_KEY in your hosting ' +
-        'environment and redeploy to turn them on.'
-    }
-  }
-  if (!isSameOriginRequest(headers)) {
-    return { status: 403, error: 'Changes are only accepted from the board itself.' }
-  }
-  const essence = String(headers['content-type'] ?? '').split(';')[0].trim().toLowerCase()
-  if (essence !== bodyType) {
-    return { status: 415, error: `Send this as Content-Type: ${bodyType}.` }
-  }
-  return null
 }
 
 // --- personalise: what a write is allowed to say -----------------------------------

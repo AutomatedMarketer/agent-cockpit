@@ -15,11 +15,11 @@ import {
   cleanName,
   cleanStyle,
   cleanDescription,
-  writeGate,
   isSameOriginRequest,
   isValidSlug,
   DEFAULT_ART_STYLE
 } from '../api/_lib.js'
+import { writeGate } from '../api/_gate.js'
 
 /* ---------- slots: which picture a request is about ---------- */
 
@@ -228,69 +228,69 @@ const ours = (extra = {}) => ({
   headers: { 'x-view-key': VIEW, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json', ...extra }
 })
 
-test('our own page, with the view key, may write', () => {
-  assert.equal(writeGate(ours(), { VIEW_KEY: VIEW }), null)
-  assert.equal(writeGate(ours({ 'content-type': 'application/json; charset=utf-8' }), { VIEW_KEY: VIEW }), null)
-  assert.equal(writeGate(ours({ 'content-type': 'application/octet-stream' }), { VIEW_KEY: VIEW }, 'application/octet-stream'), null)
+test('our own page, with the view key, may write', async () => {
+  assert.equal(await writeGate(ours(), { VIEW_KEY: VIEW }), null)
+  assert.equal(await writeGate(ours({ 'content-type': 'application/json; charset=utf-8' }), { VIEW_KEY: VIEW }), null)
+  assert.equal(await writeGate(ours({ 'content-type': 'application/octet-stream' }), { VIEW_KEY: VIEW }, 'application/octet-stream'), null)
 })
 
-test('no view key is a 401 before anything else is looked at', () => {
+test('no view key is a 401 before anything else is looked at', async () => {
   // Cross-site AND the wrong type AND no key: the answer is still the key, so a stranger
   // learns nothing about which of the later checks they would also have failed.
-  const denied = writeGate(
+  const denied = await writeGate(
     { headers: { 'sec-fetch-site': 'cross-site', 'content-type': 'text/plain' } },
     { VIEW_KEY: VIEW, EDIT_KEY: EDIT }
   )
   assert.equal(denied?.status, 401)
   assert.match(denied.error, /view key/i)
-  assert.equal(writeGate(ours({ 'x-view-key': 'wrong' }), { VIEW_KEY: VIEW })?.status, 401)
-  assert.equal(writeGate(ours(), {})?.status, 503, 'an unconfigured board is closed for writes as well as reads')
+  assert.equal((await writeGate(ours({ 'x-view-key': 'wrong' }), { VIEW_KEY: VIEW }))?.status, 401)
+  assert.equal((await writeGate(ours(), {}))?.status, 503, 'an unconfigured board is closed for writes as well as reads')
 })
 
-test('a request from another site is a 403, even with the view key', () => {
-  assert.equal(writeGate(ours({ 'sec-fetch-site': 'cross-site' }), { VIEW_KEY: VIEW })?.status, 403)
-  assert.equal(writeGate(ours({ 'sec-fetch-site': 'same-site' }), { VIEW_KEY: VIEW })?.status, 403)
+test('a request from another site is a 403, even with the view key', async () => {
+  assert.equal((await writeGate(ours({ 'sec-fetch-site': 'cross-site' }), { VIEW_KEY: VIEW }))?.status, 403)
+  assert.equal((await writeGate(ours({ 'sec-fetch-site': 'same-site' }), { VIEW_KEY: VIEW }))?.status, 403)
   const fromElsewhere = { headers: { 'x-view-key': VIEW, origin: 'https://evil.example', host: 'board.example', 'content-type': 'application/json' } }
-  assert.equal(writeGate(fromElsewhere, { VIEW_KEY: VIEW })?.status, 403)
+  assert.equal((await writeGate(fromElsewhere, { VIEW_KEY: VIEW }))?.status, 403)
 })
 
-test('with EDIT_KEY set, a missing or wrong edit key is a 401 that asks for it', () => {
+test('with EDIT_KEY set, a missing or wrong edit key is a 401 that asks for it', async () => {
   for (const provided of [undefined, 'wrong', EDIT.toUpperCase(), '']) {
     const request = ours(provided === undefined ? {} : { 'x-edit-key': provided })
-    const denied = writeGate(request, { VIEW_KEY: VIEW, EDIT_KEY: EDIT })
+    const denied = await writeGate(request, { VIEW_KEY: VIEW, EDIT_KEY: EDIT })
     assert.equal(denied?.status, 401, `edit key ${JSON.stringify(provided)} must not pass`)
     assert.equal(denied.needs, 'edit-key', 'the page asks for the edit key only when this says so')
     assert.ok(!denied.error.includes(EDIT), 'the edit key is never echoed')
   }
-  assert.equal(writeGate(ours({ 'x-edit-key': EDIT }), { VIEW_KEY: VIEW, EDIT_KEY: EDIT }), null)
+  assert.equal(await writeGate(ours({ 'x-edit-key': EDIT }), { VIEW_KEY: VIEW, EDIT_KEY: EDIT }), null)
 })
 
-test('a board open to everyone refuses writes until EDIT_KEY is set', () => {
+test('a board open to everyone refuses writes until EDIT_KEY is set', async () => {
   // PUBLIC_DASHBOARD=true means anyone with the URL is past the view gate. Without a second
   // key, anyone with the URL could change the pictures and spend the owner's OpenAI money.
-  const denied = writeGate(ours({ 'x-view-key': undefined }), { PUBLIC_DASHBOARD: 'true' })
+  const denied = await writeGate(ours({ 'x-view-key': undefined }), { PUBLIC_DASHBOARD: 'true' })
   assert.equal(denied?.status, 403)
   assert.match(denied.error, /EDIT_KEY/)
   assert.equal(
-    writeGate(ours({ 'x-edit-key': EDIT }), { PUBLIC_DASHBOARD: 'true', EDIT_KEY: EDIT }),
+    await writeGate(ours({ 'x-edit-key': EDIT }), { PUBLIC_DASHBOARD: 'true', EDIT_KEY: EDIT }),
     null,
     'with EDIT_KEY set, the key holder can write'
   )
-  assert.equal(writeGate(ours(), { PUBLIC_DASHBOARD: 'true', EDIT_KEY: EDIT })?.status, 401)
+  assert.equal((await writeGate(ours(), { PUBLIC_DASHBOARD: 'true', EDIT_KEY: EDIT }))?.status, 401)
 })
 
-test('only the exact body type the endpoint reads gets through', () => {
+test('only the exact body type the endpoint reads gets through', async () => {
   // text/plain, urlencoded and multipart are the shapes another site's page can POST without
   // the browser asking us first. JSON and octet-stream make the browser ask - and we never say yes.
   for (const type of ['text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data; boundary=x', '', 'application/jsonx', 'image/webp']) {
-    assert.equal(writeGate(ours({ 'content-type': type }), { VIEW_KEY: VIEW })?.status, 415, `${JSON.stringify(type)} must be refused`)
+    assert.equal((await writeGate(ours({ 'content-type': type }), { VIEW_KEY: VIEW }))?.status, 415, `${JSON.stringify(type)} must be refused`)
   }
   assert.equal(
-    writeGate(ours({ 'content-type': 'application/json' }), { VIEW_KEY: VIEW }, 'application/octet-stream')?.status,
+    (await writeGate(ours({ 'content-type': 'application/json' }), { VIEW_KEY: VIEW }, 'application/octet-stream'))?.status,
     415,
     'an upload endpoint does not take JSON'
   )
-  assert.equal(writeGate(ours({ 'content-type': undefined }), { VIEW_KEY: VIEW })?.status, 415)
+  assert.equal((await writeGate(ours({ 'content-type': undefined }), { VIEW_KEY: VIEW }))?.status, 415)
 })
 
 test('the same-origin check lives in _lib.js and fire.js uses that one', async () => {

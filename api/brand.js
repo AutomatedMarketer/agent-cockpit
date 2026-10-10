@@ -15,8 +15,6 @@
 // person sees, never which agent a job reaches.
 
 import {
-  viewGate,
-  writeGate,
   readJsonBody,
   isValidSlug,
   parseSlot,
@@ -24,6 +22,7 @@ import {
   cleanStyle,
   DEFAULT_ART_STYLE
 } from './_lib.js'
+import { viewGate, writeGate } from './_gate.js'
 import {
   pictureStore,
   emptySettings,
@@ -142,8 +141,12 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
       return
     }
 
-    // The gate comes before anything else, the store included.
-    const denied = method === 'GET' ? viewGate(request, environment) : writeGate(request, environment)
+    // The gate comes before anything else the store is asked: it reads only "sign out everywhere",
+    // and only for a signed-in cookie that has already proved itself.
+    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
+    const denied = method === 'GET'
+      ? await viewGate(request, environment, { store: pictures })
+      : await writeGate(request, environment, 'application/json', { store: pictures })
     if (denied) {
       const { status, ...answer } = denied
       response.status(status).json(answer)
@@ -152,7 +155,6 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
 
     const moment = now()
     const context = { env: environment, caps: dailyCaps(environment), day: usageDay(moment), moment }
-    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
 
     if (method === 'GET') {
       if (!pictures) {

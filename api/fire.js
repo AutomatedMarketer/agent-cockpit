@@ -36,7 +36,8 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 // Re-exported because this module's tests are the ones that cover it. The slug rule and the
 // same-origin check moved to _lib.js for the same reason: the picture-store writes run them
 // too, and a second copy of either is a second place to get it wrong.
-import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest, viewGate } from './_lib.js'
+import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest } from './_lib.js'
+import { viewGate } from './_gate.js'
 export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
 
 // FIRE_TRIGGERS must be a JSON object of slug → https URL. Anything else reads as
@@ -412,7 +413,7 @@ export default async function handler(request, response) {
   // is set up. This used to be skipped under PUBLIC_FIRE, so a header-less curl (no Origin, no
   // Sec-Fetch-Site, so "same site" let it through) could dispatch a job on a stranger's words
   // (audit finding #1, 2026-10-10). PUBLIC_FIRE now waives only the second key, the fire key.
-  const denied = viewGate(request)
+  const denied = await viewGate(request)
   if (denied) {
     response.status(denied.status).json({ error: denied.error })
     return

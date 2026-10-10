@@ -536,3 +536,12 @@ test('however the daily caps are set, a day\'s worst case stays inside the budge
   assert.deepEqual(dailyCaps({ WRITE_DAILY_CAP: '7', GENERATE_DAILY_CAP: '3' }), { writes: 7, generated: 3 }, 'a cap inside the budget was changed')
   assert.deepEqual(dailyCaps({ WRITE_DAILY_CAP: '0', GENERATE_DAILY_CAP: '0' }), { writes: 0, generated: 0 }, '0 still switches a kind off')
 })
+
+test('"sign out everywhere" is kept as a whole number of milliseconds, and anything else is read as never', async () => {
+  for (const [stored, read] of [[1791659437922, 1791659437922], ['soon', 0], [-5, 0], [1.5, 0], [null, 0], [{ at: 1 }, 0], [Number.MAX_VALUE, 0]]) {
+    const { fake, store } = connected()
+    await fake.sdk.put(SETTINGS_PATH, JSON.stringify({ ...emptySettings(), sessionsValidFrom: stored }), { access: 'private' })
+    assert.equal((await store.readSettings()).settings.sessionsValidFrom, read, JSON.stringify(stored))
+  }
+  assert.equal(emptySettings().sessionsValidFrom, 0)
+})

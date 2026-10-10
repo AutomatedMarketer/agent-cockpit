@@ -9,67 +9,68 @@ import { readFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { viewGate, keysMatch } from '../api/_lib.js'
+import { keysMatch } from '../api/_lib.js'
+import { viewGate } from '../api/_gate.js'
 
 const req = (headers = {}) => ({ headers })
 const KEY = 'a-long-enough-view-key'
 
 /* ---------- closed by default ---------- */
 
-test('no VIEW_KEY and no opt-out refuses to serve at all', () => {
-  const denied = viewGate(req(), {})
+test('no VIEW_KEY and no opt-out refuses to serve at all', async () => {
+  const denied = await viewGate(req(), {})
   assert.equal(denied.status, 503)
   assert.match(denied.error, /VIEW_KEY/)
 })
 
-test('an unconfigured deployment never serves the repo instead', () => {
+test('an unconfigured deployment never serves the repo instead', async () => {
   // The failure mode has to be silence. A dashboard that answers "I am not configured"
   // by handing over a private business repo is the bug this whole file exists to prevent.
-  const denied = viewGate(req({ 'x-view-key': 'anything' }), {})
+  const denied = await viewGate(req({ 'x-view-key': 'anything' }), {})
   assert.ok(denied, 'an unconfigured deployment must not fall through to serving')
 })
 
 /* ---------- the key ---------- */
 
-test('the right key in the right header passes', () => {
-  assert.equal(viewGate(req({ 'x-view-key': KEY }), { VIEW_KEY: KEY }), null)
+test('the right key in the right header passes', async () => {
+  assert.equal(await viewGate(req({ 'x-view-key': KEY }), { VIEW_KEY: KEY }), null)
 })
 
-test('no key is a 401 that names the header to use', () => {
-  const denied = viewGate(req(), { VIEW_KEY: KEY })
+test('no key is a 401 that names the header to use', async () => {
+  const denied = await viewGate(req(), { VIEW_KEY: KEY })
   assert.equal(denied.status, 401)
   assert.match(denied.error, /x-view-key/)
 })
 
-test('a wrong key is a 401, and the real key is never echoed back', () => {
-  const denied = viewGate(req({ 'x-view-key': 'wrong' }), { VIEW_KEY: KEY })
+test('a wrong key is a 401, and the real key is never echoed back', async () => {
+  const denied = await viewGate(req({ 'x-view-key': 'wrong' }), { VIEW_KEY: KEY })
   assert.equal(denied.status, 401)
   assert.ok(!denied.error.includes(KEY), 'an error message must never contain the key')
 })
 
-test('a near-miss is still a miss - no prefix, case or whitespace tolerance', () => {
+test('a near-miss is still a miss - no prefix, case or whitespace tolerance', async () => {
   for (const attempt of [KEY.slice(0, -1), KEY + 'x', KEY.toUpperCase(), ` ${KEY} `, '']) {
     assert.equal(
-      viewGate(req({ 'x-view-key': attempt }), { VIEW_KEY: KEY })?.status,
+      (await viewGate(req({ 'x-view-key': attempt }), { VIEW_KEY: KEY }))?.status,
       401,
       `"${attempt}" must not pass`
     )
   }
 })
 
-test('a non-string header value cannot slip through', () => {
+test('a non-string header value cannot slip through', async () => {
   for (const value of [undefined, null, 123, ['x'], {}]) {
-    assert.equal(viewGate(req({ 'x-view-key': value }), { VIEW_KEY: KEY })?.status, 401)
+    assert.equal((await viewGate(req({ 'x-view-key': value }), { VIEW_KEY: KEY }))?.status, 401)
   }
 })
 
 /* ---------- the deliberate way out ---------- */
 
-test('PUBLIC_DASHBOARD=true opens it, and only that exact string does', () => {
-  assert.equal(viewGate(req(), { PUBLIC_DASHBOARD: 'true' }), null)
+test('PUBLIC_DASHBOARD=true opens it, and only that exact string does', async () => {
+  assert.equal(await viewGate(req(), { PUBLIC_DASHBOARD: 'true' }), null)
   for (const value of ['TRUE', 'yes', '1', 'true ', '']) {
     assert.ok(
-      viewGate(req(), { PUBLIC_DASHBOARD: value }),
+      await viewGate(req(), { PUBLIC_DASHBOARD: value }),
       `PUBLIC_DASHBOARD="${value}" must not open the dashboard`
     )
   }

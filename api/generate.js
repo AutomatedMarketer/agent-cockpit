@@ -15,7 +15,6 @@
 // as text - every failure is one of our own sentences - and nothing here writes to the logs.
 
 import {
-  writeGate,
   readJsonBody,
   parseSlot,
   slotKind,
@@ -24,6 +23,7 @@ import {
   readCapped,
   DEFAULT_ART_STYLE
 } from './_lib.js'
+import { writeGate } from './_gate.js'
 import {
   pictureStore,
   NOT_CONNECTED,
@@ -142,14 +142,14 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
       return
     }
 
-    const denied = writeGate(request, environment)
+    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
+    const denied = await writeGate(request, environment, 'application/json', { store: pictures })
     if (denied) {
       const { status, ...answer } = denied
       response.status(status).json(answer)
       return
     }
 
-    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
     if (!pictures) {
       response.status(503).json({ error: NOT_CONNECTED })
       return

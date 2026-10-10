@@ -20,7 +20,8 @@
 // The Fish key goes to Fish in one header and nowhere else. Fish's own words are never passed on, and
 // every answer carries `private, no-store`.
 
-import { writeGate, readJsonBody, readCapped } from './_lib.js'
+import { readJsonBody, readCapped } from './_lib.js'
+import { writeGate } from './_gate.js'
 import {
   voiceConfig,
   readTicket,
@@ -69,7 +70,7 @@ export function makeHandler({ env, now = () => new Date() } = {}) {
       response.status(405).json({ error: 'POST { "ticket": "...", "text": "..." }.' })
       return
     }
-    const denied = writeGate(request, environment)
+    const denied = await writeGate(request, environment)
     if (denied) {
       const { status, ...answer } = denied
       response.status(status).json(answer)

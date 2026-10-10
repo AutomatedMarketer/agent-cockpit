@@ -89,7 +89,10 @@ export function emptySettings() {
     artStyle: '',
     names: {},
     pictures: {},
-    usage: { day: '', writes: 0, generated: 0, pending: [] }
+    usage: { day: '', writes: 0, generated: 0, pending: [] },
+    // "Sign out everywhere": the moment it was last pressed, in milliseconds. Every device signed in
+    // before it is refused (api/_gate.js). 0 for never.
+    sessionsValidFrom: 0
   }
 }
 
@@ -116,6 +119,7 @@ function normaliseSettings(raw) {
       at: typeof picture.at === 'string' ? picture.at : ''
     }
   }
+  if (Number.isSafeInteger(raw.sessionsValidFrom) && raw.sessionsValidFrom > 0) settings.sessionsValidFrom = raw.sessionsValidFrom
   if (plainObject(raw.usage)) {
     const pending = Array.isArray(raw.usage.pending) ? raw.usage.pending : []
     settings.usage = {

@@ -22,7 +22,8 @@ import {
   sortRunsNewestFirst,
   runsSince,
   heartbeatStatus, HEARTBEAT_STALE_AFTER_MINUTES, HEARTBEAT_STALE_MIN_MINUTES,
-  HEARTBEAT_STALE_MAX_MINUTES, viewGate, TASK_STATUSES } from './_lib.js'
+  HEARTBEAT_STALE_MAX_MINUTES, TASK_STATUSES } from './_lib.js'
+import { viewGate } from './_gate.js'
 import {
   parseWorkflow,
   normaliseSteps,
@@ -2309,7 +2310,9 @@ export default async function handler(request, response) {
     response.status(405).json({ error: 'GET only: this endpoint reads your team repo and never changes it.' })
     return
   }
-  const denied = viewGate(request)
+  // Handed the response, so a signed-in cookie over a day old is renewed here: every load of the
+  // board comes through this endpoint, so an active phone is never signed out.
+  const denied = await viewGate(request, process.env, { response })
   if (denied) {
     response.status(denied.status).json({ error: denied.error })
     return

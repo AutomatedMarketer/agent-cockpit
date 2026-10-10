@@ -22,7 +22,8 @@
 // cached copy of it can never be the wrong picture.
 
 import { randomBytes } from 'node:crypto'
-import { writeGate, parseSlot, slotKind, PICTURE_BUDGET, sniffImage, imageSize } from './_lib.js'
+import { parseSlot, slotKind, PICTURE_BUDGET, sniffImage, imageSize } from './_lib.js'
+import { writeGate } from './_gate.js'
 import {
   pictureStore,
   NOT_CONNECTED,
@@ -94,14 +95,14 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, versi
       return
     }
 
-    const denied = writeGate(request, environment, 'application/octet-stream')
+    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
+    const denied = await writeGate(request, environment, 'application/octet-stream', { store: pictures })
     if (denied) {
       const { status, ...answer } = denied
       response.status(status).json(answer)
       return
     }
 
-    const pictures = store !== undefined ? store : pictureStore(environment, loadSdk)
     if (!pictures) {
       response.status(503).json({ error: NOT_CONNECTED })
       return
