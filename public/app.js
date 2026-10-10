@@ -1870,6 +1870,17 @@ function memoryTreeHtml() {
   return `<div class="panel">${sections}</div>`
 }
 
+// Pages ranked by what is written in them, once the graph has brought what search may use; until then,
+// the folder tree filtered by name, as memoryTreeHtml says.
+const memoryHitsWanted = () => Boolean(memoryQuery) && memorySearchIndex() !== null
+
+function memoryDrawTree() {
+  const tree = el('memory-tree')
+  if (!tree) return
+  if (memoryHitsWanted()) readinessReplace(tree, [memoryHitsNode()])
+  else tree.innerHTML = memoryTreeHtml()
+}
+
 function renderMemory() {
   const tops = [...new Set(data.memory.files.map((file) =>
     file.path.includes('/') ? file.path.slice(0, file.path.indexOf('/')) : '(root)'
@@ -1886,16 +1897,17 @@ function renderMemory() {
       <button type="button" class="mem-view" id="memory-view-graph" data-view="graph" aria-pressed="${asGraph}">Graph</button>
     </div>
     <div id="memory-list"${asGraph ? ' hidden' : ''}>
-    <input type="search" id="memory-search" placeholder="Search ${data.memory.files.length} page names&hellip;" value="${escapeHtml(memoryQuery)}" />
+    <input type="search" id="memory-search" placeholder="${escapeHtml(memorySearchPlaceholder())}" value="${escapeHtml(memoryQuery)}" />
     <div class="filters" id="memory-filters">${chips}</div>
-    <div id="memory-tree">${memoryTreeHtml()}</div>
+    <div id="memory-tree">${memoryHitsWanted() ? '' : memoryTreeHtml()}</div>
     ${data.memory.truncated ? '<p class="small muted">Showing the first pages only — this vault is very large.</p>' : ''}
     </div>
     <div id="memory-graph" class="mg"${asGraph ? '' : ' hidden'}></div>`
 
+  if (memoryHitsWanted()) memoryDrawTree()
   el('memory-search').addEventListener('input', (event) => {
     memoryQuery = event.target.value.trim().toLowerCase()
-    el('memory-tree').innerHTML = memoryTreeHtml()
+    memoryDrawTree()
   })
   el('memory-filters').addEventListener('click', (event) => {
     const chip = event.target.closest('[data-source]')
@@ -2197,6 +2209,7 @@ async function graphFetch() {
   } finally {
     graphState.loading = false
   }
+  if (location.hash.slice(1) === 'memory') memoryRefreshSearch()
   if (memoryView === 'graph' && location.hash.slice(1) === 'memory') graphRender()
 }
 
@@ -2728,6 +2741,119 @@ if (typeof MutationObserver === 'function') {
   new MutationObserver(() => graphRestyle()).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 }
 phoneIsLight.addEventListener?.('change', () => graphRestyle())
+/* --- searching inside pages, on Memory's List --------------------------------------------------------
+   The graph brings, for each team note, what search may use: its headings, description, tags and
+   opening words (api/_team-graph.js). Once it is here the List's box ranks pages by those as well as by
+   name. The ranking is the page's own arithmetic over what is already loaded - typing never asks the
+   board for anything. Until the graph is here, the box searches names and says so (memoryTreeHtml). */
+
+// How strongly a word counts by where it is found: a page's name says most about it.
+const SEARCH_FIELDS = [
+  { key: 'name', weight: 3, where: () => 'in its name' },
+  { key: 'headings', weight: 2, where: (entry, terms) => `in a heading: ${(entry.headings ?? []).find((heading) => searchWords(heading).some((word) => terms.some((term) => word.startsWith(term)))) ?? ''}` },
+  { key: 'description', weight: 1.5, where: () => 'in its description' },
+  { key: 'tags', weight: 1.5, where: () => 'in its tags' },
+  { key: 'opening', weight: 1, where: () => 'in its opening words' }
+]
+const MEMORY_HITS_MAX = 50
+const MEMORY_SEARCH_SCOPE = 'The board searches those for every page, not every word inside them. Open a page to read all of it.'
+
+const searchWords = (text) => String(text ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+
+// path -> what search may use for that note, or null until the graph is here.
+function memorySearchIndex() {
+  const team = graphState.data?.team
+  if (!team || !Array.isArray(team.notes) || !Array.isArray(team.search)) return null
+  const index = new Map()
+  team.notes.forEach((note, position) => index.set(note.path, team.search[position] ?? {}))
+  return index
+}
+
+// Pages that hold every word typed (a word typed may be the start of a word written), best first: each
+// word counts by the field it is in, by how often (with diminishing returns), and by how rare it is
+// across the pages. Equal pages keep their path order. [{ path, size, score, where }]
+function memoryRank(entries, query) {
+  const terms = [...new Set(searchWords(query))]
+  if (!terms.length) return []
+  const docs = entries.map((entry) => {
+    const fields = {
+      name: searchWords(String(entry.path ?? '').replace(/\.md$/i, '')),
+      headings: searchWords((entry.headings ?? []).join(' ')),
+      description: searchWords(entry.description),
+      tags: searchWords((entry.tags ?? []).join(' ')),
+      opening: searchWords(entry.opening)
+    }
+    return { entry, fields }
+  })
+  const holds = (doc, term) => SEARCH_FIELDS.some((field) => doc.fields[field.key].some((word) => word.startsWith(term)))
+  const rarity = Object.fromEntries(terms.map((term) => {
+    const holding = docs.filter((doc) => holds(doc, term)).length
+    return [term, Math.log(1 + (docs.length - holding + 0.5) / (holding + 0.5))]
+  }))
+  const hits = []
+  for (const doc of docs) {
+    if (!terms.every((term) => holds(doc, term))) continue
+    let score = 0
+    let best = null
+    for (const field of SEARCH_FIELDS) {
+      let part = 0
+      for (const term of terms) {
+        const count = doc.fields[field.key].filter((word) => word.startsWith(term)).length
+        part += rarity[term] * field.weight * (count / (count + 1.2))
+      }
+      if (part > 0 && (!best || part > best.part)) best = { field, part }
+      score += part
+    }
+    hits.push({ path: doc.entry.path, size: doc.entry.size ?? null, score, where: best.field.where(doc.entry, terms) })
+  }
+  return hits.sort((a, b) => b.score - a.score || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+}
+
+function memorySearchPlaceholder() {
+  return memorySearchIndex()
+    ? `Search ${data.memory.files.length} pages: names, headings, descriptions and opening words…`
+    : `Search ${data.memory.files.length} page names…`
+}
+
+// The ranked pages, built from elements: a heading is somebody's own words.
+function memoryHitsNode() {
+  const index = memorySearchIndex()
+  const topOf = (path) => (path.includes('/') ? path.slice(0, path.indexOf('/')) : '(root)')
+  const entries = (data.memory.files ?? []).map((file) => ({ ...(index.get(file.path) ?? {}), path: file.path, size: file.size }))
+  const ranked = memoryRank(entries, memoryQuery)
+  const inFolder = ranked.filter((hit) => !memorySource || topOf(hit.path) === memorySource)
+  if (!inFolder.length) {
+    const elsewhere = memorySource ? ranked.length : 0
+    const [said, why] = memorySource && elsewhere
+      ? [`No page in ${memorySource}/ has "${memoryQuery}".`, `${elsewhere} elsewhere in your vault ${elsewhere === 1 ? 'does' : 'do'} - tap all above to see ${elsewhere === 1 ? 'it' : 'them'}.`]
+      : memorySource
+        ? [`No page has "${memoryQuery}", in ${memorySource}/ or anywhere else, in its name, headings, description, tags or opening words.`, MEMORY_SEARCH_SCOPE]
+        : [`No page has "${memoryQuery}" in its name, headings, description, tags or opening words.`, MEMORY_SEARCH_SCOPE]
+    return emptyStateNode('memory', readinessNode('b', { text: said }), readinessNode('span', { cls: 'small', text: ` ${why}` }))
+  }
+  const shown = inFolder.slice(0, MEMORY_HITS_MAX)
+  const rows = shown.map((hit) => {
+    const row = readinessNode('button', { cls: 'file mem-hit', attrs: { type: 'button' } },
+      readinessNode('span', { cls: 'mem-hit-words' },
+        readinessNode('span', { cls: 'mem-hit-path', text: hit.path }),
+        readinessNode('span', { cls: 'mem-hit-where small muted', text: hit.where })),
+      readinessNode('span', { cls: 'small muted', text: hit.size ? `${Math.round(hit.size / 1024)} kb` : '' }))
+    // The board's click handler opens any .file with a data-path in the viewer.
+    row.dataset.path = hit.path
+    return row
+  })
+  const count = shown.length < inFolder.length
+    ? `The best ${shown.length} of ${inFolder.length} pages that match, best first.`
+    : `${plural(inFolder.length, 'page')} ${inFolder.length === 1 ? 'matches' : 'match'}, best first.`
+  return readinessNode('div', { cls: 'panel mem-hits' }, readinessNode('p', { cls: 'mem-hits-count small muted', text: count }), ...rows)
+}
+
+// The graph arrived while Memory was open: the box says what it now searches, and searches it.
+function memoryRefreshSearch() {
+  const box = el('memory-search')
+  if (box) box.placeholder = memorySearchPlaceholder()
+  memoryDrawTree()
+}
 /* ---------- Memory graph: end ---------- */
 
 document.addEventListener('click', (event) => {

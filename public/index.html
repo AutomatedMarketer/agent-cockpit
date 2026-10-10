@@ -688,6 +688,15 @@
   .file:hover { background: var(--panel-2); }
   .file .idx { color: var(--accent); font-size: .6875rem; }
 
+  /* Memory search, once the graph has brought what is written in each page: the hits are buttons with
+     the .file row's look, and each says where the words were found. */
+  .mem-hits { overflow: hidden; }
+  .mem-hits-count { margin: 0; padding: .65rem 1.05rem .35rem; }
+  .mem-hit { width: 100%; font: inherit; font-size: .875rem; text-align: left; color: var(--ink); background: transparent; border: 0; border-top: 1px solid var(--line); }
+  .mem-hit-words { display: grid; gap: .1rem; min-width: 0; }
+  .mem-hit-path { overflow-wrap: anywhere; }
+  .mem-hit-where { overflow-wrap: anywhere; }
+
   /* Memory: List or Graph. A pair of buttons, the pressed one raised, each a full 44px target. */
   .mem-switch { display: inline-flex; gap: .25rem; padding: .25rem; margin: .1rem 0 .7rem; background: var(--chip); border: 1px solid var(--line); border-radius: 999px; }
   .mem-view, .mg-mode {
