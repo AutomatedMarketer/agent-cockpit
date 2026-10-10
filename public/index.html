@@ -465,14 +465,14 @@
   .pill.missed .mark { color: var(--bad); }
   .cal-key { display: flex; gap: .9rem; flex-wrap: wrap; margin-top: .5rem; font-size: .72rem; color: var(--muted); }
 
-  /* Board — four columns stack on a phone (one-handed rule), pair up on medium screens,
-     and sit side by side only when there is genuinely room for four. */
+  /* Board — four columns stack on a phone and a tablet (one column under 1024px, the brief's rule),
+     and sit side by side only from 64rem. They used to pair up from 48rem, which beside the sidebar
+     left a tablet two narrow columns. */
   /* Each column is a panel and each card an inset tile inside it, as in the mock-up. They were rows
      ruled off by hairlines, which made a column one long list rather than a stack of things. The
      card's left edge is wider so the owner's colour, handed in by accentStyle, still reads. */
   .board { display: grid; grid-template-columns: 1fr; gap: .75rem; }
-  @media (min-width: 48rem) { .board { grid-template-columns: repeat(2, 1fr); align-items: start; } }
-  @media (min-width: 64rem) { .board { grid-template-columns: repeat(4, 1fr); } }
+  @media (min-width: 64rem) { .board { grid-template-columns: repeat(4, 1fr); align-items: start; } }
   .col { padding: .9rem; }
   .board .col-title { display: flex; justify-content: space-between; align-items: baseline; padding: 0 .1rem .7rem; font-size: .625rem; text-transform: uppercase; letter-spacing: .18em; color: var(--muted); font-weight: 600; }
   .board .kcard {
@@ -532,7 +532,7 @@
      its own. align-items: start because a grid row stretches to its tallest item - without it,
      opening one card to read its runs would pull every card beside it down to the same length. */
   .team-grid {
-    display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .9rem;
+    display: grid; grid-template-columns: minmax(0, 1fr); gap: .9rem;
     align-items: start; margin-top: .9rem;
   }
   .agent-card {
@@ -948,10 +948,12 @@
      the unconditional `.days7 .d7-day` above - same selector, later in the file - won the tie and
      put a top border back on. Desktop showed every day with BOTH borders and the first day with
      neither. The rule was present, asserted by a test, and never reached a pixel. */
-  @media (min-width: 48rem) {
+  @media (min-width: 64rem) {
     .days7 { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); }
     .days7 .d7-day { border-top: 0; border-left: 1px solid var(--line); }
     .days7 .d7-day:first-child { border-left: 0; }
+  }
+  @media (min-width: 48rem) {
     /* The add forms are the only full-width thing on Skills and Team, and on a wide screen the
        phone layout stretched: a 1225px textarea for one sentence, the explanation on one long
        line, and a 1225px submit button. Every test passed and four reads of the stylesheet
@@ -1039,7 +1041,7 @@
   /* The three number cards. auto-fit, so they stack on a phone, sit side by side when there is
      room, and the sidebar's width needs no query of its own. Each card's colour is one --kpi token,
      tinting the corner, the glow, the dot, the number and the line - and nothing else. */
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .75rem; margin: .9rem 0 1rem; }
+  .kpis { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; margin: .9rem 0 1rem; }
   .kpi {
     --kpi: var(--kpi-work);
     position: relative; overflow: hidden; margin: 0; padding: 1rem 1.1rem 1.1rem; border-radius: 16px;
@@ -1085,7 +1087,7 @@
      letter tile, never on the ring. */
   .plan-limits { margin: 0 0 1rem; }
   .plan-limits > .section-head { margin-top: 1.4rem; }
-  .plan-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: .75rem; }
+  .plan-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
   .plan-card { display: grid; gap: .8rem; align-content: start; }
   .card > .plan-head, .card > .meters { margin: 0; }
   .plan-head { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
@@ -1207,7 +1209,7 @@
   /* Hermes: a card per computer that runs it, at the top of Connections and on its own page. The
      state is the biggest thing on the card, in words; its colour repeats the word. A profile is a
      name over one line of facts that wraps where it must, never sideways. */
-  .hermes-cards { display: grid; gap: .75rem; }
+  .hermes-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
   .hermes-card { display: grid; gap: .55rem; align-content: start; }
   .card > .hermes-top, .card > .hermes-foot, .card > .hermes-old, .card > .hermes-note, .card > .hermes-links { margin: 0; }
   .hermes-top { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .7rem; }
@@ -1346,6 +1348,14 @@
        "Here is where things stand." fell onto a line of its own. */
     .banner .greeting, .banner .headline { font-size: clamp(1.6rem, 2.5vw, 2.25rem); }
     .kpis { gap: 1rem; margin: 1.1rem 0 1.25rem; }
+  }
+  /* One column under 1024px, then the grids (layout.test.mjs). auto-fit and auto-fill so the
+     sidebar's width needs no query of its own: three number cards, two plan cards and three or four
+     agent cards across a laptop. Below the one-column rules they override. */
+  @media (min-width: 64rem) {
+    .kpis { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+    .plan-cards { grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
+    .team-grid { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
   }
   /* Talk to the board: the orb, bottom-right on every screen, and the sheet above it. The dock is the
      width of the screen less a gutter each side, so the sheet can be too on a phone; it lets taps

@@ -1222,12 +1222,12 @@ const stylesheet = () => readFileSync(new URL('../public/index.html', import.met
 // EVERY 48rem block, joined. There is more than one - the board's columns live in their own -
 // and taking the first was how the first version of these tests read the wrong rules and failed
 // against code that was correct.
-const desktopBlock = () => {
+const desktopBlock = (width = '48rem') => {
   const css = stylesheet()
   const blocks = []
   let from = 0
   for (;;) {
-    const at = css.indexOf('@media (min-width: 48rem)', from)
+    const at = css.indexOf(`@media (min-width: ${width})`, from)
     if (at < 0) break
     // Brace-counting, because a regex cannot match nested rules.
     let depth = 0
@@ -1272,8 +1272,9 @@ test('reading text stays capped by its measure even though the layout got wider'
   }
 })
 
+// From 64rem: below that a tablet keeps one column (layout.test.mjs).
 test('the week grid on Workflows uses the width instead of stretching seven rows across it', () => {
-  const desktop = desktopBlock()
+  const desktop = desktopBlock('64rem')
   assert.match(desktop, /\.days7 \{[^}]*grid-template-columns:\s*repeat\(auto-fill/,
     'the seven-day list is a single tall column again on a screen wide enough to show the week')
 })
@@ -3429,8 +3430,11 @@ test('the cards are one column on a phone and a grid on a laptop, and opening on
 
   const declared = Object.assign({}, ...exactRules('.team-grid').filter((rule) => !rule.inMedia).map(valuesIn))
   assert.equal(declared.display, 'grid')
-  const track = /^repeat\(auto-fill,\s*minmax\(([\d.]+)rem,\s*1fr\)\)$/.exec(declared['grid-template-columns'] ?? '')
-  assert.ok(track, `the grid does not fill the row with cards of a minimum width: ${declared['grid-template-columns']}`)
+  // One column on a phone and a tablet (layout.test.mjs); the grid of cards from 64rem.
+  assert.equal(declared['grid-template-columns'], 'minmax(0, 1fr)', 'a phone or a tablet gets the cards side by side')
+  const wide = Object.assign({}, ...exactRules('.team-grid').filter((rule) => /min-width: 64rem/.test(rule.condition)).map(valuesIn))
+  const track = /^repeat\(auto-fill,\s*minmax\(([\d.]+)rem,\s*1fr\)\)$/.exec(wide['grid-template-columns'] ?? '')
+  assert.ok(track, `the laptop grid does not fill the row with cards of a minimum width: ${wide['grid-template-columns']}`)
   const gap = Number(/^([\d.]+)rem$/.exec(declared.gap ?? '')?.[1] ?? 0) * 16
   const columns = (width) => Math.max(1, Math.floor((width + gap) / (Number(track[1]) * 16 + gap)))
   // 390 wide less the page's 1rem either side; 1440 less the 15rem sidebar and 1.75rem either side.
@@ -5198,8 +5202,8 @@ test('the meters wrap on a phone rather than taking the page sideways', () => {
   const meters = Object.assign({}, ...exactRules('.meters').filter((rule) => !rule.inMedia).map(valuesIn))
   assert.match(meters['grid-template-columns'] ?? '', /auto-fill/, 'three rings in a row that cannot wrap push a phone sideways')
   assert.ok(!('overflow-x' in meters))
-  const cards = Object.assign({}, ...exactRules('.plan-cards').filter((rule) => !rule.inMedia).map(valuesIn))
-  assert.match(cards['grid-template-columns'] ?? '', /auto-fit/, 'the service cards are a fixed number of columns')
+  const cards = Object.assign({}, ...exactRules('.plan-cards').filter((rule) => /min-width: 64rem/.test(rule.condition)).map(valuesIn))
+  assert.match(cards['grid-template-columns'] ?? '', /auto-fit/, 'the service cards are a fixed number of columns on a laptop')
   // A long computer or plan name breaks inside the card.
   const name = Object.assign({}, ...exactRules('.plan-name').filter((rule) => !rule.inMedia).map(valuesIn))
   assert.equal(name['min-width'], '0')
