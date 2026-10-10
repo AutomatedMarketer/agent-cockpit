@@ -3921,7 +3921,7 @@ test('while a picture of their own is on its way, the built-in one is never draw
   }
 })
 
-test('a picture from the store reaches a src only as a blob: address, fetched with the view key', async () => {
+test('a picture from the store reaches a src only as a blob: address, fetched with no key in the request', async () => {
   const browser = storeFetch({ brand: brandOn({ today: webpAt(V1), team: { v: V2, type: 'image/jpeg' }, 'agent-research': { v: V1, type: 'image/png' } }) })
   const holders = artHolders()
   const nodes = render(pinnedPayload, {
@@ -3938,7 +3938,8 @@ test('a picture from the store reaches a src only as a blob: address, fetched wi
   assert.deepEqual(asked.map((request) => request.url).sort(), [
     `/api/art?slot=agent-research&v=${V1}&t=png`, `/api/art?slot=team&v=${V2}&t=jpeg`, `/api/art?slot=today&v=${V1}&t=webp`
   ], 'the pictures were not asked for exactly as /api/brand named them')
-  for (const request of asked) assert.equal(request.headers['x-view-key'], 'the-view-key', `${request.url} was asked for without the view key`)
+  // The signed-in cookie goes with each request by itself; the page holds no key to send.
+  for (const request of asked) assert.equal(request.headers['x-view-key'], undefined, `${request.url} carried a view key`)
 
   const made = new Set(nodes.objectUrls.created.map((entry) => entry.url))
   assert.equal(made.size, 3, 'each picture fetched was not made into exactly one address')
@@ -4297,7 +4298,9 @@ function keyStorage(held = {}) {
     removeItem: (key) => { delete values[key]; writes.push([key, null]) }
   }
 }
-const VIEW_ONLY = { 'agent-cockpit-view-key': 'the-view-key' }
+// The board keeps no view key on the device any more - the signed-in cookie is the browser's, and the
+// page cannot read it - so "a viewer" is a device holding nothing.
+const VIEW_ONLY = {}
 
 // A canvas and a decoder, so a picture can be shrunk in node: whatever is drawn comes out as a small
 // webp marked as shrunk, and every picture opened is recorded.
@@ -4584,7 +4587,7 @@ test('what is left of today\'s allowance is shown beside the controls, in words'
   assert.deepEqual([...new Set(leftLine(off.get('today').innerHTML))], ['Left today: 0 changes.'])
 })
 
-test('a chosen picture is shrunk, sent as its bytes with both keys and the exact type, and shown from the copy in hand', async () => {
+test('a chosen picture is shrunk, sent as its bytes with the edit key and the exact type, and shown from the copy in hand', async () => {
   const browser = writingBrowser({
     brand: brandOn({ 'agent-research': webpAt(V1) }),
     writes: () => jsonAnswer(200, { slot: 'agent-research', picture: { v: V2, type: 'image/webp' }, left: { writes: 6, generated: 10 } })
@@ -4610,7 +4613,7 @@ test('a chosen picture is shrunk, sent as its bytes with both keys and the exact
   const [sent] = browser.posts()
   assert.equal(sent.url, '/api/upload?slot=agent-research')
   assert.equal(sent.headers['Content-Type'], 'application/octet-stream', 'the bytes went with a type the write gate refuses')
-  assert.equal(sent.headers['x-view-key'], 'the-view-key')
+  assert.equal(sent.headers['x-view-key'], undefined)
   assert.equal(sent.headers['x-edit-key'], 'the-edit-key')
   assert.equal(pictures.opened[0], photo, 'the photo chosen was not the one opened')
   assert.equal(sent.body?.shrunk, true, 'the photo was sent as it came off the camera, not shrunk first')
@@ -4648,7 +4651,7 @@ test('Make it sends the description as JSON, puts what comes back through the sa
   const [generate, upload] = browser.posts()
   assert.equal(generate?.url, '/api/generate')
   assert.equal(generate.headers['Content-Type'], 'application/json')
-  assert.equal(generate.headers['x-view-key'], 'the-view-key')
+  assert.equal(generate.headers['x-view-key'], undefined)
   assert.ok(!('x-edit-key' in generate.headers), 'an edit key nobody gave was sent')
   assert.deepEqual(JSON.parse(generate.body), { slot: 'team', description: 'a lighthouse at dusk' })
   assert.equal(pictures.opened[0], fromOpenAi, 'the picture OpenAI made was not the one shrunk')
@@ -4757,7 +4760,7 @@ test('the edit key is asked for once, only when the store says it needs one, kep
   const [first, again] = browser.posts()
   assert.ok(!('x-edit-key' in first.headers), 'a key was sent before there was one')
   assert.equal(again?.headers['x-edit-key'], 'typed-key', 'the change was not sent again with the key typed')
-  assert.equal(again.headers['x-view-key'], 'the-view-key')
+  assert.equal(again.headers['x-view-key'], undefined)
   assert.equal(again.body, first.body, 'the change sent again is not the change asked for')
   assert.deepEqual(storage.writes, [['agent-cockpit-edit-key', 'typed-key']], 'the edit key was not kept like the view key')
   assert.equal(form.note.className, 'fire-note ok')

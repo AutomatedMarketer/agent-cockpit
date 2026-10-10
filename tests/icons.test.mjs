@@ -97,11 +97,11 @@ test('build-icons.mjs draws with the stylesheet\'s tokens', () => {
   assert.equal(constant('ACCENT'), accent, 'build-icons.mjs ACCENT is not the stylesheet --accent')
 })
 
-test('the unlock form carries a username field so a password manager can save the key', () => {
-  // Without it, managers decline to save and the key gets hand-typed on every device —
+test('the sign-in form carries a username field so a password manager can save the pair', () => {
+  // Without it, managers decline to save and the password gets hand-typed on every device —
   // and the course asks people to open this on their phone.
   // The form is drawn by the page's script, which is its own file now.
   const script = readFileSync(pub('app.js'), 'utf8')
-  assert.match(script, /autocomplete="username"/, 'no username field on the unlock form')
-  assert.match(script, /autocomplete="current-password"/, 'the key field lost its autocomplete hint')
+  assert.match(script, /autocomplete="username"/, 'no username field on the sign-in form')
+  assert.match(script, /autocomplete="current-password"/, 'the password field lost its autocomplete hint')
 })

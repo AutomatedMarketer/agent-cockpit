@@ -89,6 +89,8 @@ function board({ answers, hash = '#readiness', storage = {}, after = '', scrollY
       if (!String(url).startsWith('/api/state')) return { ok: true, status: 200, json: async () => ({}) }
       const answer = queue.length > 1 ? queue.shift() : queue[0]
       if (answer instanceof Error) throw answer
+      // What fetch hands back for a redirect it was told not to follow.
+      if (answer.redirect) return { ok: false, status: 0, type: 'opaqueredirect', headers: { get: () => null }, json: async () => { throw new SyntaxError('no body') } }
       return {
         ok: answer.status ? answer.status < 400 : true,
         status: answer.status ?? 200,
@@ -145,13 +147,16 @@ test('boot is untouched: the first request is the plain /api/state, with no sinc
 
 /* ---------- the check ------------------------------------------------------------------------- */
 
-test('a check sends the commit it holds, and the view key, and nothing else', async () => {
-  const { timers, stateRequests } = board({ answers: [ageing(), { unchanged: true, commit: SHA }], storage: { 'agent-cockpit-view-key': 'the-key' } })
+test('a check sends the commit it holds and nothing else - no key: the signed-in cookie goes by itself', async () => {
+  const { timers, stateRequests } = board({ answers: [ageing(), { unchanged: true, commit: SHA }] })
   await flush()
   await timers.fire()
   assert.equal(stateRequests().length, 2)
   assert.equal(stateRequests()[1].url, `/api/state?since=${SHA}`)
-  assert.equal(stateRequests()[1].init.headers['x-view-key'], 'the-key')
+  assert.equal(stateRequests()[1].init.headers?.['x-view-key'], undefined)
+  // Not following a redirect is how a Vercel sign-in that ran out is told apart from a dropped
+  // connection (see below).
+  for (const request of stateRequests()) assert.equal(request.init.redirect, 'manual')
 })
 
 test('unchanged: no new board is drawn, the lights age by the clock, and the next check is a minute away', async () => {
@@ -201,13 +206,35 @@ test('a check that fails says so, keeps the lights as they were, and tries again
   }
 })
 
-test('a refused check asks for the view key again and stops asking', async () => {
-  const { page, timers } = board({ answers: [ageing(), { status: 401, body: { error: 'Missing or wrong view key.' } }], storage: { 'agent-cockpit-view-key': 'old-key' } })
+test('a check that finds the board signed out stops, and says to sign in again', async () => {
+  const { page, timers } = board({ answers: [ageing(), { status: 401, body: { needs: 'sign-in', error: 'Signed out.' } }] })
   await flush()
   await timers.fire()
-  assert.match(page.node('body').innerHTML, /Locked/)
-  assert.equal(page.storage.getItem('agent-cockpit-view-key'), null)
-  assert.equal(timers.pending.size, 0)
+  assert.match(page.node('body').innerHTML, /id="sign-in-form"/)
+  assert.match(page.node('sign-in-note').textContent, /signed out/i)
+  assert.equal(timers.pending.size, 0, 'it kept asking a question nobody can answer from here')
+  await visibility(page, 'hidden')
+  await visibility(page, 'visible')
+  assert.equal(timers.pending.size, 0, 'coming back to the tab started it again')
+})
+
+test('a redirect - Vercel\'s own sign-in ran out - stops the check and offers a reload, which reloads', async () => {
+  const { page, timers } = board({ answers: [ageing(), { redirect: true }] })
+  await flush()
+  await timers.fire()
+  assert.equal(timers.pending.size, 0, 'the check kept going')
+  assert.match(page.node('body').innerHTML, /<button[^>]*id="reload-to-sign-in"[^>]*>Reload<\/button>/)
+  assert.match(page.node('reload-note').textContent, /reload/i)
+  for (const handler of page.node('reload-to-sign-in').listeners.click ?? []) handler({})
+  assert.equal(page.location.reloads, 1)
+})
+
+test('a dropped connection is not a sign-out: the check backs off and tries again, as before', async () => {
+  const { page, timers } = board({ answers: [ageing(), new TypeError('offline')] })
+  await flush()
+  await timers.fire()
+  assert.equal(timers.pending.size, 1, 'a dropped connection stopped the check for good')
+  assert.doesNotMatch(page.node('body').innerHTML, /sign-in-form|reload-to-sign-in/)
 })
 
 test('two checks never overlap', async () => {

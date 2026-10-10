@@ -1920,17 +1920,23 @@ el('viewer-close').addEventListener('click', () => el('viewer').classList.remove
 
 /* ---------- Fire ---------- */
 
-// --- the view key ------------------------------------------------------------------
-// The two read endpoints refuse to answer without it, so the dashboard's own URL is the
-// thing being protected rather than the domain it sits on. Kept in localStorage, not
-// sessionStorage: this is a phone dashboard opened many times a day, and a key you retype
-// every tab is a key you turn off. On a shared device, use Log out.
+// --- signing in ------------------------------------------------------------------
+// Every endpoint refuses to answer anybody it does not recognise, so the dashboard's own URL is
+// the thing being protected rather than the domain it sits on. A device is recognised by the
+// cookie the sign-in form leaves (api/login.js): the browser sends it with every request this page
+// makes, because they are all on the board's own site, and no script here can read it (HttpOnly).
+// So the page holds no key and sends none.
+//
+// The view key a device used to keep in localStorage is read only to move that device over to the
+// cookie (moveSavedKey, at boot), then deleted.
 const VIEW_KEY_STORE = 'agent-cockpit-view-key'
-const viewKey = () => readStore(VIEW_KEY_STORE) || ''
 
+// redirect: 'manual', because with Vercel Authentication on, a Vercel sign-in that has run out
+// answers with a redirect to vercel.com. Followed, that is a failed fetch - the same as a dropped
+// connection, which is retried. Not followed, it can be told apart, and the page says to reload.
 async function apiGet(path) {
-  const key = viewKey()
-  const response = await fetch(path, { headers: key ? { 'x-view-key': key } : {} })
+  const response = await fetch(path, { redirect: 'manual' })
+  if (response.type === 'opaqueredirect') return { status: 0, ok: false, redirected: true, payload: {}, retryAfter: null }
   let payload = {}
   try { payload = await response.json() } catch (error) { /* non-JSON error page */ }
   return { status: response.status, ok: response.ok, payload, retryAfter: retryAfterSeconds(response) }
@@ -1963,10 +1969,9 @@ function fireNoteFor(button) {
 }
 
 async function callFire(body, key) {
+  // Fire checks the viewer first, like every other endpoint: the signed-in cookie goes with this
+  // by itself. The fire key, when the board has one, is the only key the page ever sends.
   const headers = { 'Content-Type': 'application/json' }
-  // Fire checks the viewer first, like every other endpoint, so it is sent the view key too.
-  const view = viewKey()
-  if (view) headers['x-view-key'] = view
   if (key) headers['x-fire-key'] = key
   const response = await fetch('/api/fire', {
     method: 'POST',
@@ -2889,12 +2894,11 @@ function pictureSwap(markup, builtIn, slot) {
   return markup.slice(0, markup.lastIndexOf('<', at)) + markup.slice(markup.indexOf('>', at) + 1)
 }
 
-// One picture from the store, with the view key, or null. Only what came back as one of the three
-// picture types counts: anything else - an error page, a refusal - is a picture that failed.
+// One picture from the store, or null - asked for by the signed-in browser, whose cookie goes with
+// it. Only what came back as one of the three picture types counts: anything else - an error page,
+// a refusal - is a picture that failed.
 async function fetchPicture(slot, wanted) {
-  const key = viewKey()
-  const response = await fetch(`/api/art?slot=${encodeURIComponent(slot)}&v=${wanted.v}&t=${ART_TYPES[wanted.type]}`,
-    { headers: key ? { 'x-view-key': key } : {} })
+  const response = await fetch(`/api/art?slot=${encodeURIComponent(slot)}&v=${wanted.v}&t=${ART_TYPES[wanted.type]}`)
   if (!response.ok) return null
   const blob = await response.blob()
   return blob && Object.hasOwn(ART_TYPES, blob.type) && blob.size > 0 ? blob : null
@@ -3300,12 +3304,10 @@ function togglePersonalise(button) {
 
 // --- writing to the picture store ---------------------------------------------------------------
 
-// Every write carries the view key, the edit key once there is one, and exactly the type the
-// server's write gate asks for - it refuses anything else.
+// Every write carries the edit key once there is one, and exactly the type the server's write gate
+// asks for - it refuses anything else. Who is writing goes with it by itself: the signed-in cookie.
 function writeHeaders(type) {
   const headers = { 'Content-Type': type }
-  const view = viewKey()
-  if (view) headers['x-view-key'] = view
   const edit = editKey()
   if (edit) headers['x-edit-key'] = edit
   return headers
@@ -5520,10 +5522,18 @@ async function checkReadiness() {
   readinessAttemptedAt = Date.now()
   try {
     const result = await apiGet(data?.commit ? `/api/state?since=${encodeURIComponent(data.commit)}` : '/api/state')
+    // Signed out (the cookie ran out, or "sign out everywhere"): stop, and say so. Asking again
+    // every minute would be asking a question nobody can answer from here.
     if (result.status === 401) {
-      writeStore(VIEW_KEY_STORE, null)
       readinessLocked = true
-      renderUnlock('This dashboard needs its view key.')
+      readinessUnschedule()
+      renderSignIn('You were signed out, so sign in again.')
+      return
+    }
+    if (result.redirected) {
+      readinessLocked = true
+      readinessUnschedule()
+      renderReload()
       return
     }
     if (!result.ok) {
@@ -5759,43 +5769,162 @@ function renderError(message) {
   </div>`
 }
 
-function renderUnlock(message) {
-  document.body.innerHTML = `<div class="unlock">
+/* ---------- Sign in ----------
+   The whole page when this device is not signed in. A real form: a username and a password that a
+   phone's keychain or a browser saves, sent with fetch, and then the page loads again - which is when
+   a keychain offers to save what was typed. Under it, the spare key (VIEW_KEY), for a lost password
+   or a new device. Phone-first, in the card the lock screen always had.
+
+   The markup is fixed: nothing is put into it. The server's sentences, and anything else that
+   changes, are set as text. */
+const SIGN_IN_HTML = `<main class="unlock" aria-labelledby="sign-in-title">
     <p class="eyebrow">Agent OS</p>
-    <h1>Locked</h1>
-    <p>${escapeHtml(message)}</p>
-    <form id="unlock-form">
-      <!-- Password managers will not offer to SAVE a lone password field. Without this the
-           key gets re-typed by hand on every device, and the course asks people to open this
-           on their phone. Hidden, never submitted anywhere - the form never leaves the page. -->
-      <input type="text" name="username" value="Agent OS view key" autocomplete="username"
-        readonly tabindex="-1" aria-hidden="true" style="display:none" />
-      <input id="unlock-key" type="password" autocomplete="current-password"
-        inputmode="text" placeholder="View key" aria-label="View key" />
-      <button class="fire" type="submit">Unlock</button>
+    <h1 id="sign-in-title">Sign in</h1>
+    <p id="sign-in-note" class="sign-in-note" role="status" aria-live="polite"></p>
+    <form id="sign-in-form" class="sign-in-form">
+      <label for="sign-in-user">Username</label>
+      <input id="sign-in-user" name="username" type="text" autocomplete="username" autocapitalize="none"
+        autocorrect="off" spellcheck="false" required />
+      <label for="sign-in-password">Password</label>
+      <input id="sign-in-password" name="password" type="password" autocomplete="current-password" required />
+      <button class="fire" type="submit" id="sign-in-submit">Sign in</button>
     </form>
-    <p class="small">The key is the <code>VIEW_KEY</code> set in your hosting environment. It
-    is stored on this device only and never appears in this page's source.</p>
-  </div>`
-  el('unlock-key').focus()
-  el('unlock-form').addEventListener('submit', (event) => {
-    event.preventDefault()
-    const entered = el('unlock-key').value.trim()
-    if (!entered) return
-    writeStore(VIEW_KEY_STORE, entered)
-    location.reload()
-  })
+    <button type="button" class="link-button" id="spare-key-show" aria-expanded="false" aria-controls="spare-key-form">Use the spare key instead</button>
+    <form id="spare-key-form" class="sign-in-form" hidden>
+      <label for="spare-key">Spare key</label>
+      <input id="spare-key" name="spare-key" type="password" autocomplete="off" required />
+      <button class="fire" type="submit" id="spare-key-submit">Sign in with the key</button>
+    </form>
+    <p class="small">Your username and password are the <code>BOARD_USERNAME</code> and <code>BOARD_PASSWORD</code>
+    set in Vercel; the spare key is your <code>VIEW_KEY</code>. This device then stays signed in for 30 days.</p>
+  </main>`
+
+// One try: { ok } or { ok: false, words } - the server's own sentence when it sent one.
+async function signInWith(username, password) {
+  let response
+  try {
+    response = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    })
+  } catch (error) {
+    return { ok: false, words: 'Could not reach the board, so you are not signed in yet. Check the connection and try again.' }
+  }
+  if (response.ok) return { ok: true }
+  const refusal = await answerOf(response)
+  return { ok: false, words: typeof refusal.error === 'string' && refusal.error ? refusal.error : `Signing in did not work (${response.status}). Try again.` }
 }
+
+function renderSignIn(message = '') {
+  document.body.innerHTML = SIGN_IN_HTML
+  el('sign-in-note').textContent = message
+  const send = async (event, { username, password, button, retry }) => {
+    event.preventDefault()
+    button.disabled = true
+    el('sign-in-note').textContent = 'Signing in…'
+    const result = await signInWith(username, password)
+    if (result.ok) {
+      location.reload()
+      return
+    }
+    el('sign-in-note').textContent = result.words
+    button.disabled = false
+    retry.focus()
+  }
+  el('sign-in-form').addEventListener('submit', (event) => send(event, {
+    username: String(el('sign-in-user').value ?? ''),
+    password: String(el('sign-in-password').value ?? ''),
+    button: el('sign-in-submit'),
+    retry: el('sign-in-password')
+  }))
+  // Put away until asked for: the password is what a person is expected to use.
+  el('spare-key-form').hidden = true
+  el('spare-key-show').addEventListener('click', () => {
+    const form = el('spare-key-form')
+    form.hidden = !form.hidden
+    el('spare-key-show').setAttribute('aria-expanded', String(!form.hidden))
+    if (!form.hidden) el('spare-key').focus()
+  })
+  el('spare-key-form').addEventListener('submit', (event) => send(event, {
+    username: '',
+    password: String(el('spare-key').value ?? '').trim(),
+    button: el('spare-key-submit'),
+    retry: el('spare-key')
+  }))
+  el('sign-in-user').focus()
+}
+
+// With Vercel Authentication on, Vercel's own sign-in can run out while the board is open: the board
+// cannot tell from here whether it is signed out, only that it was sent elsewhere. Reloading the
+// page goes through Vercel's sign-in, and then the board's.
+function renderReload() {
+  document.body.innerHTML = `<main class="unlock" aria-labelledby="reload-title">
+    <p class="eyebrow">Agent OS</p>
+    <h1 id="reload-title">Reload to sign in</h1>
+    <p id="reload-note" role="status" aria-live="polite"></p>
+    <button class="fire" type="button" id="reload-to-sign-in">Reload</button>
+  </main>`
+  el('reload-note').textContent = 'The board could not check for changes: your sign-in to Vercel has probably ended. Reload to sign in again.'
+  el('reload-to-sign-in').addEventListener('click', () => location.reload())
+  el('reload-to-sign-in').focus()
+}
+
+// A device that kept the view key in this browser's storage - the board before it had a sign-in -
+// moves over by itself: the key goes once to /api/login as the spare key, and is deleted whatever
+// the answer, because a key that worked is the cookie now and one that did not is no use. Only a
+// request that never reached the board keeps it, for the next load. Never more than once a load.
+async function moveSavedKey() {
+  const key = readStore(VIEW_KEY_STORE)
+  if (!key) return
+  try {
+    await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: '', password: key })
+    })
+  } catch (error) {
+    return
+  }
+  writeStore(VIEW_KEY_STORE, null)
+}
+
+/* Sign out, and sign out everywhere: two buttons under the screens. Everywhere is a change like any
+   other (it is kept in the picture store and counted in the day's changes), so it goes through
+   storeWrite - which asks for the edit key when the board has one - and is asked about first. */
+async function signOut(everywhere) {
+  const note = el('session-note')
+  note.textContent = ''
+  if (everywhere && !window.confirm?.('Sign out on every device, this one included? It uses one of today\'s changes.')) return
+  try {
+    if (everywhere) {
+      await storeWrite('/api/logout', JSON.stringify({ everywhere: true }), 'application/json')
+    } else {
+      const response = await fetch('/api/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      if (!response.ok) throw new Error((await answerOf(response)).error || `Signing out did not work (${response.status}).`)
+    }
+  } catch (error) {
+    note.textContent = error.message
+    return
+  }
+  readinessLocked = true
+  readinessUnschedule()
+  renderSignIn(everywhere ? 'Signed out on every device.' : 'Signed out.')
+}
+el('sign-out')?.addEventListener('click', () => signOut(false))
+el('sign-out-everywhere')?.addEventListener('click', () => signOut(true))
 
 // The repo and the brand are asked for together, so personalising adds no wait of its own unless
 // /api/brand is the slower of the two - and then three seconds at most.
 async function boot() {
+  await moveSavedKey()
   const [result, brandAnswer] = await Promise.all([apiGet('/api/state'), readBrand()])
   if (result.status === 401) {
-    // A stored key that stopped working is dropped, so the next attempt is a clean one
-    // rather than a loop against a key the deployment no longer accepts.
-    writeStore(VIEW_KEY_STORE, null)
-    renderUnlock('This dashboard needs its view key.')
+    renderSignIn()
+    return
+  }
+  if (result.redirected) {
+    renderReload()
     return
   }
   if (!result.ok) {

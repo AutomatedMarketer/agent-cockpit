@@ -309,8 +309,8 @@
   .fire-note.ok { color: var(--ok); }
   .fire-note.bad { color: var(--bad); }
 
-  /* Unlock — the whole page when the view key is missing or wrong. Phone-first: one
-     field, one thumb-sized button, nothing else to read. */
+  /* Sign in — the whole page when this device is not signed in. Phone-first: two labelled fields
+     and one thumb-sized button, then the spare key, nothing else to read. */
   /* A panel of its own, in the same family as every card behind it. The page it replaces kept its
      room for the nav - the top padding on a phone, the sidebar's width on a laptop - so the card sat
      low on one and off to the right on the other; with the nav gone, so is the room. */
@@ -322,13 +322,26 @@
   .unlock h1 { font-size: 1.6rem; letter-spacing: -.03em; margin: .3rem 0 .4rem; }
   .unlock p { color: var(--muted); font-size: .875rem; }
   .unlock .eyebrow { margin: 0; }
-  #unlock-form { display: flex; gap: .5rem; margin: 1rem 0 .8rem; }
-  #unlock-key {
-    flex: 1; min-width: 0; min-height: 2.9rem; font: inherit; font-size: 1rem; color: var(--ink);
+  #sign-in-form, #spare-key-form { display: flex; flex-direction: column; gap: .35rem; margin: 1rem 0 .8rem; }
+  #spare-key-form[hidden] { display: none; }
+  .sign-in-form label { font-size: .8125rem; font-weight: 600; color: var(--ink); margin-top: .35rem; }
+  /* 1rem text, so a phone does not zoom in when a field is tapped. */
+  .sign-in-form input {
+    width: 100%; min-height: 2.9rem; font: inherit; font-size: 1rem; color: var(--ink);
     background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
     padding: .6rem .75rem;
   }
-  #unlock-key:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+  .sign-in-form input:focus-visible { outline: 2px solid var(--link); outline-offset: 1px; }
+  .sign-in-form .fire { margin-top: .6rem; justify-content: center; min-height: 2.9rem; }
+  .unlock .sign-in-note { color: var(--ink); min-height: 1.2em; margin: .2rem 0 0; }
+  /* A button that reads as a link: the spare key, and signing out. Still a button, so a keyboard
+     and a screen reader treat it as one; thumb-sized all the same. */
+  .link-button {
+    font: inherit; font-size: .8125rem; color: var(--link); background: none; border: 0;
+    padding: .5rem 0; min-height: 2.75rem; cursor: pointer; text-decoration: underline; text-underline-offset: .2em;
+  }
+  .link-button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  .session-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0 1.2rem; margin: .4rem 0 0; }
 
   /* Add-task — an inline form at the top of the To do column. Phone-first: full-width
      fields, one thumb-sized submit button, no dialog. */
@@ -1379,6 +1392,12 @@
   <div id="hermes" class="screen"></div>
 
   <footer id="foot"></footer>
+  <!-- Signing out. Under every screen, never inside one: the screens are redrawn. -->
+  <p class="session-actions">
+    <button type="button" class="link-button" id="sign-out">Sign out</button>
+    <button type="button" class="link-button" id="sign-out-everywhere">Sign out everywhere</button>
+    <span id="session-note" class="fire-note bad" role="status" aria-live="polite"></span>
+  </p>
 </div>
 
 <div id="viewer">

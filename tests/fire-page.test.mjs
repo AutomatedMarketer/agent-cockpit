@@ -46,12 +46,12 @@ test('a 401 that is about the viewer never asks for the fire key, and is not sen
   assert.equal(fires.length, 1)
 })
 
-test('fire is sent as JSON from the board, carrying the view key like every other request', async () => {
-  const { page, fires } = firePage({ answers: [json(200, { ok: true })], storage: { 'agent-cockpit-view-key': 'vk_on_this_device' } })
+test('fire is sent as JSON from the board, with no view key: the signed-in cookie goes by itself', async () => {
+  const { page, fires } = firePage({ answers: [json(200, { ok: true })] })
   await flush()
   await page.exposed.postFire({ workflow: 'monday-brief' })
   assert.equal(fires[0].method, 'POST')
   assert.equal(fires[0].headers['Content-Type'], 'application/json')
-  assert.equal(fires[0].headers['x-view-key'], 'vk_on_this_device')
+  assert.equal(fires[0].headers['x-view-key'], undefined)
   assert.deepEqual(JSON.parse(fires[0].body), { workflow: 'monday-brief' })
 })
