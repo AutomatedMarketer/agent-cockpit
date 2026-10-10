@@ -20,6 +20,13 @@ const KB = 1024
 
 // The two wide pictures behind the Today and Team headers, and one portrait per template agent.
 const BANNERS = ['today-harbour.webp', 'team-workshop.webp']
+// The look-and-feel set (2026-10-10): a banner for every other screen and the sign-in page, held
+// under 90 KB, and the sidebar's square picture under 40 KB.
+const SCREEN_BANNERS = [
+  'ledger-counting-room.webp', 'workflows-clock-tower.webp', 'readiness-lighthouse.webp', 'skills-drawers.webp',
+  'memory-archive.webp', 'connections-bridges.webp', 'hermes-loft.webp', 'unlock-gate.webp'
+]
+const SQUARES = ['side-dusk.webp']
 const PORTRAITS = [
   'content', 'customer-service', 'editor', 'email', 'orchestrator', 'research', 'sales', 'security'
 ].map((slug) => `agent-${slug}.webp`)
@@ -27,8 +34,11 @@ const PORTRAITS = [
 // Budgets, not targets. The banner is on the first screen anybody sees, and every portrait on Team
 // loads together - one careless 2 MB export would cost more than the whole rest of the page.
 const BANNER_BUDGET = 100 * KB
+const SCREEN_BANNER_BUDGET = 90 * KB
+const SQUARE_BUDGET = 40 * KB
 const PORTRAIT_BUDGET = 45 * KB
-const ART_TOTAL_BUDGET = 450 * KB
+// Every picture is lazy but Today's, so the total is what a person pays only by opening every screen.
+const ART_TOTAL_BUDGET = 1100 * KB
 const FONT_BUDGET = 64 * KB
 
 // A WebP is a RIFF container: "RIFF", a little-endian length of everything after those eight
@@ -52,7 +62,7 @@ test('every art file is a real webp under its budget', () => {
   for (const name of onDisk) {
     assert.ok(name.endsWith('.webp'), `public/art/${name} is not a .webp - only the compressed pictures ship`)
   }
-  for (const name of [...BANNERS, ...PORTRAITS]) {
+  for (const name of [...BANNERS, ...SCREEN_BANNERS, ...SQUARES, ...PORTRAITS]) {
     assert.ok(onDisk.includes(name), `public/art/${name} is missing`)
   }
 
@@ -61,7 +71,8 @@ test('every art file is a real webp under its budget', () => {
     const buf = readFileSync(pub('art', name))
     const problem = webpProblem(buf)
     assert.equal(problem, null, `public/art/${name} ${problem}`)
-    const budget = BANNERS.includes(name) ? BANNER_BUDGET : PORTRAIT_BUDGET
+    const budget = BANNERS.includes(name) ? BANNER_BUDGET : SCREEN_BANNERS.includes(name) ? SCREEN_BANNER_BUDGET
+      : SQUARES.includes(name) ? SQUARE_BUDGET : PORTRAIT_BUDGET
     assert.ok(buf.length <= budget, `public/art/${name} is ${buf.length} bytes, over its ${budget / KB} KB budget`)
     total += buf.length
   }
