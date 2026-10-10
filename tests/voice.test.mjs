@@ -344,6 +344,15 @@ test('the README explains speakers and headphones mode, and why', () => {
   assert.match(readme, /tap the orb, press Esc or press Space/i)
 })
 
+test('the README records the rule Phase 11 must keep: a spoken yes counts only while no reply plays and the microphone was open', () => {
+  const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
+  const row = readme.split(/\r?\n/).find((line) => line.startsWith('| **What it cannot do yet** |')) ?? ''
+  assert.match(row, /Phase 11/)
+  assert.match(row, /spoken yes/i)
+  assert.match(row, /only while no reply is playing/i)
+  assert.match(row, /microphone was open/i)
+})
+
 /* ---------- the session tune-up ---------- */
 
 test('the instructions say every reply is spoken: a short first sentence, no markdown, lists, links or URLs, numbers said aloud', () => {
