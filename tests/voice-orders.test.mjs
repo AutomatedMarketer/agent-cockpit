@@ -11,12 +11,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { ordersConfig, ordersView, MAX_ORDER_JOBS } from '../api/_orders.js'
 import {
-  ORDERS_OFF, voiceConfig, sessionFor, plainYes, plainNo, spokenYesCounts, orderFrom, VOICE_DETAILS_MAX, jobStatusAnswer, spokenYesFits,
+  ORDERS_OFF, voiceConfig, sessionFor, plainYes, plainNo, spokenYesCounts, orderFrom, VOICE_DETAILS_MAX, jobStatusAnswer, spokenYesFits, hiddenText,
   CONFIRM_WINDOW_MS, YES_QUIET_BEFORE_MS, DOUBLE_SEND_MS
 } from '../api/_voice.js'
 import { makeHandler } from '../api/voice-session.js'
 import { STORE_ENV, NOON, connectedStore, asTheBoard, call } from './helpers/personalise-harness.mjs'
 import { OPENAI_KEY, SDP_OFFER, SDP_ANSWER } from './helpers/voice-fixtures.mjs'
+import { HIDDEN_KINDS, PLAIN_TEXT } from './helpers/hidden-text.mjs'
 
 // Trigger links shaped like the real ones, made up. Nothing here is a working address.
 const LINK = (n) => `https://claude.ai/code/triggers/trig_${n}/fire`
@@ -423,4 +424,39 @@ test('a spoken yes may approve only a job run, or a task with a title of 80 char
   assert.equal(spokenYesFits({ kind: 'task', title: 'x'.repeat(81) }), false)
   assert.equal(spokenYesFits({ kind: 'task', title: 'Draft it', details: 'Use the notes.' }), false)
   for (const odd of [null, undefined, {}, { kind: 'task' }, { kind: 'delete' }, 'run']) assert.equal(spokenYesFits(odd), false, JSON.stringify(odd))
+})
+
+/* ---------- text a person cannot see ---------- */
+
+test('hidden text is refused, never stripped: format characters, private use, unassigned, stray variation selectors', () => {
+  for (const [what, text] of HIDDEN_KINDS) assert.equal(hiddenText(text), true, `${what} was let through`)
+  for (const text of PLAIN_TEXT) assert.equal(hiddenText(text), false, `"${text}" was refused`)
+  for (const notText of [undefined, null, 42, '']) assert.equal(hiddenText(notText), false)
+})
+
+test('the order check, and the spoken-yes rule, refuse every kind of hidden text in a title or details', () => {
+  const orders = { on: true, tasks: true, jobs: [], key: 'fire-key', spokenYes: true, jev: false }
+  for (const [what, text] of HIDDEN_KINDS) {
+    assert.ok(orderFrom('add_task', { title: text }, { orders }).error, `${what}: a title with it became a card`)
+    assert.ok(orderFrom('add_task', { title: 'Draft it', details: `Notes ${text}` }, { orders }).error, `${what}: details with it became a card`)
+    assert.equal(spokenYesFits({ kind: 'task', title: text }), false, `${what}: a spoken yes could approve it`)
+  }
+  for (const text of PLAIN_TEXT) {
+    assert.ok(orderFrom('add_task', { title: text, details: text }, { orders }).order, `"${text}" was refused`)
+    assert.equal(spokenYesFits({ kind: 'task', title: text }), true, `"${text}" could not be said yes to`)
+  }
+  // A refusal never repeats the hidden words.
+  assert.ok(!JSON.stringify(orderFrom('add_task', { title: HIDDEN_KINDS[0][1] }, { orders })).includes('Draft'))
+})
+
+test('the board\'s own code carries no character this rule refuses: every one it names is written as an escape', async () => {
+  const { readdirSync } = await import('node:fs')
+  const files = [
+    ...readdirSync(new URL('../api/', import.meta.url)).filter((name) => name.endsWith('.js')).map((name) => `../api/${name}`),
+    '../public/app.js', '../public/index.html', '../README.md'
+  ]
+  for (const file of files) {
+    const text = readFileSync(new URL(file, import.meta.url), 'utf8')
+    assert.equal(hiddenText(text), false, `${file} has a character in it nobody can see`)
+  }
 })

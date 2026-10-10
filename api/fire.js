@@ -14,6 +14,8 @@
 // - GITHUB_TOKEN stays on the server, as in api/state.js and api/file.js.
 
 import { parseSimpleYaml } from './_yaml-lite.js'
+// The one rule for text a person cannot see, shared with the page's own check (api/_voice.js).
+import { hiddenText } from './_voice.js'
 
 const GITHUB = 'https://api.github.com'
 const ACTIONS = ['run', 'pause', 'task', 'arm', 'approve', 'move', 'skill', 'agent']
@@ -155,11 +157,18 @@ export function validateTask(body) {
   if (CONTROL_CHARS.test(title)) {
     return { error: 'title must be a single plain line — no control characters.' }
   }
+  // Refused, not stripped: characters nobody can see mean the words are not what they look like.
+  if (hiddenText(rawTitle)) {
+    return { error: 'title must be plain text — no characters that cannot be seen.' }
+  }
   const task = { title }
   const details = body.details
   if (details !== undefined && details !== null && details !== '') {
     if (typeof details !== 'string' || details.length > DETAILS_MAX) {
       return { error: `details must be text of at most ${DETAILS_MAX} characters.` }
+    }
+    if (hiddenText(details)) {
+      return { error: 'details must be plain text — no characters that cannot be seen.' }
     }
     task.details = details
   }
@@ -257,11 +266,18 @@ export function validateCreation(body) {
   if (CONTROL_CHARS.test(title)) {
     return { error: 'title must be a single plain line — no control characters.' }
   }
+  // Refused, not stripped: characters nobody can see mean the words are not what they look like.
+  if (hiddenText(rawTitle)) {
+    return { error: 'title must be plain text — no characters that cannot be seen.' }
+  }
   const item = { title }
   const details = body.details
   if (details !== undefined && details !== null && details !== '') {
     if (typeof details !== 'string' || details.length > DETAILS_MAX) {
       return { error: `details must be text of at most ${DETAILS_MAX} characters.` }
+    }
+    if (hiddenText(details)) {
+      return { error: 'details must be plain text — no characters that cannot be seen.' }
     }
     item.details = details
   }

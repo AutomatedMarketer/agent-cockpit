@@ -741,7 +741,7 @@ Locally:
 npm test
 ```
 
-1803 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1807 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -778,6 +778,7 @@ used only when you connect a picture store.
 | A Run button answers "…does not have trigger.fire: true" | Add `fire: true` to that job's trigger block, commit and push |
 | "Orders by voice are off…" | The board's Run buttons are not set up yet. Follow [Orders by voice](#orders-by-voice) |
 | "Didn't catch a clear yes - tap Yes." | Your yes was not plain, came during or just after its voice, or the fire key is not in this tab yet. Tap **Yes** |
+| Add task, or a voice order, answers "…no characters that cannot be seen" | The words carry characters nobody can see - often pasted from somewhere else. They are refused, never quietly removed: type or say them again |
 | "Not sent: …" in the voice panel | The board refused the order, and the rest of the line says why. The assistant is told not to say it was sent |
 | Add task, New workflow, Arm or Approve answer "No \"task-intake\" routine is registered" | Those four dispatch to one dedicated routine rather than to a job, so `task-intake` needs its own entry in `FIRE_TRIGGERS`. It is not a workflow slug and wiring every workflow does not supply it |
 | The board looks empty but the repo is fine | Check the branch. `GITHUB_BRANCH` defaults to `main` |

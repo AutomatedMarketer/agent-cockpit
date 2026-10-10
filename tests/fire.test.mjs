@@ -14,6 +14,7 @@ import handler, {
   validateCreation,
   creationDispatchPayload
 } from '../api/fire.js'
+import { HIDDEN_KINDS, PLAIN_TEXT } from './helpers/hidden-text.mjs'
 
 const FIRE_KEY = 'fk_correctHorseBatteryStaple'
 // Fire is held to the view gate first (finding #1 of the 2026-10-10 audit), so every request that
@@ -977,3 +978,22 @@ for (const kind of ['skill', 'agent']) {
       'an interpolated noun left "a agent" in the text a session reads')
   })
 }
+
+test('fire refuses hidden text in a task or a creation - from voice and from the Add task button alike', async () => {
+  for (const [what, text] of HIDDEN_KINDS) {
+    assert.ok(validateTask({ title: text }).error, `${what}: a task title with it was accepted`)
+    assert.ok(validateTask({ title: 'Draft it', details: `Notes ${text}` }).error, `${what}: task details with it were accepted`)
+    assert.ok(validateCreation({ title: text }).error, `${what}: a skill or agent sentence with it was accepted`)
+    assert.ok(validateCreation({ title: 'A skill', details: `More ${text}` }).error, `${what}: creation details with it were accepted`)
+  }
+  for (const text of PLAIN_TEXT) {
+    assert.ok(validateTask({ title: text, details: text }).task, `"${text}" was refused`)
+    assert.ok(validateCreation({ title: text, details: text }).item, `"${text}" was refused`)
+  }
+  // End to end: the reviewer's title is a 400 before anything is dispatched, and never echoed.
+  const { response, calls } = await fire(withKey({ action: 'task', title: HIDDEN_KINDS[0][1] }))
+  assert.equal(response.statusCode, 400)
+  assert.equal(calls.trigger.length, 0, 'it was dispatched')
+  assert.ok(!JSON.stringify(response.body).includes('Draft'), 'the hidden title was echoed')
+  assertNoSecrets(response)
+})

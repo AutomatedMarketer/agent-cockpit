@@ -4284,6 +4284,35 @@ function confirmsYes(event) {
   return event.type === 'keydown' && (event.key === 'Enter' || event.key === ' ')
 }
 
+// --- text a person cannot see ---
+// THE one rule for every title and details an order or a task card carries - this check, the spoken-
+// yes rule, and /api/fire (which imports it) - so the page and the server cannot disagree. Refused,
+// never stripped: hidden characters mean the words are not what they look like. A reviewer hid 31
+// Unicode TAG characters spelling an instruction inside a title that showed as "Draft it" (2026-10-10).
+// Hidden: format characters (zero-width, bidi overrides and isolates, tags, the soft hyphen),
+// private-use and unassigned code points, and variation selectors - except the two emoji ones
+// (U+FE0E, U+FE0F) straight after an emoji, and a zero-width joiner between two emoji, which is how a
+// family, a coder or a flag is written. Written without lookbehind, which older Safari cannot parse.
+const HIDDEN_CHAR = /[\p{Cf}\p{Co}\p{Cn}\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/u
+const EMOJI_CHAR = /\p{Emoji}/u
+const EMOJI_PART = /\p{Extended_Pictographic}|\p{Emoji_Modifier}/u
+
+function hiddenText(value) {
+  if (typeof value !== 'string') return false
+  const chars = [...value]
+  for (let at = 0; at < chars.length; at += 1) {
+    const char = chars[at]
+    if (!HIDDEN_CHAR.test(char)) continue
+    if ((char === '\uFE0E' || char === '\uFE0F') && at > 0 && EMOJI_CHAR.test(chars[at - 1])) continue
+    if (char === '\u200D') {
+      const before = chars[at - 1] === '\uFE0F' ? chars[at - 2] : chars[at - 1]
+      if (before !== undefined && EMOJI_PART.test(before) && chars[at + 1] !== undefined && EMOJI_PART.test(chars[at + 1])) continue
+    }
+    return true
+  }
+  return false
+}
+
 // --- an order the assistant proposes, checked before any card ---
 // The rules /api/fire holds a task card to - a title of 3 to 200 characters on one plain line - and a
 // shorter cap on details for a spoken order; a job only when this board can fire it: its slug is one
@@ -4305,6 +4334,10 @@ function orderFrom(name, args, { orders, data } = {}) {
     if (raw !== undefined && raw !== null && typeof raw !== 'string') return { error: 'The details of a task must be words.' }
     const details = typeof raw === 'string' ? raw.trim() : ''
     if (details.length > VOICE_DETAILS_MAX) return { error: `The details of a task can be at most ${VOICE_DETAILS_MAX} characters by voice.` }
+    // The words as sent, before any trimming: a hidden character at either end (a BOM) is still hidden.
+    if (hiddenText(args?.title) || hiddenText(raw)) {
+      return { error: 'That task has characters in it nobody can see, so it cannot be sent. Ask for it again in plain words.' }
+    }
     return { order: { kind: 'task', title, ...(details ? { details } : {}) } }
   }
   if (name === 'run_job') {
@@ -4374,7 +4407,7 @@ const SPOKEN_TITLE_MAX = 80
 function spokenYesFits(order) {
   if (order?.kind === 'run') return typeof order.slug === 'string' && order.slug.length > 0
   if (order?.kind !== 'task' || typeof order.title !== 'string') return false
-  return order.title.length <= SPOKEN_TITLE_MAX && !order.details
+  return order.title.length <= SPOKEN_TITLE_MAX && !order.details && !hiddenText(order.title)
 }
 
 const plainYes = (text) => onlyUnits(spokenWords(text), YES_UNITS)
