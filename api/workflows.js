@@ -206,13 +206,94 @@ export function nextRunAt(schedule, { now = Date.now(), lastRun = null } = {}) {
   return null
 }
 
-// A scheduled workflow that has missed two whole intervals is not "running a little late",
-// it has gone quiet — and an agent that silently stopped is worse than no agent.
+// How late a run may be, and how far a run may come before its slot, and still count for it. The
+// grace is the board's running grace (RUNNING_GRACE_MINUTES in state.js; a test holds the two
+// together): a slot that came due a minute ago has not been missed yet.
+export const SLOT_GRACE_MINUTES = 30
+export const SLOT_TOLERANCE_MINUTES = 5
+
+const MINUTE_MS = 60_000
+const clockTime = (hours, minutes) => {
+  const hour = Number(hours)
+  const minute = Number(minutes)
+  return hour <= 23 && minute <= 59 ? hour * 60 + minute : null
+}
+
+// The `count` most recent times this schedule was expected to run, at or before `now` minus the
+// grace, newest first, all in UTC like nextRunAt. [] for a schedule it cannot read or a clock time
+// that does not exist (daily 25:00), and for a clock that is not a number.
+//
+// An `every N` schedule has no fixed phase - nothing in the file says when it started - so its
+// slots are N, 2N, ... before the limit. That is the same rule the Mac collector uses for a launchd
+// job with an interval, so the two kinds of job are judged the same way.
+export function previousRunsAt(schedule, { now = Date.now(), count = 2, graceMinutes = SLOT_GRACE_MINUTES } = {}) {
+  if (typeof schedule !== 'string' || !Number.isFinite(now)) return []
+  const limit = now - graceMinutes * MINUTE_MS
+  const trimmed = schedule.trim()
+  const found = []
+  const done = () => found.length >= count
+  let match
+
+  if ((match = /^every (\d+) (minutes|hours)$/.exec(trimmed))) {
+    const stepMs = Number(match[1]) * (match[2] === 'hours' ? 60 : 1) * MINUTE_MS
+    if (!(stepMs > 0)) return []
+    for (let back = 1; !done(); back += 1) found.push(limit - back * stepMs)
+  } else if (trimmed === 'hourly') {
+    const hour = 60 * MINUTE_MS
+    for (let at = Math.floor(limit / hour) * hour; !done(); at -= hour) found.push(at)
+  } else if ((match = /^monthly (\d{1,2}) (\d{2}):(\d{2})$/.exec(trimmed))) {
+    const day = Number(match[1])
+    const minutes = clockTime(match[2], match[3])
+    if (day < 1 || day > 31 || minutes === null) return []
+    const base = new Date(limit)
+    // Walk back month by month; a month without that date (no 31st of September) is skipped.
+    for (let back = 0; back < 120 && !done(); back += 1) {
+      const candidate = Date.UTC(base.getUTCFullYear(), base.getUTCMonth() - back, day, Math.floor(minutes / 60), minutes % 60)
+      if (new Date(candidate).getUTCDate() === day && candidate <= limit) found.push(candidate)
+    }
+  } else {
+    // The three day-based forms: a clock time on every day, on Monday to Friday, or on one weekday.
+    let minutes = null
+    let onDay = () => true
+    if ((match = /^daily (\d{2}):(\d{2})$/.exec(trimmed))) minutes = clockTime(match[1], match[2])
+    else if ((match = /^weekdays (\d{2}):(\d{2})$/.exec(trimmed))) {
+      minutes = clockTime(match[1], match[2])
+      onDay = (weekday) => weekday !== 0 && weekday !== 6
+    } else if ((match = /^weekly (sun|mon|tue|wed|thu|fri|sat) (\d{2}):(\d{2})$/.exec(trimmed))) {
+      minutes = clockTime(match[2], match[3])
+      onDay = (weekday) => weekday === DAYS.indexOf(match[1])
+    }
+    if (minutes === null) return []
+    const dayMs = 24 * 60 * MINUTE_MS
+    const midnight = Math.floor(limit / dayMs) * dayMs
+    for (let back = 0; back < 400 && !done(); back += 1) {
+      const day = midnight - back * dayMs
+      const candidate = day + minutes * MINUTE_MS
+      if (candidate <= limit && onDay(new Date(day).getUTCDay())) found.push(candidate)
+    }
+  }
+  return found.map((ms) => new Date(ms).toISOString())
+}
+
+// Of the last two slots this schedule expected, how many did the last run miss? A run counts for a
+// slot when it came no more than the tolerance before it, or at any time after. `missed` is 0 (on
+// time), 1 (late - the older slot is covered, the newer is not) or 2 (silent: both missed, or never
+// ran). null when there is no schedule to judge, which is a button-only workflow.
+export function lateness(schedule, lastRunIso, { now = Date.now(), graceMinutes = SLOT_GRACE_MINUTES } = {}) {
+  const expected = previousRunsAt(schedule, { now, count: 2, graceMinutes })
+  if (expected.length < 2) return null
+  const last = typeof lastRunIso === 'string' ? Date.parse(lastRunIso) : NaN
+  const counts = (slot) => Number.isFinite(last) && last >= Date.parse(slot) - SLOT_TOLERANCE_MINUTES * MINUTE_MS
+  return { expected, missed: counts(expected[0]) ? 0 : counts(expected[1]) ? 1 : 2 }
+}
+
+// A scheduled workflow that has missed two slots is not "running a little late", it has gone
+// quiet - and an agent that silently stopped is worse than no agent.
+//
+// Counted in SLOTS, not in minutes since the last run. It used to be two whole intervals, and a
+// weekday job's interval was a day: from Sunday morning until Monday's run, every weekday job read
+// as gone quiet, because Friday to Sunday is forty-eight hours. The Readiness screen counts the
+// same slots, so the two screens agree.
 export function isGoneQuiet(schedule, lastRunIso, now = Date.now()) {
-  const interval = scheduleMinutes(schedule)
-  if (interval === null || interval === undefined) return false
-  if (!lastRunIso) return true
-  const last = Date.parse(lastRunIso)
-  if (Number.isNaN(last)) return true
-  return (now - last) / 60000 > interval * 2
+  return lateness(schedule, lastRunIso, { now })?.missed === 2
 }
