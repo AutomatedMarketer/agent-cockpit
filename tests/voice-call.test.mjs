@@ -589,6 +589,76 @@ test('a turn early in a reply that turns out to be the person does restart the i
   assert.notDeepEqual(idleWait(), before, 'the person talking did not restart the idle wait')
 })
 
+/* ---------- the double reply ---------- */
+// The person's own turn, ending after the tool outputs went, gets a response of its own from OpenAI
+// that already has them. That response is the reply; asking for another would answer twice.
+
+const saidAndDone = (browser, words) => {
+  browser.emit({ type: 'response.output_audio_transcript.delta', delta: words })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_audio' }] }] } })
+}
+
+test('the person\'s new turn gets the tool reply in its own response - nothing more is asked for, so it never answers twice', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  toolReply(browser)
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.emit({ type: 'input_audio_buffer.committed' })
+  browser.emit({ type: 'response.created' })
+  saidAndDone(browser, 'The morning brief runs at three.')
+  assert.equal(creates(browser), 0, 'the reply was asked for again after the person\'s own turn had it')
+  assert.ok(![...browser.timers.values()].some((timer) => timer.ms === 1500), 'a wait to ask for it again was left running')
+  // And a refusal arriving late cannot bring it back.
+  browser.emit(ACTIVE_RESPONSE)
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  assert.equal(creates(browser), 0)
+})
+
+test('an echo is not the person: its response never stands in for the tool reply, which is still asked for once', async () => {
+  const echoAfterTools = async (transcript, { wordsFirst = true } = {}) => {
+    const browser = await guarded()
+    browser.emit({ type: 'response.created' })
+    browser.emit({ type: 'output_audio_buffer.started' })
+    browser.clock.now += 1200
+    browser.emit({ type: 'input_audio_buffer.speech_started' })
+    toolReply(browser)
+    browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+    browser.emit({ type: 'response.created' })
+    if (wordsFirst) browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_turn', transcript, usage: TRANSCRIPTION_USAGE })
+    saidAndDone(browser, 'Sure.')
+    return creates(browser)
+  }
+  assert.equal(await echoAfterTools('It happened.'), 1, 'an echo\'s response was taken for the tool reply')
+  // Its words not in yet when its response ends: it might be the echo, so the reply is still asked for.
+  assert.equal(await echoAfterTools('Wait, which job is due?', { wordsFirst: false }), 1)
+  // Words that show it is the person: their turn's response was the reply.
+  assert.equal(await echoAfterTools('Wait, which job is due?'), 0)
+})
+
+test('only the turn that just ended can stand in for the reply - never one from an earlier round', async () => {
+  const browser = await connected()
+  // A turn ends with a reply owed, but gets no response of its own: the reply is asked for after 1.5 s.
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  toolReply(browser)
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  const [, held] = [...browser.timers.entries()].find(([, timer]) => timer.ms === 1500)
+  held.fn()
+  browser.emit({ type: 'response.created' })
+  saidAndDone(browser, 'The morning brief runs at three.')
+  assert.equal(creates(browser), 1)
+  // Next round: the request is refused because OpenAI started a response of its own. That response is
+  // no turn of the person's, so the reply is asked for once more after it, as always.
+  browser.emit({ type: 'response.created' })
+  toolReply(browser)
+  browser.emit({ type: 'response.created' })
+  browser.emit(ACTIVE_RESPONSE)
+  saidAndDone(browser, 'Hm.')
+  assert.equal(creates(browser), 3, 'a turn from the round before stood in for this round\'s reply')
+})
+
 /* ---------- speakers mode: on a computer, the microphone rests while the reply plays ---------- */
 // Live test #2 (2026-10-09): on Nuno's PC the sound runs through Elgato Wave Link - a virtual
 // output to his speakers, and its own microphone input - and the browser's echo canceller cannot

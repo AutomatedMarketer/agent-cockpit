@@ -5708,7 +5708,7 @@ function openVoice(deps, ui) {
   const session = {
     state: 'connecting', stopped: false, turns: { current: 0 }, tally: emptyTally(), claims: null, ticket: '',
     mouth: 'openai', idleMinutes: 2, captions: true, responding: false, calls: new Map(), said: '',
-    userSpeaking: false, replyOwed: false, replyRetries: 0, replyTimer: null,
+    userSpeaking: false, replyOwed: false, replyRetries: 0, replyTimer: null, turnTakesReply: false,
     echoGuard: false, soundStartedAt: null, suspectTurn: false, echoRetryLeft: 1,
     speakersMode: false, micMuted: false, soundPlaying: false, tailTimer: null, restTimer: null,
     replyHadOutput: false, cancelledByUs: false,
@@ -5891,8 +5891,9 @@ function openVoice(deps, ui) {
   // running ("Conversation already has an active response"), and its server VAD starts one of its own
   // the moment it hears a turn end - which can fall between our outputs and our request (seen live,
   // 2026-10-09). So the request goes only when no response is running and nobody is talking; else it
-  // is owed, and asked once after the next response.done. Refused anyway, it is asked once more after
-  // that - never again for the same batch, so it cannot loop.
+  // is owed, and asked once after the next response.done - unless that response answered the person's
+  // own new turn, which already had the outputs, so it was the reply. Refused anyway, it is asked once
+  // more after that - never again for the same batch, so it cannot loop.
   function askForReply() {
     deps.clearTimeout(session.replyTimer)
     session.replyTimer = null
@@ -5916,7 +5917,9 @@ function openVoice(deps, ui) {
 
   // The turn the echo guard took for the assistant's own voice: the response the server started for it
   // stopped, the turn taken out of the conversation, and the reply it cut off asked for again, once.
+  // Not the person, so its response never stands in for a tool reply (response.done, below).
   function heardItself(itemId) {
+    session.turnTakesReply = false
     if (session.responding) {
       send({ type: 'response.cancel' })
       send({ type: 'output_audio_buffer.clear' })
@@ -5957,6 +5960,9 @@ function openVoice(deps, ui) {
         break
       case 'input_audio_buffer.speech_stopped':
         session.userSpeaking = false
+        // A turn ending with the tool reply owed: the outputs went before it, so the response OpenAI
+        // starts for it already has them.
+        session.turnTakesReply = session.replyOwed
         if (!session.suspectTurn) armIdle()
         if (session.replyOwed && !session.responding) waitThenAsk()
         show('thinking')
@@ -6027,6 +6033,16 @@ function openVoice(deps, ui) {
         const empty = !session.replyHadOutput && session.calls.size === 0 &&
           !output.some((item) => item?.type === 'message' || item?.type === 'function_call')
         const unexplained = empty && !session.cancelledByUs && !session.userSpeaking && !session.replyOwed
+        // The person's own turn (its words showed it is not an echo) has had its response, with the
+        // tool outputs in hand: that was the reply. Asking for another would answer twice. One that
+        // said nothing did not reply, so the reply is still asked for.
+        if (session.replyOwed && session.turnTakesReply && !session.suspectTurn && !empty) {
+          session.replyOwed = false
+          session.replyRetries = 0
+          deps.clearTimeout(session.replyTimer)
+          session.replyTimer = null
+        }
+        session.turnTakesReply = false
         session.tally = addUsage(session.tally, event.response?.usage, 'reply')
         saveTally()
         showCost()
