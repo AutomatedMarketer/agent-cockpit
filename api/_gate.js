@@ -19,19 +19,40 @@ const SIGNED_OUT =
   'Signed out: reload the board and sign in again. (Scripts: send the view key in the x-view-key header.)'
 
 // The moment of the last "sign out everywhere", as this server last read it from the picture store.
+//
+// Read at most once every SIGN_OUT_RECHECK_MS. Every read of the store is billed - Hobby includes
+// 10,000 a month and locks the store for 30 days past them - and a read on every signed-in request
+// came to about 1,440 a day with the Readiness wall open (review, 2026-10-10). So another server
+// finds out about a press within 10 minutes, plus the store's own minute of caching; the server
+// that saved it knows at once (noteSignOut). Changing BOARD_PASSWORD or VIEW_KEY is the instant
+// sign-out, and needs no store.
+//
 // A store that cannot be read is not a reason to lock the owner out of a board whose data comes from
-// GitHub - a Hobby store that passes its free allowance is locked for 30 days - so a failed read
-// keeps the last moment this server saw: "never", until it has seen one. Rotating VIEW_KEY is the
-// sign-out that needs no store at all.
+// GitHub, so a failed read keeps the last moment this server saw: "never", until it has seen one.
+// It only ever moves forward: an older moment read later - a stale cached copy, another server's
+// slow clock - never lets back in a device this server already knows was signed out.
+export const SIGN_OUT_RECHECK_MS = 10 * 60_000
 let lastSignOutSeen = 0
+let lastChecked = -Infinity
 
 export function forgetSignOuts() {
   lastSignOutSeen = 0
+  lastChecked = -Infinity
 }
 
-async function signedOutBefore(env, store) {
+// What the server that saved a "sign out everywhere" knows without reading it back.
+export function noteSignOut(moment, now = Date.now()) {
+  lastSignOutSeen = Math.max(lastSignOutSeen, moment)
+  lastChecked = now
+}
+
+async function signedOutBefore(env, store, now) {
+  if (now - lastChecked < SIGN_OUT_RECHECK_MS) return lastSignOutSeen
   const pictures = store !== undefined ? store : pictureStore(env)
   if (!pictures) return lastSignOutSeen
+  // Marked before the read, so requests arriving while it is out use what is known rather than each
+  // starting a read of their own; a failed read is not tried again for 10 minutes either.
+  lastChecked = now
   try {
     const { settings } = await pictures.readSettings()
     const moment = Number.isSafeInteger(settings?.sessionsValidFrom) ? settings.sessionsValidFrom : 0
@@ -42,14 +63,16 @@ async function signedOutBefore(env, store) {
   return lastSignOutSeen
 }
 
-// The signed-in session a request carries, or null. The store is only asked once the cookie has
-// proved itself, so a stranger - with no cookie or a made-up one - never costs a store read.
-async function sessionOf(request, env, store) {
+// The signed-in session a request carries, or null. Checked first against what this server already
+// knows, which costs nothing, so a stranger - with no cookie or a made-up one - never costs a store
+// read. Only then, and only when `checkSignOut` is on, is the store asked (at most every 10 minutes).
+async function sessionOf(request, env, store, checkSignOut) {
   const token = readSessionCookie(request?.headers)
   if (!token) return null
   const now = Date.now()
-  if (!verifySession(token, env, { now })) return null
-  return verifySession(token, env, { now, signedOutBefore: await signedOutBefore(env, store) })
+  const known = verifySession(token, env, { now, signedOutBefore: lastSignOutSeen })
+  if (!known || !checkSignOut) return known
+  return verifySession(token, env, { now, signedOutBefore: await signedOutBefore(env, store, now) })
 }
 
 // Returns null when the request may proceed, or {status, error, needs?} to send back. Closed is the
@@ -60,7 +83,11 @@ async function sessionOf(request, env, store) {
 // `store` is the picture store, where "sign out everywhere" is kept (the endpoints that already have
 // one hand it in; left out, it is built from the environment). `response`, when given, receives a
 // fresh cookie for a session over a day old, so an active phone never reaches its 30 days.
-export async function viewGate(request, env = process.env, { store, response } = {}) {
+//
+// `checkSignOut: false` is for one answer only: /api/state's "nothing has changed since the commit
+// you hold", which carries no board at all. It still refuses a session this server already knows
+// was signed out; it just does not ask the store, and it never renews a cookie.
+export async function viewGate(request, env = process.env, { store, response, checkSignOut = true } = {}) {
   if (env.PUBLIC_DASHBOARD === 'true') return null
   if (!env.VIEW_KEY) {
     return {
@@ -72,9 +99,9 @@ export async function viewGate(request, env = process.env, { store, response } =
   }
   const provided = request?.headers?.['x-view-key'] ?? request?.headers?.['X-View-Key']
   if (typeof provided === 'string' && provided && keysMatch(provided, env.VIEW_KEY)) return null
-  const session = await sessionOf(request, env, store)
+  const session = await sessionOf(request, env, store, checkSignOut)
   if (!session) return { status: 401, needs: 'sign-in', error: SIGNED_OUT }
-  const renewed = response ? renewedSessionToken(session, env) : null
+  const renewed = response && checkSignOut ? renewedSessionToken(session, env) : null
   if (renewed) response.setHeader('Set-Cookie', sessionCookie(renewed))
   return null
 }

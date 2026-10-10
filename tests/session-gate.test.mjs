@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { readdirSync } from 'node:fs'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { join } from 'node:path'
-import { viewGate, writeGate, forgetSignOuts } from '../api/_gate.js'
+import { viewGate, writeGate, forgetSignOuts, noteSignOut } from '../api/_gate.js'
 import { newSessionToken, verifySession, SESSION_COOKIE, RENEW_AFTER_MS } from '../api/_session.js'
 import { emptySettings } from '../api/_picture-store.js'
 
@@ -84,6 +84,7 @@ test('a cookie signed in before "sign out everywhere" is refused; one signed in 
 })
 
 test('the store is asked only about a cookie that is otherwise good - never for a stranger', async () => {
+  forgetSignOuts()
   const store = storeSaying(0)
   await viewGate({ headers: {} }, ENV, { store })
   await viewGate({ headers: cookieFor('forged.thing') }, ENV, { store })
@@ -91,6 +92,7 @@ test('the store is asked only about a cookie that is otherwise good - never for 
   assert.equal(store.reads, 0, 'a request with no good cookie made the board read its store')
   await viewGate({ headers: signedIn() }, ENV, { store })
   assert.equal(store.reads, 1)
+  forgetSignOuts()
 })
 
 test('a store that cannot be read keeps the last sign-out this server saw, and never locks the owner out', async () => {
@@ -98,15 +100,24 @@ test('a store that cannot be read keeps the last sign-out this server saw, and n
   // out of a board whose data comes from GitHub. So an unreadable store means "the last moment this
   // server knew of", which is "never" until it has read one.
   const now = Date.now()
-
   forgetSignOuts()
-  assert.equal(await viewGate({ headers: signedIn(now - 5000) }, ENV, { store: storeSaying(0, { fails: true }) }), null)
-  await viewGate({ headers: signedIn(now) }, ENV, { store: storeSaying(now - 1000) })
-  assert.equal((await viewGate({ headers: signedIn(now - 5000) }, ENV, { store: storeSaying(0, { fails: true }) }))?.status, 401,
-    'a store that stopped answering forgot a sign-out this server had already seen')
-  // What this server has seen is kept for the life of the instance; the tests after this one start
-  // from a server that has seen none.
-  forgetSignOuts()
+  const clock = clockFrom(now)
+  try {
+    const failing = storeSaying(0, { fails: true })
+    assert.equal(await viewGate({ headers: signedIn(now - 5000) }, ENV, { store: failing }), null)
+    assert.equal(failing.reads, 1)
+    // The next read is 10 minutes on: this time the store answers, with a sign-out.
+    clock.set(now + 10 * 60_000)
+    await viewGate({ headers: signedIn(now) }, ENV, { store: storeSaying(now - 1000) })
+    clock.set(now + 20 * 60_000)
+    assert.equal((await viewGate({ headers: signedIn(now - 5000) }, ENV, { store: storeSaying(0, { fails: true }) }))?.status, 401,
+      'a store that stopped answering forgot a sign-out this server had already seen')
+  } finally {
+    clock.restore()
+    // What this server has seen is kept for the life of the instance; the tests after this one start
+    // from a server that has seen none.
+    forgetSignOuts()
+  }
 })
 
 /* ---------- the write gate ---------- */
@@ -242,5 +253,179 @@ test('the sign-out kept in the store\'s settings file is the one the gate honour
   for (const nonsense of ['soon', -5, 1.5, null, { at: now }]) {
     assert.equal(await read(nonsense), 'in', `${JSON.stringify(nonsense)} was read as a sign-out`)
   }
+  forgetSignOuts()
+})
+
+/* ---------- what the sign-out check costs the store (review, 2026-10-10) ----------
+   Every signed-in request used to read the picture store to see whether "sign out everywhere" had
+   been pressed, and the 30-second copy never helped a 60-second poll: about 1,440 reads a day with
+   the Readiness wall open, 43,000 a month, against Hobby's 10,000 - past which Vercel locks the store
+   for 30 days. Now: a poll answered "nothing has changed" carries no board and is not checked against
+   the store, and every other check uses what this server read within the last 10 minutes. */
+
+function clockFrom(start) {
+  const realNow = Date.now
+  let now = start
+  Date.now = () => now
+  return { set: (at) => { now = at }, restore: () => { Date.now = realNow } }
+}
+
+test('a day of checks reads the store at most once every 10 minutes', async () => {
+  forgetSignOuts()
+  const start = Date.parse('2026-10-11T00:00:00Z')
+  const clock = clockFrom(start)
+  const store = storeSaying(0)
+  try {
+    const headers = signedIn(start - 1000)
+    for (let minute = 0; minute < 24 * 60; minute += 1) {
+      clock.set(start + minute * 60_000)
+      assert.equal(await viewGate({ headers }, ENV, { store }), null)
+    }
+  } finally {
+    clock.restore()
+    forgetSignOuts()
+  }
+  assert.ok(store.reads <= 145, `${store.reads} store reads in a day`)
+  assert.ok(store.reads >= 140, `${store.reads} store reads: the 10 minutes are not 10 minutes`)
+})
+
+test('the server that saved "sign out everywhere" refuses at once, and another server within 10 minutes', async () => {
+  forgetSignOuts()
+  const start = Date.now()
+  const clock = clockFrom(start)
+  const before = signedIn(start - 5000)
+  try {
+    // Another server has read the store already: nothing has been pressed yet.
+    const store = storeSaying(0)
+    assert.equal(await viewGate({ headers: before }, ENV, { store }), null)
+    // Pressed elsewhere. This server keeps what it read for 10 minutes...
+    const pressed = storeSaying(start + 1000)
+    clock.set(start + 9 * 60_000)
+    assert.equal(await viewGate({ headers: before }, ENV, { store: pressed }), null)
+    assert.equal(pressed.reads, 0)
+    // ...and then reads again, and the device is out.
+    clock.set(start + 10 * 60_000)
+    assert.equal((await viewGate({ headers: before }, ENV, { store: pressed }))?.status, 401)
+    // The server that saved it knew at once.
+    forgetSignOuts()
+    noteSignOut(start + 1000, start + 10 * 60_000)
+    const unread = storeSaying(0)
+    assert.equal((await viewGate({ headers: before }, ENV, { store: unread }))?.status, 401)
+    assert.equal(await viewGate({ headers: signedIn(start + 2000) }, ENV, { store: unread }), null)
+    assert.equal(unread.reads, 0, 'the server that saved the press read the store straight after')
+  } finally {
+    clock.restore()
+    forgetSignOuts()
+  }
+})
+
+test('an older moment read later never lets back in a device this server already knows was signed out', async () => {
+  // A stale cached copy of settings.json, or another server's slow clock, can say an earlier moment.
+  forgetSignOuts()
+  const start = Date.now()
+  const clock = clockFrom(start)
+  try {
+    const before = signedIn(start - 5000)
+    assert.equal((await viewGate({ headers: before }, ENV, { store: storeSaying(start - 1000) }))?.status, 401)
+    // Ten minutes on, a device signed in after the press makes the next read - and the store's copy
+    // is a stale one, from before the press.
+    clock.set(start + 11 * 60_000)
+    const stale = storeSaying(start - 60_000)
+    assert.equal(await viewGate({ headers: signedIn(start + 60_000) }, ENV, { store: stale }), null)
+    assert.equal(stale.reads, 1, 'the stale copy was never read, so this proves nothing')
+    assert.equal((await viewGate({ headers: before }, ENV, { store: stale }))?.status, 401,
+      'a stale copy let back in a device this server knew was signed out')
+  } finally {
+    clock.restore()
+    forgetSignOuts()
+  }
+})
+
+const SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+
+async function boardRequest(store, { since, headers, newHead = SHA } = {}) {
+  const { makeHandler } = await import('../api/state.js')
+  const previous = { ...process.env }
+  delete process.env.PUBLIC_DASHBOARD
+  Object.assign(process.env, { VIEW_KEY: VIEW, GITHUB_OWNER: 'someone', GITHUB_REPO: 'my-agent-team' })
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url) => (String(url).includes('/commits/') ? new Response(newHead, { status: 200 }) : new Response('Not Found', { status: 404 }))
+  const response = fakeResponse()
+  try {
+    await makeHandler({ store })({ method: 'GET', headers, query: since ? { since } : {} }, response)
+  } finally {
+    globalThis.fetch = realFetch
+    process.env = previous
+  }
+  return response
+}
+
+test('a day of the Readiness wall open - a load, then a check every 60 seconds - reads the store a handful of times', async () => {
+  forgetSignOuts()
+  const start = Date.parse('2026-10-11T00:00:00Z')
+  const clock = clockFrom(start)
+  const store = storeSaying(0)
+  try {
+    const headers = signedIn(start - 1000)
+    await boardRequest(store, { headers })
+    for (let minute = 1; minute < 24 * 60; minute += 1) {
+      clock.set(start + minute * 60_000)
+      const poll = await boardRequest(store, { headers, since: SHA })
+      assert.equal(poll.body?.unchanged, true)
+    }
+  } finally {
+    clock.restore()
+    forgetSignOuts()
+  }
+  assert.ok(store.reads <= 3, `${store.reads} store reads for one day of the wall open`)
+})
+
+test('"nothing has changed" is all a signed-out device can get; any poll that sends a board checks the sign-out', async () => {
+  forgetSignOuts()
+  const now = Date.now()
+  const store = storeSaying(now - 1000)
+  const headers = signedIn(now - 5000)
+  try {
+    // A full load: refused.
+    assert.equal((await boardRequest(store, { headers })).statusCode, 401)
+    forgetSignOuts()
+    // A poll whose commit is the head: "unchanged", which carries nothing.
+    const unchanged = await boardRequest(store, { headers, since: SHA })
+    assert.deepEqual(unchanged.body, { unchanged: true, commit: SHA })
+    forgetSignOuts()
+    // A poll the repo has moved past would send a whole board: refused.
+    const moved = await boardRequest(store, { headers, since: SHA, newHead: 'f0e1d2c3b4a5968778695a4b3c2d1e0f98765432' })
+    assert.equal(moved.statusCode, 401)
+    assert.equal(moved.body.unchanged, undefined)
+  } finally {
+    forgetSignOuts()
+  }
+})
+
+test('the light check still refuses a device this server knows was signed out, and never renews a cookie', async () => {
+  forgetSignOuts()
+  const now = Date.now()
+  noteSignOut(now - 1000, now)
+  const store = storeSaying(0)
+  assert.equal((await viewGate({ headers: signedIn(now - 5000) }, ENV, { store, checkSignOut: false }))?.status, 401)
+  const unchanged = await boardRequest(store, { headers: signedIn(now - 5000), since: SHA })
+  assert.equal(unchanged.statusCode, 401, 'an unchanged poll answered a device this server knew was out')
+  // A device signed in long before, on a server that knows of no sign-out: still not renewed.
+  forgetSignOuts()
+  const response = fakeResponse()
+  assert.equal(await viewGate({ headers: signedIn(now - RENEW_AFTER_MS - 60_000) }, ENV, { store, response, checkSignOut: false }), null)
+  assert.equal(response.headers['Set-Cookie'], undefined, 'a check that skipped the store renewed a cookie')
+  forgetSignOuts()
+})
+
+test('an unchanged poll never renews the cookie: only a load that checked the sign-out does', async () => {
+  forgetSignOuts()
+  const store = storeSaying(0)
+  const headers = signedIn(Date.now() - RENEW_AFTER_MS - 60_000)
+  const poll = await boardRequest(store, { headers, since: SHA })
+  assert.equal(poll.body?.unchanged, true)
+  assert.equal(poll.headers['Set-Cookie'], undefined)
+  const load = await boardRequest(store, { headers })
+  assert.ok(load.headers['Set-Cookie'], 'a full load did not renew a day-old cookie')
   forgetSignOuts()
 })

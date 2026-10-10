@@ -2300,7 +2300,14 @@ export function shapeActivity(runs, now = Date.now(), cap = MAX_ACTIVITY_RUNS) {
 
 // --- the handler --------------------------------------------------------------------------
 
-export default async function handler(request, response) {
+// `store` is handed in by the tests; left out, the gate builds the picture store from the environment.
+export function makeHandler({ store } = {}) {
+  return (request, response) => handle(request, response, store)
+}
+
+export default makeHandler()
+
+async function handle(request, response, store) {
   // Every answer this endpoint gives - the board, "nothing has changed", an error - sits behind the
   // view key, and a shared cache keys on the address, not on the key: see ce0101e. So none is kept.
   // Set before the key is checked, so the refusal carries it too.
@@ -2311,9 +2318,15 @@ export default async function handler(request, response) {
     response.status(405).json({ error: 'GET only: this endpoint reads your team repo and never changes it.' })
     return
   }
-  // Handed the response, so a signed-in cookie over a day old is renewed here: every load of the
-  // board comes through this endpoint, so an active phone is never signed out.
-  const denied = await viewGate(request, process.env, { response })
+  // A whole board is checked against "sign out everywhere", and handed the response, so a signed-in
+  // cookie over a day old is renewed here: every load of the board comes through this endpoint, so an
+  // active phone is never signed out. A 60-second check (?since=) is first checked without the
+  // picture store: if nothing has changed, the answer carries no board, and asking the store every
+  // minute would spend its free reads (review, 2026-10-10). If it has changed, it is checked in full
+  // below, before a board is sent.
+  const polling = sinceOf(request) !== null
+  const full = { store, response }
+  const denied = await viewGate(request, process.env, polling ? { store, checkSignOut: false } : full)
   if (denied) {
     response.status(denied.status).json({ error: denied.error })
     return
@@ -2331,6 +2344,13 @@ export default async function handler(request, response) {
     if (head !== null && head === sinceOf(request)) {
       response.status(200).json({ unchanged: true, commit: head })
       return
+    }
+    if (polling) {
+      const late = await viewGate(request, process.env, full)
+      if (late) {
+        response.status(late.status).json({ error: late.error })
+        return
+      }
     }
     const settings = head === null ? base : { ...base, branch: head }
 

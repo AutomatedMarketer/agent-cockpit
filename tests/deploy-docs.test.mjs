@@ -108,3 +108,14 @@ test('.env.example names the sign-in variables, with no values', async () => {
     assert.equal(line, `${name}=`, `.env.example gives ${name} a value; it must only name it`)
   }
 })
+
+test('the README is honest about how slow and how breakable "sign out everywhere" is, and gives the instant fix', async () => {
+  // Review, 2026-10-10: the board reads the store for it at most every 10 minutes, and a store that
+  // cannot be read stops it working on new copies of the board. A lost phone needs the fix that works.
+  const signingIn = section(await readFile(join(root, 'README.md'), 'utf8'), 'Signing in')
+  assert.match(signingIn, /within about 11 minutes/, 'the delay is not stated as it now is')
+  assert.doesNotMatch(signingIn, /minute and a half/, 'the old delay is still promised')
+  assert.match(signingIn, /picture store cannot be read/i, 'nothing says an unreadable store stops it')
+  assert.match(signingIn, /lost or stolen\? Change `BOARD_PASSWORD`/i, 'the instant fix for a lost device is missing')
+  assert.match(signingIn, /needs no picture store/i)
+})

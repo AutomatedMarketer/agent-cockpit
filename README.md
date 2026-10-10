@@ -575,9 +575,16 @@ you, like any website's.
 
 - **Sign out**, under the screens: this phone or computer only.
 - **Sign out everywhere**: every device, this one included. It is kept in the picture store, so it
-  needs one ([Make it yours](#make-it-yours)) and uses one of the day's changes. Other devices are out
-  within about a minute and a half. No picture store? Change `VIEW_KEY` (or `BOARD_PASSWORD`) and
-  redeploy instead.
+  needs one ([Make it yours](#make-it-yours)) and uses one of the day's changes. **It is not
+  instant:** the board checks the store for it at most every 10 minutes, to keep inside the store's
+  free reads, so other devices are out within about 11 minutes. A screen left open on the Readiness
+  wall keeps being told only whether anything has changed until then, never what.
+- **If the picture store cannot be read** (it is suspended, or the free allowance ran out), sign out
+  everywhere stops working on any copy of the board that Vercel starts after that: it cannot learn
+  about the press. The board stays open to signed-in devices rather than locking you out.
+- **A phone or laptop lost or stolen? Change `BOARD_PASSWORD` in Vercel and redeploy.** That signs
+  every device out the moment the new deployment is live, and needs no picture store. Change
+  `VIEW_KEY` too if the spare key was saved on it.
 
 ### What stops someone guessing
 
@@ -610,7 +617,7 @@ Locally:
 npm test
 ```
 
-1680 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1689 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

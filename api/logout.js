@@ -8,12 +8,12 @@
 // key when one is set, the board itself, JSON - so a viewer of a shared board cannot sign the owner
 // out. It is kept as a moment in the picture store's settings.json (sessionsValidFrom): every session
 // signed in before it is refused by every server once it has read the file, which takes up to about
-// a minute and a half (this server's copy is kept 30 seconds, the store's cache 60). It costs one
-// store write, counted in the day's changes. With no store, changing VIEW_KEY or BOARD_PASSWORD
+// about 11 minutes (each server reads it at most every 10 minutes, and the store's cache adds one);
+// this server knows at once. It costs one store write, counted in the day's changes. With no store, changing VIEW_KEY or BOARD_PASSWORD
 // does the same, at once, and the answer says so.
 
 import { isSameOriginRequest, readJsonBody } from './_lib.js'
-import { writeGate } from './_gate.js'
+import { writeGate, noteSignOut } from './_gate.js'
 import { clearedSessionCookie } from './_session.js'
 import { pictureStore, dailyCaps, usageDay, spendAllowance, refuseIfSpent, failureAnswer } from './_picture-store.js'
 
@@ -66,6 +66,8 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
           // the devices an earlier press signed out.
           draft.sessionsValidFrom = Math.max(draft.sessionsValidFrom, moment.getTime())
         })
+        // This server refuses the signed-out devices at once; the others read it within 10 minutes.
+        noteSignOut(moment.getTime())
       } catch (error) {
         const { status, error: sentence } = failureAnswer(error)
         response.status(status).json({ error: sentence })

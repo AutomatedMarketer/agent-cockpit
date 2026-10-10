@@ -132,3 +132,14 @@ test('without "everywhere": this device only, nothing written, no key needed', a
   }
   assert.equal(settingsPuts(fake), 0)
 })
+
+test('the server that saved the press refuses the signed-out devices at once, without reading it back', async () => {
+  const { fake, store } = board()
+  const pressedAt = new Date()
+  const before = cookieAt(pressedAt.getTime() - 5000)
+  assert.equal((await press({ store, headers: { ...ours, ...before }, now: pressedAt })).statusCode, 204)
+  const reads = fake.calls.get.length
+  assert.equal((await viewGate({ headers: before }, ENV, { store })) ?.status, 401)
+  assert.equal(fake.calls.get.length, reads, 'it read the store back to learn what it had just saved')
+  forgetSignOuts()
+})
