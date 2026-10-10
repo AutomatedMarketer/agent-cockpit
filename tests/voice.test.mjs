@@ -295,7 +295,7 @@ test('the README tells the owner to set a hard spend limit, that an alert alone 
   assert.match(readme, /personal use only/i)
   assert.match(readme, /may (use what you send it to )?train/i)
   // Every setting voice reads is in the settings table.
-  for (const name of ['OPENAI_REALTIME_MODEL', 'OPENAI_VOICE', 'VOICE_IDLE_MINUTES', 'VOICE_CAPTIONS', 'VOICE_VAD_THRESHOLD', 'FISH_API_KEY', 'FISH_VOICE_ID', 'FISH_MODEL']) {
+  for (const name of ['OPENAI_REALTIME_MODEL', 'OPENAI_VOICE', 'VOICE_IDLE_MINUTES', 'VOICE_CAPTIONS', 'VOICE_LANGUAGE', 'VOICE_VAD_THRESHOLD', 'FISH_API_KEY', 'FISH_VOICE_ID', 'FISH_MODEL']) {
     assert.ok(readme.split(/\r?\n/).some((line) => line.startsWith(`| \`${name}\``)), `${name} is not in the settings table`)
   }
   // And "never sends anything" no longer pretends voice is not there.
