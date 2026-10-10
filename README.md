@@ -585,7 +585,7 @@ you, like any website's.
 |---|---|
 | Vercel Authentication (step 4) | Strangers never reach the board, so they cannot guess at all |
 | The firewall rule (step 5) | More than 10 tries a minute from one place are refused before the board sees them |
-| The board itself | Each wrong try takes about half a second, and 5 wrong tries from one place pause signing in there for 15 minutes. Every wrong try gets the same sentence, so nothing says whether the username or the password was wrong |
+| The board itself | Each wrong try takes about half a second, and 5 wrong tries from one place - one after another, or all sent at the same moment - pause signing in there for 15 minutes. Every wrong try gets the same sentence, so nothing says whether the username or the password was wrong |
 
 The cookie that keeps a device signed in cannot be read by anything running on the page, is never
 sent to another website, and is refused once 30 days pass without the board being opened.
@@ -610,7 +610,7 @@ Locally:
 npm test
 ```
 
-1678 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1680 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

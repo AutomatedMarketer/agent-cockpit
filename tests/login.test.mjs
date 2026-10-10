@@ -209,6 +209,36 @@ test('the address comes from Vercel\'s own headers, and a missing one still coun
   assert.equal((await signIn({ username: 'Nuno', password: PASSWORD }, { limiter, headers: nowhere })).statusCode, 429)
 })
 
+test('guesses sent all at once are held to the same five: the rest are refused before any is checked', async () => {
+  // Review finding (2026-10-10): the limit was read before the slow hash and the failure written
+  // after it, so 400 guesses sent together were all checked. A try is now taken before anything
+  // waits, and a try still being checked counts until it is known to have failed.
+  const limiter = makeLimiter()
+  const waits = []
+  const answers = await Promise.all(Array.from({ length: 20 }, (unused, guess) =>
+    signIn({ username: 'Nuno', password: `parallel guess ${guess}` }, { limiter, waits })))
+  const checked = answers.filter((response) => response.statusCode === 401)
+  const refused = answers.filter((response) => response.statusCode === 429)
+  assert.ok(checked.length <= 5, `${checked.length} guesses sent at once were checked`)
+  assert.equal(checked.length + refused.length, 20)
+  assert.ok(waits.length <= 5, `${waits.length} guesses reached the slow check`)
+  // And with those five spent, the right password is refused too until the time is up.
+  assert.equal((await signIn({ username: 'Nuno', password: PASSWORD }, { limiter })).statusCode, 429)
+})
+
+test('a try being checked holds its place, and a success gives it back', async () => {
+  const limiter = makeLimiter()
+  // Four in flight at once, all right: none is refused, and afterwards the address is clear.
+  const right = await Promise.all(Array.from({ length: 4 }, () => signIn({ username: 'Nuno', password: PASSWORD }, { limiter })))
+  assert.deepEqual(right.map((response) => response.statusCode), [204, 204, 204, 204])
+  assert.equal(limiter.size(), 0, 'a signed-in address is still being counted')
+  // A burst of six where only the sixth is over the line: it is told to wait a second, not 15 minutes.
+  const burst = await Promise.all(Array.from({ length: 6 }, () => signIn({ username: 'Nuno', password: PASSWORD }, { limiter })))
+  const waitedOn = burst.find((response) => response.statusCode === 429)
+  assert.ok(waitedOn, 'six at once from one address all went through')
+  assert.equal(waitedOn.headers['Retry-After'], '1')
+})
+
 test('after the 15 minutes the count starts again - and five more wrong guesses stop the address again', async () => {
   const limiter = makeLimiter()
   for (let guess = 0; guess < 5; guess += 1) await signIn({ username: 'Nuno', password: 'a wrong guess' }, { limiter })

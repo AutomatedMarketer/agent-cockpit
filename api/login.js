@@ -93,34 +93,54 @@ function addressOf(headers = {}) {
   return 'unknown'
 }
 
-// Failures per address, in this server's memory, in fixed 15-minute windows from the first one.
+// Tries per address, in this server's memory, in fixed 15-minute windows from the first one.
+//
+// A try is TAKEN before anything is awaited, and a try still being checked counts against the
+// limit until it is known not to have failed. Reading the count before the slow hash and writing
+// it after let a burst through: 400 guesses sent at the same moment all read "no failures yet",
+// and all were checked (review, 2026-10-10). Now the sixth of a burst is refused at once.
+//
 // Bounded: past maxAddresses the oldest is forgotten, so a flood of addresses cannot grow it.
 export function makeLimiter({ failures = LIMIT.failures, windowMs = LIMIT.windowMs, maxAddresses = 10_000 } = {}) {
   const seen = new Map()
-  const current = (address, now) => {
+  const entryFor = (address, now) => {
     const entry = seen.get(address)
+    // The window is over: failures start again from nothing; tries still in flight still count.
     if (entry && now - entry.first >= windowMs) {
-      seen.delete(address)
-      return null
+      entry.first = now
+      entry.count = 0
     }
     return entry ?? null
   }
+  const create = (address, now) => {
+    const entry = { first: now, count: 0, inFlight: 0 }
+    seen.set(address, entry)
+    while (seen.size > maxAddresses) seen.delete(seen.keys().next().value)
+    return entry
+  }
   return {
-    // Seconds this address must still wait, or 0.
-    waitFor(address, now) {
-      const entry = current(address, now)
-      return entry && entry.count >= failures ? Math.ceil((entry.first + windowMs - now) / 1000) : 0
+    // Takes one try for this address and returns 0, or returns the seconds it must wait. Never awaits.
+    reserve(address, now) {
+      const entry = entryFor(address, now) ?? create(address, now)
+      if (entry.count >= failures) return Math.max(1, Math.ceil((entry.first + windowMs - now) / 1000))
+      // Under the limit on failures, but this many are still being checked: a second will settle it.
+      if (entry.count + entry.inFlight >= failures) return 1
+      entry.inFlight += 1
+      return 0
     },
+    // A try that was taken turned out wrong.
     failed(address, now) {
-      const entry = current(address, now)
-      if (entry) entry.count += 1
-      else {
-        seen.set(address, { first: now, count: 1 })
-        while (seen.size > maxAddresses) seen.delete(seen.keys().next().value)
-      }
+      const entry = entryFor(address, now) ?? create(address, now)
+      entry.inFlight = Math.max(0, entry.inFlight - 1)
+      entry.count += 1
     },
+    // A try that was taken turned out right: its place is given back and the failures forgotten.
     succeeded(address) {
-      seen.delete(address)
+      const entry = seen.get(address)
+      if (!entry) return
+      entry.inFlight = Math.max(0, entry.inFlight - 1)
+      entry.count = 0
+      if (entry.inFlight === 0) seen.delete(address)
     },
     size: () => seen.size
   }
@@ -159,14 +179,21 @@ export function makeHandler({ env, now = () => Date.now(), pause = sleep, limite
 
     const address = addressOf(headers)
     const moment = now()
-    const wait = limiter.waitFor(address, moment)
+    // Taken here, before the first await, so tries sent together cannot all read "none used yet".
+    const wait = limiter.reserve(address, moment)
     if (wait > 0) {
       response.setHeader('Retry-After', String(wait))
       response.status(429).json({ error: TOO_MANY })
       return
     }
 
-    if (await matches(readJsonBody(request), environment)) {
+    let right = false
+    try {
+      right = await matches(readJsonBody(request), environment)
+    } catch {
+      // A hash that could not be worked out is a wrong answer, and the try it took is spent.
+    }
+    if (right) {
       limiter.succeeded(address)
       // Always a new session, never one the request brought with it.
       response.setHeader('Set-Cookie', sessionCookie(newSessionToken(environment, moment)))
