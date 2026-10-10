@@ -88,7 +88,7 @@ test('the counters line, the note and the stamp say what the wall is made of', a
   assert.equal(counters.textContent, '2 NO GO · 5 SILENT · 23 GO')
   assert.equal(counters.attributes.role, 'status', 'a live region, so a change in a count is announced')
   const [note] = withClass(root, 'rd-note')
-  assert.equal(flat(note.textContent), "Counted from each job's last report. Mac and Hermes jobs as of the Mac's check. 0 faded: their last report is older than their own schedule.")
+  assert.equal(flat(note.textContent), "Counted from each job's last report. 0 faded: their last report is older than their own schedule.", 'with no Mac reading, nothing is said about the Mac')
   const [stamp] = withClass(root, 'rd-stamp')
   assert.match(stamp.textContent, /^JOBS CHECKED NEVER · BOARD READ \d{1,2}:\d{2}\s?(AM|PM) · REFRESH BY BUTTON$/)
 })

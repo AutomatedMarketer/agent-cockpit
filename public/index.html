@@ -6915,7 +6915,8 @@ function renderReadiness(nowMs = Date.now()) {
   // The tab's badge follows the lights as they age, not only when a whole board is drawn.
   const badge = el('count-readiness')
   if (badge) badge.textContent = aged.badge ? String(aged.badge) : ''
-  refs.note.textContent = `Counted from each job's last report. Mac and Hermes jobs as of the Mac's check${macTime ? ` at ${macTime}` : ''}. ${aged.counts.faded} faded: their last report is older than their own schedule.`
+  // Said only when there is a Mac reading to say it about.
+  refs.note.textContent = `Counted from each job's last report.${macTime ? ` Mac and Hermes jobs as of the Mac's check at ${macTime}.` : ''} ${aged.counts.faded} faded: their last report is older than their own schedule.`
 
   const sections = []
   for (const [light, label] of READINESS_GROUPS) {

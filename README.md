@@ -19,7 +19,7 @@ window, not the engine.
 
 ---
 
-## The seven screens
+## The screens
 
 | Screen | The question it answers |
 |---|---|
@@ -27,10 +27,52 @@ window, not the engine.
 | **Ledger** | What your week costs, what was proposed for it, and what nothing on the team can do |
 | **Team** | Every agent: model, last run, and whether it is working, quiet or never run |
 | **Workflows** | Every job, and whether it is **armed, declared, unapproved or off** |
+| **Readiness** | Every scheduled job on one wall, one light each, **NO GO first**: your team's workflows, the jobs on your Mac, and Hermes's own |
 | **Skills** | What this team can actually do, and which jobs use each skill |
 | **Memory** | Your vault, browsable and searchable **by page name** |
 | **Connections** | What you proved works, what each of your computers has set up, and every runtime in `runtimes.yml` — alive or silent, from its own heartbeat |
 | **Hermes** | Only if you run Hermes: whether it is up, its version, and each profile's model, skills and week — plus how to open it from your phone |
+
+### Flight readiness
+
+One card per scheduled job, grouped **NO GO**, then **SILENT**, then **GO**. The tab's number is NO GO
+plus SILENT, and is blank when there are none. On a phone it is one column with the trouble first;
+on a laptop it is a grid. Each card has a light that is a different *shape* as well as colour (a
+dot, a hollow ring, a dot inside a ring), the status as a word, the job's name, one sentence about
+why, when it runs, when it last reported, and its small grey id so you can ask for a rename.
+
+| Word | What it means |
+|---|---|
+| **NO GO** | Something is wrong that will not fix itself: it is marked on but nothing fires it, it is installed but not switched on in the Mac's scheduler, a service was not running, or its last run failed and is recent enough to be the one that matters |
+| **SILENT** | The board cannot vouch for it: it has never reported, it missed its last two scheduled times, the routine list is not fresh, or the Mac's reading is over 8 hours old |
+| **GO** | It reported clean on its own schedule, or it is a service and it was running when the Mac checked |
+| **RUNNING** | A service that was up. For the Mac programs that keep their own clock, that is all it proves, and the card says so: *whether its last report was written is checked on the Mac control center, not here* |
+| **faded** | Dashed outline and one extra sentence: its last report is older than its newest scheduled time but covers the one before. Never colour alone |
+| **Switched off** | Listed underneath, with the reason: not armed, owner switched off, started only by a button or a webhook, turned off in the Mac's scheduler or in Hermes, or hidden by you |
+
+How late is decided by counting **scheduled times**, not minutes since the last run: a job is on time
+if its last report covers its newest scheduled time (30 minutes of grace, and a report up to 5 minutes
+early counts), faded if it covers only the one before, silent if it covers neither. So a weekday job
+is not silent on a Saturday. The Workflows screen's *Gone quiet* uses the same count.
+
+The Mac and Hermes rows come from `.agent-team/status/jobs/`, which the collector on your always-on
+Mac writes with everything else (names, schedules, times, exit codes - never arguments, prompts,
+logs or error text). A Hermes job is shown as `Hermes job <id>` (its 12-character id), because
+Hermes copies the start of a job's prompt into the name of a job nobody named. Name it yourself:
+ask Claude *"call the Hermes job a1b2c3d4e5f6 'YouTube morning brief'"* and it writes `jobs.yml` in
+your team repo. The same file renames or hides anything else on the wall (`launchd:<label>`,
+`hermes:<profile>/<id>`, `workflow:<slug>`, `routine:<name>`). The board only reads it, and it cannot
+bring back a job the safety rule kept off (the wall says how many it did); rename that job where
+it is made.
+
+**Refresh.** While the Readiness screen is showing and the browser tab is in front, the board checks
+every 60 seconds whether your repo has a new commit. That check is **one call to GitHub**; if nothing
+changed, the page only re-checks how old each light has become. A full read is about sixty calls and
+nothing is cached, so reading everything every minute on two devices would pass GitHub's 5,000 calls
+an hour. The **Refresh** button is the same check, pressed. The Mac's own data still arrives every
+three hours with the collector, and the line above the lights says when.
+
+Not checked here: Windows Task Scheduler, n8n, Trigger.dev and Codex automations.
 
 ### Hermes
 
@@ -473,7 +515,7 @@ has no evidence for.
 ## Did it work?
 
 - The page loads and the **Today** screen shows your repo name at the top
-- All seven screens open from the nav
+- All the screens open from the nav
 - **Workflows** shows a state chip on every job
 - The footer says when it read your repo
 
@@ -490,7 +532,7 @@ npm test
 
 1529 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
-all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
+every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
 
 ---
@@ -591,6 +633,18 @@ The Hermes card too: `tests/fixtures/hermes-parity.json` is shared byte for byte
 file within five minutes of the check. A yes/no flag in the file is never read, and nothing Hermes
 keeps beside the fields read - its command line, its addresses, chat titles, memory - can reach the
 page.
+
+The Readiness wall is the same once more. `tests/fixtures/jobs-parity.json` is the collector's
+contract for `.agent-team/status/jobs/`, byte for byte, and `tests/jobs.test.mjs` holds the board to
+it (a test compares the two copies whenever both repos are checked out side by side). The board
+re-checks every name - a launchd label, a Hermes id of exactly 12 lowercase letters and numbers, the
+standard `Hermes job <id>` name, the names in `jobs.yml` - and builds its answer from the keys it
+knows. The light for each job is decided on the server (`api/readiness.js`, with every row of its
+rules table under test) and the sentences are built there too, with no model call; the page only
+fills in times in the reader's own clock. `/api/state?since=<commit>` answers `{ "unchanged": true }`
+with one call to GitHub when the branch has not moved, and otherwise the whole board built from the
+new commit. Every answer from `/api/state`, including that one and the refusals, is
+`Cache-Control: private, no-store`.
 
 Voice is OpenAI's "unified" call: the page makes a WebRTC offer and sends it to `/api/voice-session`
 on its own site; that function adds the key and the whole session (model, instructions, the six
