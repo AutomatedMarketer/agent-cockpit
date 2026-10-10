@@ -39,7 +39,8 @@ One card per scheduled job, grouped **NO GO**, then **SILENT**, then **GO**. The
 plus SILENT, and is blank when there are none. On a phone it is one column with the trouble first;
 on a laptop it is a grid. Each card has a light that is a different *shape* as well as colour (a
 dot, a hollow ring, a dot inside a ring), the status as a word, the job's name, one sentence about
-why, when it runs, when it last reported, and its small grey id so you can ask for a rename.
+why, when it runs, when it last reported, and a small grey line saying where it comes from. That
+grey line is **not** the id `jobs.yml` uses; the table below turns one into the other.
 
 | Word | What it means |
 |---|---|
@@ -64,10 +65,32 @@ Mac writes with everything else (names, schedules, times, exit codes - never arg
 logs or error text). A Hermes job is shown as `Hermes job <id>` (its 12-character id), because
 Hermes copies the start of a job's prompt into the name of a job nobody named. Name it yourself:
 ask Claude *"call the Hermes job a1b2c3d4e5f6 'YouTube morning brief'"* and it writes `jobs.yml` in
-your team repo. The same file renames or hides anything else on the wall (`launchd:<label>`,
-`hermes:<profile>/<id>`, `workflow:<slug>`, `routine:<name>`). The board only reads it, and it cannot
-bring back a job the safety rule kept off (the wall says how many it did); rename that job where
-it is made.
+your team repo. The same file renames or hides anything else on the wall. Each entry needs the job's
+**id**, which is built from the card's grey line like this:
+
+| The card's grey line | Its id in `jobs.yml` |
+|---|---|
+| `Mac Mini · com.donna.blog-watch` (a Mac LaunchAgent) | `launchd:com.donna.blog-watch` |
+| `Mac Mini · Hermes · donna · f4f4c62f0a39` (a Hermes job) | `hermes:donna/f4f4c62f0a39` |
+| `Team repo · daily-brief` (a workflow) | `workflow:daily-brief` |
+| `Account routine · Morning intel` (a routine with no workflow file) | `routine:Morning intel` |
+
+```yaml
+jobs:
+  - id: hermes:donna/f4f4c62f0a39
+    name: Memory review
+  - id: launchd:com.example.old-backup
+    hide: true
+```
+
+**An entry the board cannot use is skipped without a word on the wall.** That is: an id not in one of
+the four shapes above, or not matching the grey line letter for letter (a capital, a space instead of
+the colon); the same id twice; a name the board will not print (one that looks like a key, an address
+or a path); a comment after a value on the same line (`hide: true  # old job` is read as the words
+"true  # old job", so the job is not hidden); and anything past the first 200 entries. If a rename or
+a hide does not show after the next read, check that entry first. The board only reads the file, and
+it cannot bring back a job the safety rule kept off (the wall says how many it did); rename that job
+where it is made.
 
 **Refresh.** While the Readiness screen is showing and the browser tab is in front, the board checks
 every 60 seconds whether your repo has a new commit. That check is **one call to GitHub**; if nothing
@@ -370,7 +393,7 @@ out loud from what the board already shows, and you can talk over it to stop it.
 | **Its name** | The assistant's name from **Make it yours**, or "your assistant" |
 | **Its voice** | OpenAI's own voice by default. Fish, for a voice you choose, is an optional upgrade (below) |
 | **While you talk** | The panel above the button shows your words as it hears them, what it is looking up (*Checking what's due…*), what it is saying, and what this conversation has cost so far. The orb glows with its voice as it speaks, unless your device asks for less motion |
-| **It hangs up** | After 2 minutes with nobody talking (`VOICE_IDLE_MINUTES`), when you tap **Stop** or press Esc, or when you leave the tab |
+| **It hangs up** | After 2 minutes with nobody talking (`VOICE_IDLE_MINUTES`), when you tap **Stop**, when you press Esc while it is not answering (in speakers mode, Esc during a reply interrupts it instead; see below), or when you leave the tab |
 
 ### Switch it on
 
@@ -385,7 +408,16 @@ The first tap asks your browser for the microphone. If you said no by mistake: o
 
 On a computer the board starts in **speakers mode**: while the assistant talks, the microphone rests,
 so it cannot hear its own voice coming back out of the speakers and answer itself. To interrupt it,
-tap the orb, press Esc or press Space; it stops and listens at once. **Stop** still ends the call.
+tap the orb, press Esc or press Space; it stops and listens at once. Exactly what each one does:
+
+| You press | While a reply is playing | In the 1.5 seconds after a reply ends | Any other time |
+|---|---|---|---|
+| **Esc**, or tap the orb | Interrupts it: it stops and listens at once | Nothing happens, so a late "stop" never hangs up | Ends the call |
+| **Space** | Interrupts it | Nothing happens | Nothing happens |
+| **Stop** | Ends the call | Ends the call | Ends the call |
+
+In headphones mode, and on a phone, there is no rest to interrupt: you talk over it, and Esc ends the
+call.
 
 Why: on some computers the browser cannot cancel the echo. Sound routed through a virtual or mixing
 setup - Elgato Wave Link is one - goes out to the speakers by a path the browser's echo canceller
