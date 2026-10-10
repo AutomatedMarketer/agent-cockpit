@@ -388,8 +388,8 @@ out loud from what the board already shows, and you can talk over it to stop it.
 
 | | |
 |---|---|
-| **What it can do** | Read the board to you: who is working, what is due and gone quiet, the task board, plan limits and voice spend, your connections and Hermes. Open a screen |
-| **What it cannot do yet** | Run a job, add a task or change anything. Ask and it says to use the Run button. When it can (Phase 11, not built yet), you will confirm each one yourself, on a card - never its own words, or anything it read. If a spoken yes is ever allowed, it will count only while no reply is playing and the microphone was open, so the assistant's own voice can never say yes for you |
+| **What it can do** | Read the board to you: who is working, what is due and gone quiet, the task board, plan limits and voice spend, your connections and Hermes. Open a screen. And, once the board's Run buttons are set up, send a task card to your team, run a job, and tell you "is it done?" - each only after you say yes on a card ([Orders by voice](#orders-by-voice)) |
+| **Saying yes** | Only you can: a tap on the card's **Yes**, or your own plain spoken yes after the card appears. Its own words, or anything it read, can never say yes for you |
 | **Its name** | The assistant's name from **Make it yours**, or "your assistant" |
 | **Its voice** | OpenAI's own voice by default. Fish, for a voice you choose, is an optional upgrade (below) |
 | **While you talk** | The panel above the button shows your words as it hears them, what it is looking up (*Checking what's due…*), what it is saying, and what this conversation has cost so far. The orb glows with its voice as it speaks, unless your device asks for less motion |
@@ -403,6 +403,54 @@ address could spend your OpenAI money. Voice does **not** need the picture store
 
 The first tap asks your browser for the microphone. If you said no by mistake: on an iPhone,
 **Settings → Safari → Microphone**; in Chrome, tap the icon left of the address.
+
+### Orders by voice
+
+Ask it to *"have the team draft this week's newsletter"* or *"run morning intel"*. It puts a card in
+the panel that says exactly what will be sent - **Send to the team?** with the task's words, or **Run
+Morning intel?** - and waits. Nothing goes anywhere until you say yes. Ask *"is it done?"* later: it
+checks the board again and says running, finished, not filed yet, or that nothing has reported yet.
+
+**Saying yes:**
+
+- A tap on **Yes** always works (or Enter or Space on it). **No**, or Esc, closes the card and nothing
+  is sent. So does a minute going by
+- You can also just say *"yes"*. It counts only after the card appears, within 60 seconds,
+  as a plain yes - *"yes"*, *"yeah, do it"*, *"go ahead"*, with nothing else in it - and only if
+  the microphone was on for all of it, no reply was playing during it, and a moment of quiet came
+  before it. Then it cannot be the assistant's own voice. Anything else - *"yes, but…"*, a yes over
+  its voice - leaves the card up and asks for a tap. A plain *"no"* closes it
+- A spoken yes works only when sending needs no key typed in: the fire key is already in this tab
+  (the first tap on a Run button asks for it), or the board uses `PUBLIC_FIRE`. The card says *"Or say
+  yes"* only then
+- The assistant can never say yes for you, and neither can anything it reads:
+  never a tool, a page or an email
+- `VOICE_SPOKEN_YES=off` makes it a tap only. A spoken yes needs a transcript of what you say, so with
+  it on, the call asks for one even with captions off: about $0.002 a minute of your talking
+
+A yes sends the order the way the board's own buttons do, through `/api/fire`: a task card lands in
+`tasks/` about a minute later, made by your `task-intake` routine, and a run starts that job's
+routine. The board still never writes to your repo.
+
+**Switch them on.** Orders are off until the board's Run buttons are set up, and until then the
+assistant says so, plainly:
+
+1. In Claude Code on the web, create a routine called `task-intake` whose prompt acts on dispatch
+   payloads: do what the payload's `instruction` asks, in your team repo, then commit and push. Copy
+   its trigger URL
+2. For each job you want to run by voice: it needs a routine of its own (copy that trigger URL too)
+   and `fire: true` in its workflow file's trigger block
+3. In Vercel, set `FIRE_KEY` - a long passphrase you make up - and `FIRE_TRIGGERS`, a JSON object of
+   slug and trigger URL: `{"task-intake":"https://…","morning-intel":"https://…"}`. Production and
+   Preview, marked sensitive
+4. Redeploy. The Run, Add task, Arm and Approve buttons start working too
+
+**Who does a task:** your orchestrator decides on its next sweep, as with the **Add task** button, unless
+you pick an agent on the card. Optionally, **Jev** (TypeSafe's decision model, on OpenRouter) can
+suggest one: set `JEV_ROUTING=on` and `OPENROUTER_API_KEY`. It is off by default because, when it is
+on, the words of each task you order, and your agents' names and descriptions, go to OpenRouter. The
+card then says *"Picked by Jev (84% sure)"* - it only shows a pick Jev is at least 60% sure of - and
+you can still change it.
 
 ### Speakers or headphones
 
@@ -497,6 +545,8 @@ Fish Audio can speak the answers in a voice you pick from its library.
 | Your device's time zone, and the names on the board (the assistant's, yours, your agents') | **OpenAI** | So every time is said in your own time, never UTC, and the names are heard right |
 | The words of each answer, with Fish on | **Fish** | So it can speak them. Its free model may train on them |
 | Each conversation's token counts | **The board's picture store** | The meter |
+| The words of an order you say yes to | **Your `task-intake` routine** (a task) or **that job's routine** (a run), through the board's own `/api/fire` | So your team does it. The trigger URLs stay in Vercel; none reaches your browser |
+| With `JEV_ROUTING=on`: a task's words, and your agents' names and descriptions | **OpenRouter** (Jev) | So it can suggest who does the task. Off by default |
 
 Everything else stays where it was. The page's security policy did not change: the call itself is
 browser-to-OpenAI audio, and the page only ever talks to its own site.
@@ -563,6 +613,9 @@ has no evidence for.
 | `VOICE_LANGUAGE` | The language you speak, as a two-letter code (`pt`, `fr`), for the transcript of what you say (the captions, and the echo guard's): OpenAI says giving it makes the transcript more accurate and quicker. `auto` lets it guess. `en` unless set | No |
 | `VOICE_REPLY_TOKENS` | How long one spoken reply may run, 300 to 800. Its sound counts at about 20 a second, so the default `700` is about 30 seconds of speech; `800` is the most, about 40. With Fish it is always 300, which is already longer than that | No |
 | `VOICE_ECHO_GUARD` | On a computer, a turn of one or two words in the first 1.5 seconds of a reply is treated as the assistant's own voice coming back through the speakers: it is ignored and the reply resumes (once per question). So to stop it right at the start, use **Stop** or Esc rather than saying "stop". The guard reads a transcript of what it hears, so on a computer that is on with it, captions or not: about $0.002 a minute of your talking (gpt-4o-mini-transcribe: 600 audio tokens a minute at $1.25 a million, plus the words at $5 a million). Phones never use the guard. Phones do not pay it unless captions are on. `off` to switch it off. On unless set | No |
+| `VOICE_SPOKEN_YES` | `off` to make a tap on the card's **Yes** the only way to send a voice order. On unless set: your own plain spoken yes counts too, under the rules in [Orders by voice](#orders-by-voice) | No |
+| `JEV_ROUTING` | `on` to let Jev suggest which agent does a task you order by voice. **Sends the task's words, and your agents' names and descriptions, to OpenRouter.** Needs `OPENROUTER_API_KEY`. Off unless set | No |
+| `OPENROUTER_API_KEY` | Your OpenRouter key, for Jev. Mark it sensitive. Does nothing unless `JEV_ROUTING=on` | For Jev |
 | `VOICE_VAD_THRESHOLD` | How loud a sound must be to count as you talking, `0.1` to `0.95`. Default `0.6` - a little above OpenAI's example, because a computer on speakers heard its own voice as you talking. Raise it if it keeps cutting itself off; lower it if it misses you | No |
 | `FISH_API_KEY` | Your Fish Audio key, for a voice you choose. Mark it sensitive | For Fish |
 | `FISH_VOICE_ID` | The 32 letters and numbers in the voice's address on fish.audio | For Fish |
@@ -715,7 +768,11 @@ used only when you connect a picture store.
 | A job says **DECLARED** | Its file claims a schedule and no routine backs it. Run `/arm` |
 | A job says **UNAPPROVED** | Something is firing that your files say is off. It is spending runs nobody approved |
 | **No hero number yet** | Your `tiles.yml` names a metric nothing computes, or your ledger has no hours in it. The sentence says which |
-| Run buttons do nothing | `FIRE_TRIGGERS` is unset, or that job has no `fire: true` in its trigger block |
+| A Run button, Add task or a voice order answers "Fire is not configured…" | `FIRE_KEY` or `FIRE_TRIGGERS` is not set. Follow [Orders by voice](#orders-by-voice), steps 1 to 4 |
+| A Run button answers "…does not have trigger.fire: true" | Add `fire: true` to that job's trigger block, commit and push |
+| "Orders by voice are off…" | The board's Run buttons are not set up yet. Follow [Orders by voice](#orders-by-voice) |
+| "Didn't catch a clear yes - tap Yes." | Your yes was not plain, came during or just after its voice, or the fire key is not in this tab yet. Tap **Yes** |
+| "Not sent: …" in the voice panel | The board refused the order, and the rest of the line says why. The assistant is told not to say it was sent |
 | Add task, New workflow, Arm or Approve answer "No \"task-intake\" routine is registered" | Those four dispatch to one dedicated routine rather than to a job, so `task-intake` needs its own entry in `FIRE_TRIGGERS`. It is not a workflow slug and wiring every workflow does not supply it |
 | The board looks empty but the repo is fine | Check the branch. `GITHUB_BRANCH` defaults to `main` |
 | **Make it yours** says personalising is off, after you made a store | You did not redeploy. A new deployment is the only one that sees the store |
@@ -750,8 +807,10 @@ used only when you connect a picture store.
 - **Send anything you did not ask it to.** It has no email and no publishing. What does leave is yours
   to switch on, with `OPENAI_API_KEY`: **Make it** sends the description you typed to OpenAI, and
   **talking to the board** sends your voice, and the board's answers to its questions, to OpenAI -
-  plus, with Fish on, the words of each answer to Fish, whose free model may train on them. See
-  [What goes where](#what-goes-where)
+  plus, with Fish on, the words of each answer to Fish, whose free model may train on them, and with
+  `JEV_ROUTING=on`, the words of a task you order to OpenRouter. See [What goes where](#what-goes-where)
+- **Start work on its own.** Nothing is sent without your tap on **Yes**, or your own spoken yes,
+  after you saw its card. Its own words, or anything it read, can never say yes for you
 - **Put a key on the page.** The OpenAI and Fish keys stay on the server. A voice call is started by
   the board's own function, which adds the key; not even a short-lived key reaches your browser
 - **Keep a key or password where the page can read it.** Signing in leaves a cookie that no script

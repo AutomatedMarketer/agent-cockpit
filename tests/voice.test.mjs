@@ -351,13 +351,49 @@ test('the README explains speakers and headphones mode, and why', () => {
   assert.match(readme, /tap the orb, press Esc or press Space/i)
 })
 
-test('the README records the rule Phase 11 must keep: a spoken yes counts only while no reply plays and the microphone was open', () => {
+test('the README says what orders by voice do, the yes rule word for word, and how to switch them on', () => {
   const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8')
-  const row = readme.split(/\r?\n/).find((line) => line.startsWith('| **What it cannot do yet** |')) ?? ''
-  assert.match(row, /Phase 11/)
-  assert.match(row, /spoken yes/i)
-  assert.match(row, /only while no reply is playing/i)
-  assert.match(row, /microphone was open/i)
+  const lines = readme.split(/\r?\n/)
+  const can = lines.find((line) => line.startsWith('| **What it can do** |')) ?? ''
+  assert.match(can, /task card/i)
+  assert.match(can, /run a job/i)
+  assert.match(can, /is it done/i)
+  assert.ok(!lines.some((line) => line.startsWith('| **What it cannot do yet** |') && /Phase 11, not built/.test(line)), 'the README still says orders are not built')
+  const section = readme.slice(readme.indexOf('### Orders by voice'), readme.indexOf('### Speakers or headphones'))
+  assert.ok(section.length > 200, 'there is no Orders by voice section before Speakers or headphones')
+  // The yes rule, as Nuno set it (2026-10-10).
+  assert.match(section, /only after the card appears/i)
+  assert.match(section, /within 60 seconds/i)
+  assert.match(section, /plain yes/i)
+  assert.match(section, /microphone was on/i)
+  assert.match(section, /no reply (is|was) playing/i)
+  assert.match(section, /A tap on \*\*Yes\*\* always works/)
+  assert.match(section, /never .*a tool, a page or an email/i)
+  assert.match(section, /VOICE_SPOKEN_YES=off/)
+  // Switching on, in order, and what it costs.
+  assert.match(section, /task-intake/)
+  assert.match(section, /FIRE_KEY/)
+  assert.match(section, /FIRE_TRIGGERS/)
+  assert.match(section, /fire: true/)
+  assert.match(section, /redeploy/i)
+  assert.match(section, /about \$0\.002 a minute/i)
+  // Jev: off by default, and where the words go when it is on.
+  assert.match(section, /JEV_ROUTING=on/)
+  assert.match(section, /OpenRouter/)
+  assert.match(section, /off by default/i)
+  // Every new setting is in the settings table.
+  for (const name of ['VOICE_SPOKEN_YES', 'JEV_ROUTING', 'OPENROUTER_API_KEY']) {
+    assert.ok(lines.some((line) => line.startsWith(`| \`${name}\``)), `${name} is not in the settings table`)
+  }
+  // What goes where, when it breaks, and what it will never do.
+  assert.ok(lines.some((line) => /^\| The words of an order/.test(line) && /task-intake/.test(line)), 'What goes where does not say where an order goes')
+  assert.ok(lines.some((line) => line.startsWith('| With `JEV_ROUTING=on`') && /\*\*OpenRouter\*\*/.test(line)), 'What goes where does not say what goes to OpenRouter')
+  assert.ok(lines.some((line) => line.startsWith('| "Orders by voice are off')), 'When it breaks has no row for orders being off')
+  assert.ok(lines.some((line) => line.startsWith('| "Didn\'t catch a clear yes')), 'When it breaks has no row for a yes that did not count')
+  assert.ok(!lines.some((line) => line.startsWith('| Run buttons do nothing')), 'the old "Run buttons do nothing" row is still there: they answer a sentence')
+  assert.ok(lines.some((line) => line.startsWith('| A Run button, Add task or a voice order answers "Fire is not configured')))
+  const never = readme.slice(readme.indexOf('## What it will never do'), readme.indexOf('## Under the hood'))
+  assert.match(never, /without your tap on \*\*Yes\*\*, or your own spoken yes/i)
 })
 
 /* ---------- the session tune-up ---------- */
