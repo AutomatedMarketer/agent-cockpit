@@ -34,8 +34,10 @@ export const READINESS_SUMMARY_MAX = 160
 // scheduler decides when to work, so launchd can only prove the program is up, not that today's report
 // was written - and the control center, not this board, checks that. By label, from the deploy scripts
 // in donna/control-center/data (deploy-managed-*-mac.py set `local.donna.<name>`); the software watch
-// is `local.donna.software-skills-watch` in GOAL-PROGRESS.md, which has no deploy script of its own
-// in that folder. Any other always-on service is only "was running".
+// is `local.donna.software-skills-watch`, a real installed label ("The first live cutover installed
+// `local.donna.software-skills-watch`": CONSOLIDATION-REPORT.md line 184 and ACCEPTANCE.md line 82 in
+// the same folder, and GOAL-PROGRESS.md), which has no deploy script of its own in data/. Any other
+// always-on service is only "was running".
 export const MANAGED_OWNER_LABELS = [
   'local.donna.security-changelog',
   'local.donna.model-watch-weekly',
