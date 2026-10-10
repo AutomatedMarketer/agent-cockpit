@@ -21,7 +21,8 @@ const TRIGGER_TIMEOUT_MS = 15_000
 
 // "task" dispatches through one dedicated routine, registered in FIRE_TRIGGERS under this
 // slug — see the README's fire section.
-const TASK_INTAKE_SLUG = 'task-intake'
+// Exported for orders by voice (api/_orders.js), so the routine has one name in one place.
+export const TASK_INTAKE_SLUG = 'task-intake'
 const TITLE_MIN = 3
 const TITLE_MAX = 200
 const DETAILS_MAX = 2000

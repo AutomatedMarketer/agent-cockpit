@@ -107,6 +107,14 @@ const FISH_BAD_ID =
   'FISH_VOICE_ID is not a Fish voice id (the 32 letters and numbers in the voice\'s address on ' +
   'fish.audio), so the board speaks with OpenAI\'s voice for now.'
 
+// Orders by voice (Phase 11) go through the board's own fire endpoint, so they are off exactly when
+// its Run buttons are: no FIRE_TRIGGERS, or no fire key. The assistant then says this, plainly, and
+// never sends the owner to a Run button that would answer the same thing.
+export const ORDERS_OFF =
+  "Orders by voice are off, because this board's Run buttons are not set up yet. To switch them on, " +
+  "follow the README's \"Orders by voice\" steps: a task-intake routine, then FIRE_KEY and FIRE_TRIGGERS " +
+  'in Vercel, then redeploy.'
+
 const setting = (value) => (typeof value === 'string' ? value.trim() : '')
 
 // Fish is the mouth only when it can actually speak: a key AND a voice id that is shaped like one.
