@@ -20,7 +20,7 @@
 // - Every failure leaves here as one plain sentence. The SDK's own messages are for developers,
 //   and some of them could carry a credential.
 
-import { isValidSlug, parseSlot, readCapped } from './lib.js'
+import { isValidSlug, parseSlot, readCapped } from './_lib.js'
 
 const ROOT = 'agent-cockpit'
 export const SETTINGS_PATH = `${ROOT}/settings.json`

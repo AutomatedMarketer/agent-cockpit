@@ -23,7 +23,7 @@ import {
   sniffImage,
   readCapped,
   DEFAULT_ART_STYLE
-} from './lib.js'
+} from './_lib.js'
 import {
   pictureStore,
   NOT_CONNECTED,

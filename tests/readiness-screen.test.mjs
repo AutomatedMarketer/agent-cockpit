@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { cssRules, sheetText } from './helpers/css-rules.mjs'
 import { loadPage, flush, html, script } from './helpers/page-harness.mjs'
 import { basePayload } from './helpers/page-payload.mjs'
-import { shapeReadiness, orderCards, countCards } from '../api/readiness.js'
+import { shapeReadiness, orderCards, countCards } from '../api/_readiness.js'
 
 const NOW = Date.now()
 const iso = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z')

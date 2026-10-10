@@ -126,7 +126,7 @@ test('a done task adds no Done card of its own — its run log is the record', (
 })
 
 // --- the Add-task form's text split (mirrored in public/index.html) -----------------------
-import { splitTaskText } from '../api/lib.js'
+import { splitTaskText } from '../api/_lib.js'
 
 test('splitTaskText: one short line is a title with no details', () => {
   assert.deepEqual(splitTaskText('  Research podcast sponsors  '), { title: 'Research podcast sponsors' })

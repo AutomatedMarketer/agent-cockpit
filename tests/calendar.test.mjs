@@ -1,6 +1,6 @@
 // The week calendar on the front screen: which days it spans, and which pills earn a tick.
 //
-// weekDates, dateKey, ranOnDays and activityByDay live in api/lib.js and are mirrored verbatim
+// weekDates, dateKey, ranOnDays and activityByDay live in api/_lib.js and are mirrored verbatim
 // inside public/index.html's inline script (the page has no module loading) — the last test here
 // is the contract that keeps the mirror honest.
 
@@ -8,7 +8,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { weekDates, dateKey, ranOnDays, activityByDay } from '../api/lib.js'
+import { weekDates, dateKey, ranOnDays, activityByDay } from '../api/_lib.js'
 
 const page = fileURLToPath(new URL('../public/index.html', import.meta.url))
 
@@ -162,9 +162,9 @@ test("the page's inline script parses - a broken escape ships a blank dashboard"
   }
 })
 
-test('the mirrored helpers in the page match api/lib.js exactly', async () => {
+test('the mirrored helpers in the page match api/_lib.js exactly', async () => {
   const html = await readFile(page, 'utf8')
-  const lib = await readFile(fileURLToPath(new URL('../api/lib.js', import.meta.url)), 'utf8')
+  const lib = await readFile(fileURLToPath(new URL('../api/_lib.js', import.meta.url)), 'utf8')
   const slice = (source, start, end) => {
     const from = source.indexOf(start)
     assert.notEqual(from, -1, `could not find ${start}`)
@@ -176,7 +176,7 @@ test('the mirrored helpers in the page match api/lib.js exactly', async () => {
     .replace(/export function /g, 'function ')
     .replace(/export const /g, 'const ')
   const fromPage = slice(html, 'function weekDates', 'function scheduleStripHtml')
-  assert.equal(fromPage, fromLib, 'the page copy has drifted from api/lib.js')
+  assert.equal(fromPage, fromLib, 'the page copy has drifted from api/_lib.js')
   // The Today sparklines count with this one, so it has to be inside the compared stretch.
   assert.match(fromPage, /function activityByDay\(/, 'activityByDay is not in the mirrored stretch, so nothing holds the two copies together')
 })

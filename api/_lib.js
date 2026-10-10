@@ -708,7 +708,7 @@ export function agentColorIndex(slug) {
 
 // --- schedule → week-strip expansion ------------------------------------------------------
 //
-// Expands one parsed schedule string (the six forms from api/workflows.js) into what the
+// Expands one parsed schedule string (the six forms from api/_workflows.js) into what the
 // Schedule strip draws. Days are Monday-first: 0 = Mon … 6 = Sun.
 //   daily HH:MM     → { type: 'days', days: [0..6], time }
 //   weekdays HH:MM  → { type: 'days', days: [0..4], time }

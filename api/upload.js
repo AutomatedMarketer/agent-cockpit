@@ -22,7 +22,7 @@
 // cached copy of it can never be the wrong picture.
 
 import { randomBytes } from 'node:crypto'
-import { writeGate, parseSlot, slotKind, PICTURE_BUDGET, sniffImage, imageSize } from './lib.js'
+import { writeGate, parseSlot, slotKind, PICTURE_BUDGET, sniffImage, imageSize } from './_lib.js'
 import {
   pictureStore,
   NOT_CONNECTED,

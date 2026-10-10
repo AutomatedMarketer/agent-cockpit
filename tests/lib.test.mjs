@@ -14,7 +14,7 @@ import {
   sortRunsNewestFirst,
   runsSince,
   heartbeatStatus
-} from '../api/lib.js'
+} from '../api/_lib.js'
 
 const NOW = Date.parse('2026-08-10T12:00:00Z')
 const at = (iso, extra = {}) => ({ started_at: iso, status: 'ok', ...extra })

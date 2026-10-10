@@ -11,7 +11,7 @@ import { makeHandler } from '../api/upload.js'
 import { makeHandler as makeGenerate } from '../api/generate.js'
 import { makeHandler as makeBrand } from '../api/brand.js'
 import { NOT_CONNECTED, SETTINGS_PATH, ADVANCED_OPS_PER_DAY, pictureStore } from '../api/_picture-store.js'
-import { PICTURE_BUDGET } from '../api/lib.js'
+import { PICTURE_BUDGET } from '../api/_lib.js'
 import { BlobServiceNotAvailable, fakeBlob } from './helpers/fake-blob.mjs'
 import {
   STORE_ENV,

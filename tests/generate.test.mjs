@@ -13,7 +13,7 @@ import { makeHandler } from '../api/generate.js'
 import { makeHandler as makeUpload } from '../api/upload.js'
 import { makeHandler as makeBrand } from '../api/brand.js'
 import { NOT_CONNECTED } from '../api/_picture-store.js'
-import { DEFAULT_ART_STYLE } from '../api/lib.js'
+import { DEFAULT_ART_STYLE } from '../api/_lib.js'
 import {
   STORE_ENV,
   NOON,

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { shapeHero, shapeFound, matchProved, shapeHermes } from '../api/state.js'
-import { AGENT_PALETTE, agentColorIndex, PICTURE_BUDGET, DEFAULT_ART_STYLE } from '../api/lib.js'
+import { AGENT_PALETTE, agentColorIndex, PICTURE_BUDGET, DEFAULT_ART_STYLE } from '../api/_lib.js'
 import { cssRules } from './helpers/css-rules.mjs'
 
 /* Every other test in this repo checks the API, or greps the page source for a string. None of
@@ -4088,8 +4088,8 @@ function encoder(produce) {
 test('the picture budgets in the page are the ones the server holds pictures to', () => {
   const { PICTURE_BUDGET: inPage } = pipeline()
   assert.deepEqual({ ...inPage }, { ...PICTURE_BUDGET }, 'the page shrinks to one size and the server refuses at another')
-  // And word for word, the way the other mirrored helpers are held to api/lib.js.
-  const lib = readFileSync(fileURLToPath(new URL('../api/lib.js', import.meta.url)), 'utf8')
+  // And word for word, the way the other mirrored helpers are held to api/_lib.js.
+  const lib = readFileSync(fileURLToPath(new URL('../api/_lib.js', import.meta.url)), 'utf8')
   const line = (source, start) => source.slice(source.indexOf(start), source.indexOf('\n', source.indexOf(start)))
   assert.equal(line(html, 'const PICTURE_BUDGET'), line(lib, 'export const PICTURE_BUDGET').replace('export ', ''))
 })

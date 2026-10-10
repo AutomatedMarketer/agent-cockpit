@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { loadPage, flush, script } from './helpers/page-harness.mjs'
 import { basePayload } from './helpers/page-payload.mjs'
-import { shapeReadiness } from '../api/readiness.js'
+import { shapeReadiness } from '../api/_readiness.js'
 
 const NOW = Date.parse('2026-10-09T15:00:00Z')
 const SHA = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'

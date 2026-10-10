@@ -19,7 +19,7 @@ import {
   isSameOriginRequest,
   isValidSlug,
   DEFAULT_ART_STYLE
-} from '../api/lib.js'
+} from '../api/_lib.js'
 
 /* ---------- slots: which picture a request is about ---------- */
 
@@ -293,7 +293,7 @@ test('only the exact body type the endpoint reads gets through', () => {
   assert.equal(writeGate(ours({ 'content-type': undefined }), { VIEW_KEY: VIEW })?.status, 415)
 })
 
-test('the same-origin check lives in lib.js and fire.js uses that one', async () => {
+test('the same-origin check lives in _lib.js and fire.js uses that one', async () => {
   const fire = await import('../api/fire.js')
   assert.equal(fire.isSameOriginRequest, isSameOriginRequest, 'one implementation of "is this our own page"')
 })

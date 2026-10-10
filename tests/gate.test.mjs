@@ -9,7 +9,7 @@ import { readFile } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { viewGate, keysMatch } from '../api/lib.js'
+import { viewGate, keysMatch } from '../api/_lib.js'
 
 const req = (headers = {}) => ({ headers })
 const KEY = 'a-long-enough-view-key'

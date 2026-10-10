@@ -15,7 +15,7 @@ import {
   lateness,
   SLOT_GRACE_MINUTES,
   SLOT_TOLERANCE_MINUTES
-} from '../api/workflows.js'
+} from '../api/_workflows.js'
 import { RUNNING_GRACE_MINUTES } from '../api/state.js'
 
 // A Monday, 12:00 UTC.

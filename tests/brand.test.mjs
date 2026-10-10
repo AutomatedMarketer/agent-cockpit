@@ -10,7 +10,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { makeHandler } from '../api/brand.js'
 import { NOT_CONNECTED, SETTINGS_PATH, pictureStore } from '../api/_picture-store.js'
-import { DEFAULT_ART_STYLE } from '../api/lib.js'
+import { DEFAULT_ART_STYLE } from '../api/_lib.js'
 import { BlobServiceNotAvailable, fakeBlob } from './helpers/fake-blob.mjs'
 import {
   STORE_ENV,

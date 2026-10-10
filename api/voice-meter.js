@@ -21,7 +21,7 @@
 //
 // Every answer carries `private, no-store`.
 
-import { viewGate, writeGate, readJsonBody } from './lib.js'
+import { viewGate, writeGate, readJsonBody } from './_lib.js'
 import {
   pictureStore,
   failureAnswer,

@@ -20,7 +20,7 @@
 // The Fish key goes to Fish in one header and nowhere else. Fish's own words are never passed on, and
 // every answer carries `private, no-store`.
 
-import { writeGate, readJsonBody, readCapped } from './lib.js'
+import { writeGate, readJsonBody, readCapped } from './_lib.js'
 import {
   voiceConfig,
   readTicket,

@@ -11,7 +11,7 @@
 // is tested by handing it a different one, and the endpoints decide where env comes from.
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { cleanName, cleanText } from './lib.js'
+import { cleanName, cleanText } from './_lib.js'
 
 // --- the settings, and what each one may be ------------------------------------------------------
 

@@ -13,7 +13,7 @@
 //   and never appear in a response or error.
 // - GITHUB_TOKEN stays on the server, as in api/state.js and api/file.js.
 
-import { parseSimpleYaml } from './yaml-lite.js'
+import { parseSimpleYaml } from './_yaml-lite.js'
 
 const GITHUB = 'https://api.github.com'
 const ACTIONS = ['run', 'pause', 'task', 'arm', 'approve', 'move', 'skill', 'agent']
@@ -31,12 +31,12 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 
 // --- pure helpers, exported so the suite can hit them without a network ------------------
 
-// Imported from lib.js so the fire key and the view key are compared by exactly one
+// Imported from _lib.js so the fire key and the view key are compared by exactly one
 // implementation. Two copies of a constant-time compare is one copy too many.
 // Re-exported because this module's tests are the ones that cover it. The slug rule and the
-// same-origin check moved to lib.js for the same reason: the picture-store writes run them
+// same-origin check moved to _lib.js for the same reason: the picture-store writes run them
 // too, and a second copy of either is a second place to get it wrong.
-import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest, viewGate } from './lib.js'
+import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest, viewGate } from './_lib.js'
 export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
 
 // FIRE_TRIGGERS must be a JSON object of slug → https URL. Anything else reads as
@@ -347,7 +347,7 @@ export function sessionUrlFrom(result) {
   return null
 }
 
-// The same-origin check lives in lib.js (imported above), with the note on why it is
+// The same-origin check lives in _lib.js (imported above), with the note on why it is
 // best-effort - which is why the README calls PUBLIC_FIRE a convenience, not a security boundary.
 
 // --- GitHub read (same shape as api/file.js — read-only, token stays server-side) --------

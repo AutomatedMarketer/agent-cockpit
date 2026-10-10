@@ -539,7 +539,7 @@ Locally:
 npm test
 ```
 
-1576 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1578 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -648,7 +648,7 @@ contract for `.agent-team/status/jobs/`, byte for byte, and `tests/jobs.test.mjs
 it (a test compares the two copies whenever both repos are checked out side by side). The board
 re-checks every name - a launchd label, a Hermes id of exactly 12 lowercase letters and numbers, the
 standard `Hermes job <id>` name, the names in `jobs.yml` - and builds its answer from the keys it
-knows. The light for each job is decided on the server (`api/readiness.js`, with every row of its
+knows. The light for each job is decided on the server (`api/_readiness.js`, with every row of its
 rules table under test) and the sentences are built there too, with no model call; the page only
 fills in times in the reader's own clock. `/api/state?since=<commit>` answers `{ "unchanged": true }`
 with one call to GitHub when the branch has not moved, and otherwise the whole board built from the

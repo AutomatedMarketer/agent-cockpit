@@ -17,9 +17,9 @@ import {
   MANAGED_OWNER_LABELS,
   COLLECTOR_EVERY_MINUTES,
   SWITCHED_OFF
-} from '../api/readiness.js'
+} from '../api/_readiness.js'
 import { shapeJobs, shapeJobOverrides, JOBS_FOLDER, JOBS_STALE_AFTER_HOURS, JOBS_GRACE_MINUTES } from '../api/state.js'
-import { SLOT_GRACE_MINUTES } from '../api/workflows.js'
+import { SLOT_GRACE_MINUTES } from '../api/_workflows.js'
 
 const iso = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z')
 const at = (value) => Date.parse(value)

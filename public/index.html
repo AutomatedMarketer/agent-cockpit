@@ -1532,7 +1532,7 @@ const sectionHead = (eyebrow, heading) =>
 
 /* ---------- Agent identity colors + schedule expansion ----------
    KEEP IN SYNC: AGENT_PALETTE, agentColorIndex, and scheduleWeekView are mirrored verbatim
-   as exports in api/lib.js, where the test suite exercises them (this page has no module
+   as exports in api/_lib.js, where the test suite exercises them (this page has no module
    loading). Change them here, change them there. */
 
 // Eight distinct dark-theme-friendly hues. Agent color is IDENTITY only — status colors
@@ -1562,7 +1562,7 @@ function agentColorIndex(slug) {
 }
 
 // Expands one schedule string into what the Schedule strip draws. Days are Monday-first:
-// 0 = Mon … 6 = Sun. Unrecognised forms → null. (Mirrored in api/lib.js — see above.)
+// 0 = Mon … 6 = Sun. Unrecognised forms → null. (Mirrored in api/_lib.js — see above.)
 const WEEK_MON_FIRST = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 
 function scheduleWeekView(schedule) {
@@ -3519,7 +3519,7 @@ async function fireWorkflow(button) {
 
 /* ---------- Add task ---------- */
 
-// KEEP IN SYNC: splitTaskText is mirrored verbatim as an export in api/lib.js, where the
+// KEEP IN SYNC: splitTaskText is mirrored verbatim as an export in api/_lib.js, where the
 // test suite exercises it (this page has no module loading). Change it here, change it
 // there. First line → title (clipped to the endpoint's 200-char cap); anything beyond the
 // title rides as details.
@@ -4223,7 +4223,7 @@ function renderSkills() {
 // How long the board waits for /api/brand before drawing without it. The board is the point: a
 // store slow to answer costs three seconds once, and never the board.
 const BRAND_WAIT_MS = 3000
-// What /api/art can be asked for: the server's own shapes - parseSlot in api/lib.js, and the
+// What /api/art can be asked for: the server's own shapes - parseSlot in api/_lib.js, and the
 // version and three types in api/_picture-store.js. Anything else in an answer is dropped here,
 // before it can become part of an address or a key the page looks things up by.
 const ART_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -4429,7 +4429,7 @@ async function readBrand() {
    banner. So the picture is cropped and shrunk here, on the device, before anything is sent: the
    centre of it, at the size the board draws it, in the smallest file that still looks right. */
 
-// Mirrored word for word from api/lib.js, which refuses anything over these
+// Mirrored word for word from api/_lib.js, which refuses anything over these
 // (tests/render.test.mjs holds the two copies together).
 const PICTURE_BUDGET = { portrait: 45 * 1024, banner: 100 * 1024 }
 // The size each is drawn at - the robots are 480 square, the banners 1600 by 686 - and the
@@ -6679,7 +6679,7 @@ async function loadVoiceMeter() {
 
 /* ---------- Readiness: begin ----------
    Flight readiness: every scheduled job, one light each, NO GO first. The server decides each light
-   and writes each sentence (api/readiness.js); this draws them, and ages them while the board is
+   and writes each sentence (api/_readiness.js); this draws them, and ages them while the board is
    open. Everything is set as TEXT on elements made here - a job's name and a run's summary are
    repo text, and none of it is ever parsed as markup. A test reads this block and refuses every call
    that would build markup from a string. */
@@ -6687,7 +6687,7 @@ async function loadVoiceMeter() {
 const READINESS_RANK = { 'no-go': 0, silent: 1, go: 2 }
 const READINESS_WORD = { 'no-go': 'NO GO', silent: 'SILENT', go: 'GO' }
 
-// Mirrors orderCards and countCards in api/readiness.js - the page has no module loading, so the two
+// Mirrors orderCards and countCards in api/_readiness.js - the page has no module loading, so the two
 // are held together by a test that runs both on the same cards.
 function readinessOrder(a, b) {
   if (a.light !== b.light) return READINESS_RANK[a.light] - READINESS_RANK[b.light]

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { cssRules, sheetText } from './helpers/css-rules.mjs'
-import { AGENT_PALETTE } from '../api/lib.js'
+import { AGENT_PALETTE } from '../api/_lib.js'
 
 const pagePath = fileURLToPath(new URL('../public/index.html', import.meta.url))
 const html = readFileSync(pagePath, 'utf8')

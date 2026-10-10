@@ -19,7 +19,7 @@
 // - A version is never overwritten, so its answer can be cached forever - privately, because it
 //   sits behind the view key and must not be kept by a shared cache.
 
-import { viewGate, parseSlot, sniffImage } from './lib.js'
+import { viewGate, parseSlot, sniffImage } from './_lib.js'
 import { pictureStore, isPictureVersion, NOT_CONNECTED, failureAnswer } from './_picture-store.js'
 
 const TYPES = { webp: 'image/webp', jpeg: 'image/jpeg', png: 'image/png' }

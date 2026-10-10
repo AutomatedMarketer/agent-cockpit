@@ -21,7 +21,7 @@
 //
 // Green means a verified clean report or a running service, and says which. A process that is up
 // proves the process, not today's output; the sentence for it says exactly that (decision D1).
-import { lateness, nextRunAt, SLOT_GRACE_MINUTES, SLOT_TOLERANCE_MINUTES } from './workflows.js'
+import { lateness, nextRunAt, SLOT_GRACE_MINUTES, SLOT_TOLERANCE_MINUTES } from './_workflows.js'
 
 // The Mac's reading goes stale after this long. A test holds it to the jobs contract's own number.
 export const READINESS_STALE_HOURS = 8

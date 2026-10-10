@@ -22,16 +22,16 @@ import {
   sortRunsNewestFirst,
   runsSince,
   heartbeatStatus, HEARTBEAT_STALE_AFTER_MINUTES, HEARTBEAT_STALE_MIN_MINUTES,
-  HEARTBEAT_STALE_MAX_MINUTES, viewGate, TASK_STATUSES } from './lib.js'
+  HEARTBEAT_STALE_MAX_MINUTES, viewGate, TASK_STATUSES } from './_lib.js'
 import {
   parseWorkflow,
   normaliseSteps,
   validateWorkflow,
   nextRunAt,
   isGoneQuiet
-} from './workflows.js'
-import { parseSimpleYaml } from './yaml-lite.js'
-import { shapeReadiness } from './readiness.js'
+} from './_workflows.js'
+import { parseSimpleYaml } from './_yaml-lite.js'
+import { shapeReadiness } from './_readiness.js'
 
 const GITHUB = 'https://api.github.com'
 const AGENT_DIR = '.claude/agents'
@@ -2515,7 +2515,7 @@ export default async function handler(request, response) {
     const found = matchProved(shapeFound(foundFiles, now, foundPaths.length), connections)
     const hermes = shapeHermes(hermesFiles, now, hermesPaths.length)
     const jobs = shapeJobs(jobsFiles, now, jobsPaths.length)
-    // One light per job, from everything read above. The rules live in readiness.js.
+    // One light per job, from everything read above. The rules live in _readiness.js.
     const readiness = shapeReadiness({
       workflows,
       routines: { known: routinesKnown, orphans: orphanRoutines },

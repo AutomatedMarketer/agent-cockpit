@@ -7,7 +7,7 @@
 // nextRunAt and isGoneQuiet are cockpit-side additions: the template validates files, the
 // dashboard also has to answer "when does this run next" and "has this gone quiet".
 
-import { parseSimpleYaml } from './yaml-lite.js'
+import { parseSimpleYaml } from './_yaml-lite.js'
 
 // Routines will not fire more often than once an hour. GitHub Actions will. Anything below
 // the floor has to be routed to the runner that can honour it, so the floor lives here

@@ -1,12 +1,12 @@
 // Agent identity colors and the Schedule strip's week expansion.
 //
-// Both functions live in api/lib.js and are mirrored verbatim inside public/index.html's
+// Both functions live in api/_lib.js and are mirrored verbatim inside public/index.html's
 // inline script (the page has no module loading) — these tests are the contract that keeps
 // the mirror honest.
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { AGENT_PALETTE, agentColorIndex, scheduleWeekView } from '../api/lib.js'
+import { AGENT_PALETTE, agentColorIndex, scheduleWeekView } from '../api/_lib.js'
 
 /* ---------- agentColorIndex ---------- */
 

@@ -2,7 +2,7 @@
 // without bouncing the reader out to GitHub. Read-only, same token discipline as
 // api/state.js: the token stays on the server and never reaches the browser.
 
-import { viewGate } from './lib.js'
+import { viewGate } from './_lib.js'
 
 const GITHUB = 'https://api.github.com'
 const ALLOWED_EXTENSIONS = /\.(md|txt|json|ya?ml)$/i

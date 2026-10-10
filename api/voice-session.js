@@ -18,7 +18,7 @@
 // not on the view key, so anything it kept here could be handed to somebody without one.
 
 import { createHash } from 'node:crypto'
-import { writeGate, readJsonBody, readCapped } from './lib.js'
+import { writeGate, readJsonBody, readCapped } from './_lib.js'
 import { pictureStore } from './_picture-store.js'
 import { voiceConfig, sessionFor, assistantLabel, signTicket, newSessionId } from './_voice.js'
 
