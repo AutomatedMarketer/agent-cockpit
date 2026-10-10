@@ -234,7 +234,7 @@
   /* A section heading is the mock-up's: a 21px heading with a small capital line over it, the pair
      wrapped in .section-head. It used to be small grey capitals on their own, which on a screen of
      panels read as a label for the panel rather than as the start of a part of the page. */
-  h2 { font-size: 1.3125rem; margin: 2rem 0 .8rem; letter-spacing: -.03em; line-height: 1.2; color: var(--ink); font-weight: 600; }
+  h2 { font-size: var(--fs-h2); margin: 2rem 0 .8rem; letter-spacing: -.03em; line-height: 1.2; color: var(--ink); font-weight: 600; }
   .section-head { margin: 2.1rem 0 .85rem; }
   .section-head > h2 { margin: .2rem 0 0; }
   .eyebrow {
@@ -250,6 +250,9 @@
   .panel > p { margin: 0; padding: .85rem 1.05rem; }
   .panel > p + p { padding-top: 0; }
   .card { padding: 1rem 1.1rem; }
+  /* A laptop has room a phone does not: more air inside every card. Right below the phone rule, so
+     a later rule that sizes a particular card still wins over both. */
+  @media (min-width: 64rem) { .card { padding: 1.35rem 1.5rem; } }
   .card > p { padding: 0; }
   .card > p + p, .panel.empty > p { margin-top: .5rem; }
   .panel.empty > p { padding: 0; }
@@ -868,7 +871,7 @@
        and stays at the top while the page scrolls under it. */
     .topbar {
       position: sticky; top: 0; z-index: 5; flex-wrap: nowrap;
-      margin: -1rem -1.75rem 1rem; padding: .55rem 1.75rem; min-height: 3.75rem;
+      margin: -1rem -1.75rem 1rem; padding: .55rem 1.75rem; min-height: 4rem;
       background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px);
       border-bottom: 1px solid var(--line);
     }
@@ -995,7 +998,7 @@
   .card[id^="job-"] { scroll-margin-top: 7rem; }
   .legend { display: flex; flex-wrap: wrap; gap: .35rem 1rem; padding: .65rem 1.05rem; border-top: 1px solid var(--line); font-size: .75rem; color: var(--muted); align-items: center; }
   .legend span { display: inline-flex; align-items: center; gap: .4rem; }
-  .hero-value { font-size: clamp(2.6rem, 9vw, 4.2rem); font-weight: 700; line-height: 1.05; }
+  .hero-value { font-size: clamp(2.6rem, 9vw, 4.2rem); font-weight: var(--fw-number); line-height: 1.05; }
   .hero-unit { font-size: 1rem; opacity: .85; margin-top: .2rem; }
 
   /* Today's banner: the harbour, with the day, the greeting, the line about the team and the setup
@@ -1003,7 +1006,7 @@
      water as well as the dark hull; the picture and its words are the same in both themes. */
   .banner {
     position: relative; overflow: hidden; display: flex; align-items: flex-end;
-    min-height: 13rem; border-radius: 18px; border: 1px solid var(--line);
+    min-height: 13rem; border-radius: var(--radius); border: 1px solid var(--line);
     background: var(--panel-2); box-shadow: var(--shadow);
   }
   .banner img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 62%; }
@@ -1017,8 +1020,8 @@
   /* An h2 for the outline, so a screen reader can jump to it - drawn as the biggest words on the
      board, over the picture, rather than as a section heading. */
   .banner .greeting, .banner .headline {
-    margin: .35rem 0 0; font-size: clamp(1.6rem, 5.2vw, 2.6rem); font-weight: 600; line-height: 1.08;
-    letter-spacing: -.04em; text-transform: none; color: var(--on-art);
+    margin: .35rem 0 0; font-size: var(--fs-display); font-weight: var(--fw-display); line-height: 1.08;
+    letter-spacing: var(--track-display); text-transform: none; color: var(--on-art);
   }
   .greeting .soft, .headline .soft { color: color-mix(in srgb, var(--on-art) 60%, transparent); }
   /* Team's picture is the workshop: its desks sit higher in the frame than the harbour's hull. */
@@ -1044,13 +1047,21 @@
   .kpis { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; margin: .9rem 0 1rem; }
   .kpi {
     --kpi: var(--kpi-work);
-    position: relative; overflow: hidden; margin: 0; padding: 1rem 1.1rem 1.1rem; border-radius: 16px;
+    position: relative; overflow: hidden; margin: 0; padding: 1rem 1.1rem 1.1rem; border-radius: var(--radius);
     background: radial-gradient(120% 90% at 0% 0%, color-mix(in srgb, var(--kpi) 18%, transparent), transparent 60%), var(--panel);
     border: 1px solid var(--line); box-shadow: var(--shadow);
   }
   .kpi::before {
     content: ""; position: absolute; width: 10rem; height: 10rem; right: -3rem; top: -3.75rem; border-radius: 50%;
     background: var(--kpi); filter: blur(60px); opacity: .22; pointer-events: none;
+  }
+  /* Our own mark, faint, bleeding off the top corner: the brand's ring and dot in the ink at a few
+     percent. Decoration only - an empty pseudo-element is never read out and cannot be pressed. */
+  .kpi::after {
+    content: ""; position: absolute; width: 7.5rem; height: 7.5rem; right: -2.4rem; top: -2.4rem;
+    border-radius: 50%; pointer-events: none;
+    border: .7rem solid color-mix(in srgb, var(--ink) 4%, transparent);
+    background: radial-gradient(circle, color-mix(in srgb, var(--ink) 4%, transparent) 0 30%, transparent 31%);
   }
   /* Room under the words for the line, only on a card that has one. */
   .kpi:has(> .spark) { padding-bottom: 4.6rem; }
@@ -1066,7 +1077,7 @@
   /* The hero's own markup sits in the third card unchanged, so it takes the same size as the other
      two numbers. clamp: "2,131 GBP" has to fit a third of a 1024 screen. */
   .kpi-value, .kpi .hero-value {
-    margin: .6rem 0 0; font-size: clamp(2rem, 3.4vw, 3.2rem); font-weight: 700; line-height: 1;
+    margin: .6rem 0 0; font-size: var(--fs-number); font-weight: var(--fw-number); line-height: 1;
     letter-spacing: -.05em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; color: var(--ink);
   }
   .kpi-value small { font-size: .42em; letter-spacing: -.01em; }
@@ -1342,20 +1353,25 @@
   /* More room for the banner on a wide screen. Below the rules it overrides, as every override in
      this sheet has to be. */
   @media (min-width: 48rem) {
-    .banner { min-height: 15rem; border-radius: 22px; }
+    .banner { min-height: 15rem; border-radius: var(--radius-lg); }
     .banner-text { padding: 1.6rem 1.9rem; }
     /* Beside the setup pill a laptop has about 830px for the greeting; at 2.6rem the last word of
        "Here is where things stand." fell onto a line of its own. */
-    .banner .greeting, .banner .headline { font-size: clamp(1.6rem, 2.5vw, 2.25rem); }
+    .banner .greeting, .banner .headline { font-size: clamp(1.75rem, 2.5vw, 2.25rem); }
     .kpis { gap: 1rem; margin: 1.1rem 0 1.25rem; }
+    .kpi { border-radius: var(--radius-lg); }
   }
   /* One column under 1024px, then the grids (layout.test.mjs). auto-fit and auto-fill so the
      sidebar's width needs no query of its own: three number cards, two plan cards and three or four
      agent cards across a laptop. Below the one-column rules they override. */
   @media (min-width: 64rem) {
-    .kpis { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
-    .plan-cards { grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
-    .team-grid { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
+    .kpis { grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1.1rem; }
+    .plan-cards { grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 1.1rem; }
+    .team-grid { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 1.1rem; }
+    .board { gap: 1.1rem; }
+    /* The page's own air on a laptop: 2rem each side, the top bar spanning it edge to edge. */
+    .wrap { padding: 1.25rem 2rem 0; }
+    .topbar { margin: -1.25rem -2rem 1.1rem; padding: .55rem 2rem; }
   }
   /* Talk to the board: the orb, bottom-right on every screen, and the sheet above it. The dock is the
      width of the screen less a gutter each side, so the sheet can be too on a phone; it lets taps
