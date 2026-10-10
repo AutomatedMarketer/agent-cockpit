@@ -991,6 +991,7 @@ function renderLedger() {
 
   if (!ledger) {
     el('ledger').innerHTML =
+      screenBannerHtml('ledger') +
       heroHtml(data.hero) +
       emptyStateHtml('ledger', `<b>No ledger yet.</b> <span class="small">Run <code>/ledger</code> in your
         team repo. It measures where your week actually goes, and everything on this screen is
@@ -1082,6 +1083,7 @@ function renderLedger() {
          something already in your repo for every line of your ledger.</div>`
 
   el('ledger').innerHTML =
+    screenBannerHtml('ledger') +
     heroHtml(data.hero) +
     sectionHead('From your ledger', '<h2>Your week</h2>') + weekHtml +
     sectionHead('Repeating work', '<h2>What eats it</h2>') + tasksHtml +
@@ -1681,6 +1683,7 @@ function renderWorkflows() {
   // That is the one case where those panels matter most.
   if (!data.workflows.length) {
     el('workflows').innerHTML =
+      screenBannerHtml('workflows') +
       snapshotBannerHtml(data.routines) +
       emptyStateHtml('workflows', 'No workflow files in <code>workflows/</code> yet. Ask for one — <code>/new-workflow</code> — and it appears here.') +
       routineProblemsHtml(data.routines) +
@@ -1776,7 +1779,7 @@ function renderWorkflows() {
        starts spending runs. Your team asks for your run cap first and confirms the routine exists
        afterwards; it never arms anything silently.</p>`
     : ''
-  el('workflows').innerHTML = snapshotBannerHtml(data.routines) + nextSevenDaysHtml(data.workflows) + armingNote + `<div class="stack">${cards}</div>` + routineProblemsHtml(data.routines) + orphanRoutinesHtml(data.routines)
+  el('workflows').innerHTML = screenBannerHtml('workflows') + snapshotBannerHtml(data.routines) + nextSevenDaysHtml(data.workflows) + armingNote + `<div class="stack">${cards}</div>` + routineProblemsHtml(data.routines) + orphanRoutinesHtml(data.routines)
 
   // A row in the seven-day list scrolls to that job's card. preventDefault is the whole point:
   // this screen routes on the hash, and an unrecognised one sends the reader to Today, so the
@@ -1874,7 +1877,7 @@ function renderMemory() {
   const chips = ['', ...tops].map((top) =>
     `<span class="chip ${memorySource === top ? 'on' : ''}" data-source="${escapeHtml(top)}">${escapeHtml(top || 'all')}</span>`
   ).join('')
-  el('memory').innerHTML = `
+  el('memory').innerHTML = `${screenBannerHtml('memory')}
     <input type="search" id="memory-search" placeholder="Search ${data.memory.files.length} page names&hellip;" value="${escapeHtml(memoryQuery)}" />
     <div class="filters" id="memory-filters">${chips}</div>
     <div id="memory-tree">${memoryTreeHtml()}</div>
@@ -2694,7 +2697,7 @@ function renderHermes() {
     el('hermes').innerHTML = ''
     return
   }
-  el('hermes').innerHTML = `
+  el('hermes').innerHTML = `${screenBannerHtml('hermes')}
     ${sectionHead('Your always-on helper', '<h2>Hermes</h2>')}
     <div class="hermes-cards">${hermesComputers().map((computer) => hermesCardHtml(computer, true)).join('')}</div>
     ${sectionHead('When you need it', '<h2>Help</h2>')}
@@ -2742,7 +2745,7 @@ function renderConnections() {
   const hermesTop = hermesSectionHtml()
 
   if (!connections.length && !runtimes.length && !foundAny && !hermesTop) {
-    el('connections').innerHTML = emptyStateHtml('connections', 'Nothing connected yet. Run <code>/connect</code> in your team repo and it will wire one tool, prove it by reading your own data back to you, and register it here.')
+    el('connections').innerHTML = screenBannerHtml('connections') + emptyStateHtml('connections', 'Nothing connected yet. Run <code>/connect</code> in your team repo and it will wire one tool, prove it by reading your own data back to you, and register it here.')
     return
   }
 
@@ -2819,7 +2822,7 @@ function renderConnections() {
   // So no substitute mechanism is claimed. Access is the only other place a runtime shows up at all
   // (grep: accessDetail, the rung's pass in the heuristic branch, its detail in both), and the
   // sentence now says exactly that and stops.
-  el('connections').innerHTML = `
+  el('connections').innerHTML = `${screenBannerHtml('connections')}
     ${hermesTop}
     ${sectionHead('What your team can reach', '<h2>Connections</h2>')}
     ${connectionRows
@@ -2924,7 +2927,7 @@ function renderSkills() {
        <p class="small muted group-note">${note}</p>
        <div class="panel">${list.map(skillRow).join('')}</div>`
     : ''
-  el('skills').innerHTML = `
+  el('skills').innerHTML = `${screenBannerHtml('skills')}
     ${createFormHtml('skill')}
     ${sectionHead('Every team starts with', `<h2>Starter stack &middot; ${stack.length}</h2>`)}
     ${stack.length ? `<div class="panel">${stackCards}</div>` : '<div class="panel empty">No <code>stack.yml</code> in this repo yet. Run <code>/install-stack</code> and it appears here.</div>'}
@@ -2966,7 +2969,9 @@ const ART_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const ART_VERSION = /^[a-z0-9]{8,32}$/
 const ART_TYPES = { 'image/webp': 'webp', 'image/jpeg': 'jpeg', 'image/png': 'png' }
 const isArtSlug = (slug) => typeof slug === 'string' && slug.length <= 100 && ART_SLUG.test(slug)
-const isArtSlot = (slot) => slot === 'today' || slot === 'team' ||
+// The banner slots, word for word BANNER_SLOTS in api/_lib.js: one per screen, each named after it.
+const BANNER_SLOTS = ['today', 'team', 'ledger', 'workflows', 'readiness', 'skills', 'memory', 'connections', 'hermes']
+const isArtSlot = (slot) => BANNER_SLOTS.includes(slot) ||
   (typeof slot === 'string' && slot.startsWith('agent-') && isArtSlug(slot.slice('agent-'.length)))
 const isArtPicture = (picture) => Boolean(picture) && typeof picture.v === 'string' &&
   ART_VERSION.test(picture.v) && Object.hasOwn(ART_TYPES, picture.type)
@@ -2979,7 +2984,9 @@ let brandFault = ''
 const artUrls = new Map()
 // slot -> the version being fetched for it, so a second ask while the first is out is not a second fetch.
 const artLoading = new Map()
-let teamArtAsked = false
+// The screens whose pictures have been asked for, once each: a screen's pictures are fetched the
+// first time it is shown, never with Today.
+const artAsked = new Set()
 
 function parseBrand(answer) {
   if (!isRecord(answer) || answer.enabled !== true) return null
@@ -3072,7 +3079,12 @@ const artMark = (slot) => (brand && isArtSlot(slot) ? ` data-art="${slot}"` : ''
 // The picture that ships for a slot, or null for an agent the template has no robot for.
 const builtInArt = (slot) => (slot === 'today' ? '/art/today-harbour.webp'
   : slot === 'team' ? '/art/team-workshop.webp'
+  : Object.hasOwn(SCREEN_BANNERS, slot) ? SCREEN_BANNERS[slot].file
   : PORTRAITS.has(slot.slice('agent-'.length)) ? `/art/${slot}.webp` : null)
+
+// Where a slot's picture is drawn: a portrait on Team, a banner on its own screen - except
+// Readiness's, which sits in its own holder just before the wall (the wall is never markup).
+const artHome = (slot) => (slot.startsWith('agent-') ? 'team' : slot === 'readiness' ? 'readiness-banner' : slot)
 
 // The tag a picture is put in its place with. Lazy like every picture but Today's first one - by
 // now it is an address in memory, so there is nothing to wait for anyway.
@@ -3092,7 +3104,7 @@ const artImageHtml = (slot, src) => (slot.startsWith('agent-')
 function paintArt(slot) {
   if (!brand || !isArtSlot(slot)) return
   const src = pictureSrc(slot, builtInArt(slot))
-  for (const holder of el(slot.startsWith('agent-') ? 'team' : slot)?.querySelectorAll?.(`[data-art="${slot}"]`) ?? []) {
+  for (const holder of el(artHome(slot))?.querySelectorAll?.(`[data-art="${slot}"]`) ?? []) {
     const image = holder.querySelector('img')
     if (!src) {
       image?.remove()
@@ -3129,7 +3141,14 @@ async function loadArt(slots) {
 // Which pictures each screen shows.
 const ART_SCREENS = {
   today: () => ['today'],
-  team: () => ['team', ...data.agents.map((agent) => `agent-${agent.slug}`)]
+  team: () => ['team', ...data.agents.map((agent) => `agent-${agent.slug}`)],
+  ledger: () => ['ledger'],
+  workflows: () => ['workflows'],
+  readiness: () => ['readiness'],
+  skills: () => ['skills'],
+  memory: () => ['memory'],
+  connections: () => ['connections'],
+  hermes: () => ['hermes']
 }
 
 async function showArt(screen) {
@@ -3333,6 +3352,36 @@ function showAllowance() {
   for (const line of document.querySelectorAll('.no-change-left')) line.hidden = !none
 }
 
+/* A banner on every screen (look and feel, 2026-10-10): the screen's own picture and one line about
+   what it is for, laid over the picture like Today's and Team's. Lazy: a screen's picture is fetched
+   when the screen is first opened. No banner names an agent, or the word the Team tests look for
+   first. Each is a Personalise slot named after its screen. */
+const SCREEN_BANNERS = {
+  ledger: { file: '/art/ledger-counting-room.webp', eyebrow: 'Ledger', headline: 'What your team gave back.' },
+  workflows: { file: '/art/workflows-clock-tower.webp', eyebrow: 'Workflows', headline: 'Every job, and when it runs.' },
+  readiness: { file: '/art/readiness-lighthouse.webp', eyebrow: 'Every scheduled job', headline: 'Flight readiness.' },
+  skills: { file: '/art/skills-drawers.webp', eyebrow: 'Skills', headline: 'What your team knows how to do.' },
+  memory: { file: '/art/memory-archive.webp', eyebrow: 'Memory', headline: 'Everything your team remembers.' },
+  connections: { file: '/art/connections-bridges.webp', eyebrow: 'Connections', headline: 'Where your team plugs in.' },
+  hermes: { file: '/art/hermes-loft.webp', eyebrow: 'Hermes', headline: 'The helper that never sleeps.' }
+}
+// What each banner's picture controls are called, under it.
+const BANNER_NAMES = { today: 'Today', team: 'Team', ledger: 'Ledger', workflows: 'Workflows', readiness: 'Readiness', skills: 'Skills', memory: 'Memory', connections: 'Connections', hermes: 'Hermes' }
+
+function screenBannerHtml(slot) {
+  const banner = SCREEN_BANNERS[slot]
+  return pictureSwap(`<section class="banner screen-banner banner-${slot}"${artMark(slot)}>
+    <img src="${banner.file}" alt="" width="1600" height="686" loading="lazy" decoding="async" />
+    <div class="banner-text">
+      <div class="banner-words">
+        <p class="eyebrow">${banner.eyebrow}</p>
+        <h2 class="headline">${banner.headline}</h2>
+      </div>
+      ${bannerButtonsHtml(slot)}
+    </div>
+  </section>`, banner.file, slot) + bannerPersonaliseHtml(slot)
+}
+
 // The buttons on a banner. Off, Today gets none and Team gets only Make it yours.
 function bannerButtonsHtml(slot) {
   const personalise = brand
@@ -3373,7 +3422,7 @@ function pictureControlsHtml(slot) {
 function bannerPersonaliseHtml(slot) {
   if (!brand) return ''
   return `<div class="panel banner-personalise" id="personalise-${slot}" hidden>
-    <p class="eyebrow">${slot === 'today' ? 'The Today picture' : 'The Team picture'}</p>
+    <p class="eyebrow">The ${BANNER_NAMES[slot]} picture</p>
     ${pictureControlsHtml(slot)}
   </div>`
 }
@@ -5804,11 +5853,13 @@ function showScreen(name) {
   // Today's banner carries this line itself, so the copy under the top bar would say it twice.
   el('strap').hidden = screen === 'today'
   window.scrollTo(0, 0)
-  // Team's pictures are fetched the first time Team is shown, never with Today: most visits are a
-  // glance at Today on a phone, and should not pay for eight portraits nobody looked at.
-  if (screen === 'team' && brand && !teamArtAsked) {
-    teamArtAsked = true
-    showArt('team')
+  // Readiness's banner lives just outside its screen (the wall is never markup), so it is shown with it.
+  el('readiness-banner').hidden = screen !== 'readiness'
+  // A screen's own pictures are fetched the first time it is shown, never with Today: most visits are
+  // a glance at Today on a phone, and should not pay for eight portraits nobody looked at.
+  if (brand && screen !== 'today' && !artAsked.has(screen)) {
+    artAsked.add(screen)
+    showArt(screen)
   }
 }
 
@@ -5902,6 +5953,7 @@ function render() {
   renderTeam()
   renderWorkflows()
   renderReadiness()
+  el('readiness-banner').innerHTML = screenBannerHtml('readiness')
   renderSkills()
   renderMemory()
   renderConnections()

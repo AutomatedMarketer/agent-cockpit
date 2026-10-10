@@ -67,6 +67,8 @@ function render(payload, options = {}) {
     // `options.create(tag)` hands back a stand-in for one kind of element - a canvas with a
     // recording context, for the picture pipeline. Unanswered, the scratch node, as before.
     createElement: (tag) => options.create?.(tag) ?? node('scratch'),
+    // An SVG drawn from elements (the empty states' icons) - the same stand-in.
+    createElementNS: (namespace, tag) => options.create?.(tag) ?? node('scratch'),
     body: node('body'),
     documentElement: node('html')
   }
@@ -5983,4 +5985,115 @@ test("each screen's empty state is centred, starts with that screen's own icon i
   assert.equal(rule('.panel.empty-state')['text-align'], 'center')
   assert.equal(rule('.panel.empty-state')['max-width'], '34rem')
   assert.equal(rule('.empty-ico')['border-radius'], '50%')
+})
+
+/* ---------- a banner on every screen (look and feel, T9) ---------------------------------------
+   Every screen opens with a picture and a headline, as Today and Team already did. Each banner is a
+   Personalise slot of its own, named after its screen, and only Today's picture loads at once. */
+
+const SCREEN_BANNER = {
+  ledger: ['/art/ledger-counting-room.webp', 'What your team gave back.'],
+  workflows: ['/art/workflows-clock-tower.webp', 'Every job, and when it runs.'],
+  readiness: ['/art/readiness-lighthouse.webp', 'Flight readiness.'],
+  skills: ['/art/skills-drawers.webp', 'What your team knows how to do.'],
+  memory: ['/art/memory-archive.webp', 'Everything your team remembers.'],
+  // Not the plan's "What your team can reach." and "Your always-on helper.": those are the section
+  // labels drawn straight under these banners, so the banner would say them twice.
+  connections: ['/art/connections-bridges.webp', 'Where your team plugs in.'],
+  hermes: ['/art/hermes-loft.webp', 'The helper that never sleeps.']
+}
+// Where each screen's banner is drawn: in the screen itself, except Readiness, whose wall is built
+// from elements and never from markup - its banner sits in a holder of its own just before it.
+const bannerHome = (screen) => (screen === 'readiness' ? 'readiness-banner' : screen)
+const screenBannerOf = (drawn, screen) => {
+  const start = drawn.indexOf(`<section class="banner screen-banner banner-${screen}"`)
+  return start === -1 ? '' : drawn.slice(start, drawn.indexOf('</section>', start) + '</section>'.length)
+}
+const everyScreenPayload = () => ({ ...base, agents: [agent({ slug: 'research' }), agent({ slug: 'content' })], hermes: hermesPayload(), readiness: { status: 'ok', cards: [], switchedOff: [], counts: { noGo: 0, silent: 0, go: 0, off: 0 } } })
+
+test('every screen opens with its own banner: its picture, lazy and sized, and its own words', () => {
+  const nodes = render(everyScreenPayload())
+  for (const [screen, [file, words]] of Object.entries(SCREEN_BANNER)) {
+    const drawn = nodes.get(bannerHome(screen)).innerHTML
+    const banner = screenBannerOf(drawn, screen)
+    assert.ok(banner, `the ${screen} screen has no banner`)
+    assert.ok(drawn.trimStart().startsWith('<section class="banner screen-banner'), `the ${screen} banner is not the first thing on its screen`)
+    assert.ok(banner.includes(`<img src="${file}" alt="" width="1600" height="686" loading="lazy" decoding="async" />`), `the ${screen} picture is not ${file}, lazy and sized`)
+    assert.ok(banner.includes(`<h2 class="headline">${words}</h2>`), `the ${screen} banner does not say "${words}"`)
+  }
+})
+
+test("only Today's picture loads at once: every other banner picture waits until its screen is open", () => {
+  const nodes = render(everyScreenPayload())
+  const images = []
+  for (const screen of ['today', 'team', ...Object.keys(SCREEN_BANNER).map(bannerHome)]) {
+    for (const found of nodes.get(screen).innerHTML.matchAll(/<section class="banner[^"]*"[^>]*>\s*(<img [^>]*>)/g)) images.push([screen, found[1]])
+  }
+  assert.equal(images.length, 9, `expected nine banner pictures, found ${images.length}`)
+  for (const [screen, image] of images) {
+    assert.match(image, /width="1600" height="686"/, `the ${screen} banner picture has no size, so the page jumps when it lands`)
+    if (screen === 'today') assert.match(image, /fetchpriority="high"/)
+    else assert.match(image, /loading="lazy"/, `the ${screen} banner picture loads with the page`)
+  }
+})
+
+test('no banner names an agent or says "content": the Team tests find cards by their first mention', () => {
+  const nodes = render(everyScreenPayload())
+  const slugs = ['content', 'customer-service', 'editor', 'email', 'orchestrator', 'research', 'sales', 'security']
+  for (const screen of Object.keys(SCREEN_BANNER)) {
+    const words = screenBannerOf(nodes.get(bannerHome(screen)).innerHTML, screen).replace(/<[^>]+>/g, ' ').toLowerCase()
+    for (const slug of slugs) assert.ok(!words.includes(slug), `the ${screen} banner says "${slug}"`)
+  }
+})
+
+test('the Readiness banner sits in its own holder before the wall, shown only on Readiness', () => {
+  assert.match(html, /<div id="readiness-banner" class="screen-banner-home" hidden><\/div>\s*<div id="readiness" class="screen"><\/div>/)
+  const on = render(everyScreenPayload(), { hash: '#readiness' })
+  assert.equal(on.get('readiness-banner').hidden, false, 'the Readiness banner is hidden on Readiness')
+  const off = render(everyScreenPayload(), { hash: '#today' })
+  assert.equal(off.get('readiness-banner').hidden, true, 'the Readiness banner shows on another screen')
+  // Compact on a phone, so the first NO GO card stays in view at 390 x 844.
+  const phone = Object.assign({}, ...exactRules('.banner-readiness').filter((rule) => !rule.inMedia).map(valuesIn))
+  assert.equal(phone['min-height'], '8rem')
+})
+
+test('with Personalise on, every banner has its Personalise button and its own picture controls straight under it', () => {
+  const nodes = render(everyScreenPayload(), { state: { brand: brandMaking() } })
+  for (const screen of Object.keys(SCREEN_BANNER)) {
+    const drawn = nodes.get(bannerHome(screen)).innerHTML
+    const banner = screenBannerOf(drawn, screen)
+    assert.ok(banner.includes(`<button class="fire banner-btn" type="button" data-personalise="${screen}" aria-expanded="false">Personalise</button>`), `the ${screen} banner has no Personalise button`)
+    assert.ok(banner.includes(` data-art="${screen}"`), `the ${screen} banner cannot take a picture that lands later`)
+    const after = drawn.slice(drawn.indexOf(banner) + banner.length)
+    assert.ok(after.startsWith(`<div class="panel banner-personalise" id="personalise-${screen}" hidden>`), `the ${screen} picture controls are not straight under its banner`)
+    for (const part of [`data-upload="${screen}"`, `data-reset="${screen}"`]) assert.ok(after.includes(part), `the ${screen} controls have no ${part}`)
+  }
+  const off = render(everyScreenPayload())
+  assert.ok(!/data-personalise=/.test(Object.keys(SCREEN_BANNER).map((screen) => off.get(bannerHome(screen)).innerHTML).join('')), 'Personalise shows with personalising off')
+})
+
+test("the page knows the same picture slots as the server, and each banner's own built-in picture", async () => {
+  const { parseSlot } = await import('../api/_lib.js')
+  const { isArtSlot, builtInArt } = render(base, { expose: ['isArtSlot', 'builtInArt'] }).exposed
+  const candidates = ['today', 'team', ...Object.keys(SCREEN_BANNER), 'agent-research', 'Ledger', 'ledger/x', 'ledger.webp', 'unlock', 'side', 'side-dusk', 'agent-', 'agent-A', 'hermes.json', 'settings', '']
+  for (const slot of candidates) assert.equal(isArtSlot(slot), parseSlot(slot) !== null, `page and server disagree about ${JSON.stringify(slot)}`)
+  for (const [screen, [file]] of Object.entries(SCREEN_BANNER)) assert.equal(builtInArt(screen), file)
+})
+
+test("a screen's own stored picture is fetched the first time that screen opens, never with Today, and once", async () => {
+  const stored = Object.fromEntries(Object.keys(SCREEN_BANNER).map((screen) => [screen, webpAt(V1)]))
+  const payload = { ...pinnedPayload, hermes: hermesPayload() }
+  const browser = storeFetch({ brand: brandOn(stored), payload })
+  const nodes = render(payload, { fetch: browser.fetch, expose: ['showScreen'] })
+  await flush()
+  assert.deepEqual(browser.art().map((request) => request.url), [], 'a screen banner was fetched with Today')
+  for (const screen of Object.keys(SCREEN_BANNER)) {
+    nodes.exposed.showScreen(screen)
+    await flush()
+    nodes.exposed.showScreen(screen)
+    await flush()
+  }
+  assert.deepEqual(browser.art().map((request) => request.url).sort(),
+    Object.keys(SCREEN_BANNER).map((screen) => `/api/art?slot=${screen}&v=${V1}&t=webp`).sort(),
+    'each screen did not ask for exactly its own picture, once')
 })

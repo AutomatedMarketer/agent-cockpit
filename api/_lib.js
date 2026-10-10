@@ -52,12 +52,16 @@ export function isValidSlug(slug) {
   return typeof slug === 'string' && slug.length <= MAX_SLUG_LENGTH && SLUG_SHAPE.test(slug)
 }
 
-// A slot is which picture: the two banners, or one agent's portrait. It becomes part of a store
+// The banners: one per screen, each named exactly after its screen (look and feel, 2026-10-10 -
+// it was Today and Team only). A fixed list, never a pattern.
+export const BANNER_SLOTS = ['today', 'team', 'ledger', 'workflows', 'readiness', 'skills', 'memory', 'connections', 'hermes']
+
+// A slot is which picture: a screen's banner, or one agent's portrait. It becomes part of a store
 // path, so the only strings that pass are exactly our own names - no extension, no sub-path,
 // nothing percent-encoded. The slug inside `agent-` is the routing key, never the display name.
 export function parseSlot(value) {
   if (typeof value !== 'string') return null
-  if (value === 'today' || value === 'team') return value
+  if (BANNER_SLOTS.includes(value)) return value
   if (!value.startsWith('agent-')) return null
   return isValidSlug(value.slice('agent-'.length)) ? value : null
 }

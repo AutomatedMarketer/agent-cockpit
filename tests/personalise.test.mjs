@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import {
   parseSlot,
   slotKind,
+  BANNER_SLOTS,
   PICTURE_BUDGET,
   sniffImage,
   imageSize,
@@ -44,6 +45,19 @@ test('a hostile or malformed slot is refused, never repaired', () => {
   for (const slot of [undefined, null, 42, ['today'], { slot: 'today' }, true]) {
     assert.equal(parseSlot(slot), null, `${typeof slot} must be refused`)
   }
+})
+
+// Look and feel T9: a banner on every screen, so every screen is a slot of its own. Still a fixed
+// list - a screen's own name, exactly - so nothing new can reach a store path.
+test('every screen\'s banner is a slot: exactly the screen names, nothing like them', () => {
+  assert.deepEqual(BANNER_SLOTS, ['today', 'team', 'ledger', 'workflows', 'readiness', 'skills', 'memory', 'connections', 'hermes'])
+  for (const slot of BANNER_SLOTS) {
+    assert.equal(parseSlot(slot), slot)
+    assert.equal(slotKind(slot), 'banner')
+  }
+  const near = ['Ledger', 'LEDGER', 'ledger/x', 'ledger.webp', 'ledger ', ' ledger', 'ledger\n', 'ledgers', 'unlock', 'side', 'side-dusk', 'screen-ledger',
+    'agent-ledger/../x', 'hermes.json', 'memory/..', 'readiness%2f', 'connections\\x', 'today-harbour', 'banner']
+  for (const slot of near) assert.equal(parseSlot(slot), null, `${JSON.stringify(slot)} must be refused`)
 })
 
 test('a banner and a portrait have different size budgets', () => {

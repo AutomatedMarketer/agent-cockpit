@@ -1024,6 +1024,21 @@
     letter-spacing: var(--track-display); text-transform: none; color: var(--on-art);
   }
   .greeting .soft, .headline .soft { color: color-mix(in srgb, var(--on-art) 60%, transparent); }
+  /* The other screens' banners: a header, not a hero, so a little shorter than Today's. Readiness's
+     is compact on a phone, so the first NO GO card is still in view at 390 x 844. */
+  .screen-banner { min-height: 9rem; margin-bottom: .9rem; }
+  .screen-banner img { object-position: 50% 55%; }
+  .banner-readiness { min-height: 8rem; }
+  /* Where each picture is held in its frame, so its subject stays in view as the banner narrows. */
+  .banner-ledger img { object-position: 70% 55%; }
+  .banner-workflows img { object-position: 72% 45%; }
+  .banner-readiness img { object-position: 72% 50%; }
+  .banner-skills img { object-position: 70% 40%; }
+  .banner-memory img { object-position: 70% 45%; }
+  .banner-connections img { object-position: 75% 55%; }
+  .banner-hermes img { object-position: 80% 40%; }
+  .screen-banner + .banner-personalise { margin: -.3rem 0 .9rem; }
+  .screen-banner-home > .screen-banner { margin-bottom: .9rem; }
   /* Team's picture is the workshop: its desks sit higher in the frame than the harbour's hull. */
   .team-banner img { object-position: 50% 45%; }
   /* "One desk each." is a phrase. On a phone it moves to its own line whole rather than leaving
@@ -1408,6 +1423,7 @@
      this sheet has to be. */
   @media (min-width: 48rem) {
     .banner { min-height: 15rem; border-radius: var(--radius-lg); }
+    .screen-banner { min-height: 11.5rem; }
     .banner-text { padding: 1.6rem 1.9rem; }
     /* Beside the setup pill a laptop has about 830px for the greeting; at 2.6rem the last word of
        "Here is where things stand." fell onto a line of its own. */
@@ -1543,7 +1559,7 @@
       from { opacity: 0; transform: translateY(.375rem); }
       to { opacity: 1; transform: none; }
     }
-    .screen.active { animation: screen-in var(--dur-3) var(--ease-out); }
+    .screen.active, .screen-banner-home { animation: screen-in var(--dur-3) var(--ease-out); }
 
     /* Colour changes fade rather than snap. */
     a, nav a, .chip, .link-button, .file, .why > summary {
@@ -1666,6 +1682,9 @@
   <div id="ledger" class="screen"></div>
   <div id="team" class="screen"></div>
   <div id="workflows" class="screen"></div>
+  <!-- Readiness's banner, drawn as markup like every other screen's, outside the wall itself, which
+       is only ever built from elements. Shown by the script only while Readiness is the screen. -->
+  <div id="readiness-banner" class="screen-banner-home" hidden></div>
   <div id="readiness" class="screen"></div>
   <div id="skills" class="screen"></div>
   <div id="memory" class="screen"></div>
