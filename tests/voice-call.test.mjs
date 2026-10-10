@@ -1023,3 +1023,76 @@ test('while it looks something up, the sheet says what - a short line for each t
     'Checking your connections…', 'Opening that screen…', 'Looking that up…'
   ], 'a tool has no line, a line is said twice, or a name nobody defined was shown')
 })
+
+/* ---------- time to first sound, for whoever is tuning it ---------- */
+
+const firstSounds = (said) => said.filter(([words]) => /first sound/.test(String(words))).map(([words]) => words)
+
+test('on a developer\'s machine, the wait from the person stopping to the first sound is logged once a turn - a number, never words', async (t) => {
+  const said = watchInfo(t)
+  const browser = await connected({ debug: true })
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.clock.now += 900
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'Three jobs are due.' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.deepEqual(firstSounds(said), ['voice: first sound 900 ms after the person stopped talking (openai)'])
+  // More sound in the same turn is not a first.
+  browser.emit({ type: 'output_audio_buffer.stopped' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.equal(firstSounds(said).length, 1)
+  // A turn the person talks over starts the wait again from its own end.
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.clock.now += 5000
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.clock.now += 1200
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.deepEqual(firstSounds(said).at(-1), 'voice: first sound 1200 ms after the person stopped talking (openai)')
+  // Sound while the person is talking again is no answer to their last turn: nothing is logged.
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.equal(firstSounds(said).length, 2)
+  assert.ok(!said.flat().some((part) => /Three jobs/.test(String(part))), 'what was said reached the console')
+})
+
+test('with Fish, the first piece playing is the first sound', async (t) => {
+  const said = watchInfo(t)
+  const browser = await connected({ debug: true, answer: { ticket: ticketFor('fish'), mouth: 'fish' } })
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.clock.now += 1400
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.output_text.delta', delta: 'Three jobs are due today, and one ' })
+  browser.speeches.find((speech) => !speech.body.warm).answer()
+  await flush()
+  assert.deepEqual(firstSounds(said), ['voice: first sound 1400 ms after the person stopped talking (fish)'])
+})
+
+test('anywhere else nothing is logged, and the page counts only its own machine or a switch on this device as a developer\'s', async (t) => {
+  const said = watchInfo(t)
+  const browser = await connected()
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  browser.emit({ type: 'input_audio_buffer.speech_stopped' })
+  browser.emit({ type: 'output_audio_buffer.started' })
+  assert.deepEqual(firstSounds(said), [])
+  const { loadPage } = await import('./helpers/page-harness.mjs')
+  const { basePayload, brandAnswer, VOICE_ON } = await import('./helpers/page-payload.mjs')
+  const brand = brandAnswer({ voice: VOICE_ON })
+  const debug = async (options) => {
+    const loaded = loadPage({
+      fetch: async (url) => ({ ok: true, status: 200, json: async () => (url.startsWith('/api/brand') ? brand : url.startsWith('/api/state') ? basePayload() : {}) }),
+      expose: ['voiceDeps'],
+      ...options
+    })
+    await flush()
+    return loaded.exposed.voiceDeps().debug()
+  }
+  assert.equal(await debug({ hostname: 'localhost' }), true)
+  assert.equal(await debug({ hostname: '127.0.0.1' }), true)
+  assert.equal(await debug({ storage: { 'agent-cockpit-voice-debug': 'on' } }), true)
+  assert.equal(await debug({}), false)
+  assert.equal(await debug({ hostname: 'localhost.evil.example' }), false)
+  assert.equal(await debug({ storage: { 'agent-cockpit-voice-debug': 'yes' } }), false)
+})

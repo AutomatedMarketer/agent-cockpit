@@ -68,7 +68,7 @@ export const flush = async (times = 6) => {
 // `fetch(url, init)` answers the page's requests; left out, /api/state gets `payload` and everything
 // else an empty object. `given` is handed to `after`, a line of code run inside the page's own scope
 // once the script has loaded - the way a test sets a page variable the person would have set.
-export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after = '', given = {}, hash = '', media = {}, prompt } = {}) {
+export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after = '', given = {}, hash = '', media = {}, prompt, hostname = 'board.example' } = {}) {
   for (const name of expose) assert.match(name, /^[A-Za-z_$][\w$]*$/, `${name} is not a name`)
   const nodes = new Map()
   const node = (id) => {
@@ -108,12 +108,12 @@ export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after
     window: {
       addEventListener(type, handler) { windowListeners.push({ type, handler }) },
       matchMedia: (query) => ({ matches: Boolean(media[query]), addEventListener() {} }),
-      location: { hash },
+      location: { hash, hostname },
       scrollTo() {},
       requestAnimationFrame: (fn) => fn(),
       prompt
     },
-    location: { hash, search: '' },
+    location: { hash, search: '', hostname },
     localStorage: local,
     sessionStorage: memoryStorage(),
     fetch: recordingFetch,

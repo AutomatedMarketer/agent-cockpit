@@ -5406,6 +5406,7 @@ const voiceWords = (state, name = voiceName()) => ({
 
 // Speakers or headphones, on a computer: "I'm on headphones" is remembered on this device.
 const VOICE_HEADPHONES_STORE = 'agent-cockpit-voice-headphones'
+const VOICE_DEBUG_STORE = 'agent-cockpit-voice-debug'
 const voiceOnHeadphones = () => readStore(VOICE_HEADPHONES_STORE) === 'on'
 const VOICE_MODE_WORDS = {
   speakers: 'Speakers mode: the microphone rests while it talks, so tap the orb or press Space to interrupt.',
@@ -5490,8 +5491,11 @@ function voiceDeps() {
     now: () => Date.now(),
     // The orb's glow follows the reply's loudness only where the device has not asked for less motion.
     reducedMotion: () => window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true,
-    requestAnimationFrame: (fn) => requestAnimationFrame(fn),
-    cancelAnimationFrame: (id) => cancelAnimationFrame(id),
+    requestAnimationFrame: (fn) => window.requestAnimationFrame(fn),
+    cancelAnimationFrame: (id) => window.cancelAnimationFrame(id),
+    // A developer's machine - the board served from this computer, or VOICE_DEBUG_STORE switched on
+    // here - where the page logs how long the first sound took.
+    debug: () => ['localhost', '127.0.0.1'].includes(location.hostname) || readStore(VOICE_DEBUG_STORE) === 'on',
     fish: fishMouth({
       speak: (body, signal) => fetch('/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),
       now: () => Date.now()
@@ -5801,7 +5805,7 @@ function openVoice(deps, ui) {
     userSpeaking: false, replyOwed: false, replyRetries: 0, replyTimer: null, turnTakesReply: false,
     echoGuard: false, soundStartedAt: null, suspectTurn: false, echoRetryLeft: 1,
     speakersMode: false, micMuted: false, soundPlaying: false, tailTimer: null, restTimer: null,
-    replyHadOutput: false, cancelledByUs: false, hearing: { item: null, words: '' },
+    replyHadOutput: false, cancelledByUs: false, hearing: { item: null, words: '' }, heardAt: null,
     soundEndedAt: null, listenPending: null,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
@@ -5848,6 +5852,12 @@ function openVoice(deps, ui) {
   // A reply's sound has started (OpenAI's voice, or Fish's first piece) or ended.
   // `endsInMs`, when the sound's end is known (Fish's scheduled pieces), is how long until it finishes.
   session.soundStarted = ({ endsInMs } = {}) => {
+    // On a developer's machine: the wait the person hears, from their turn ending to the reply's first
+    // sound - once a turn, a number and the mouth, never anything said.
+    if (session.heardAt !== null && deps.debug?.() === true) {
+      console.info(`voice: first sound ${Math.round(deps.now() - session.heardAt)} ms after the person stopped talking (${session.mouth})`)
+    }
+    session.heardAt = null
     session.soundStartedAt ??= deps.now()
     session.soundPlaying = true
     session.level?.wake()
@@ -6045,6 +6055,7 @@ function openVoice(deps, ui) {
     switch (event.type) {
       case 'input_audio_buffer.speech_started':
         session.userSpeaking = true
+        session.heardAt = null
         // Early in the reply's sound: maybe its own voice. The words will say (the caption, below),
         // and until they do it does not count as the person talking for the idle hang-up.
         session.suspectTurn = session.echoGuard && session.soundStartedAt !== null &&
@@ -6056,6 +6067,7 @@ function openVoice(deps, ui) {
         break
       case 'input_audio_buffer.speech_stopped':
         session.userSpeaking = false
+        session.heardAt = deps.now()
         // A turn ending with the tool reply owed: the outputs went before it, so the response OpenAI
         // starts for it already has them.
         session.turnTakesReply = session.replyOwed

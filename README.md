@@ -486,7 +486,7 @@ Locally:
 npm test
 ```
 
-1318 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1321 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -598,6 +598,11 @@ call's sound is WebRTC, which that does not govern. Every voice answer from the 
 `Cache-Control: private, no-store`. A signed ticket ties the later Fish requests and meter reports to
 a session the board opened. The helpers the page runs live in `api/_voice.js` too, word for word, and
 `tests/voice-client.test.mjs` holds the two copies together.
+
+To see how long a reply takes to start, open the board on `localhost`, or set
+`agent-cockpit-voice-debug` to `on` in the browser's local storage: after each turn the console logs
+"voice: first sound N ms after the person stopped talking". Only that number and which voice spoke -
+never anything said.
 
 ---
 

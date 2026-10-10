@@ -28,7 +28,7 @@ export async function page(brand = brandAnswer({ voice: VOICE_ON })) {
 // A browser that does what the page asks and writes down every step.
 // `motion` is a device that has not asked for less motion: the orb's glow then follows the reply's
 // loudness, which `state.loudness` sets (0 to 127 either side of silence) and `frame()` moves on.
-export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false, finePointer = false, headphones = false, motion = false } = {}) {
+export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false, finePointer = false, headphones = false, motion = false, debug = false } = {}) {
   const log = []
   const timers = new Map()
   let nextTimer = 1
@@ -147,6 +147,8 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     headphones: () => headphones,
     now: () => clock.now,
     reducedMotion: () => !motion,
+    // A developer's machine, where the page may log timings.
+    debug: () => debug,
     requestAnimationFrame: (fn) => { const id = nextFrame++; frames.set(id, fn); return id },
     cancelAnimationFrame: (id) => { frames.delete(id) }
   }
