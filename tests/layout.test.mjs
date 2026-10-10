@@ -11,7 +11,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { cssRules } from './helpers/css-rules.mjs'
 
-const PAGE_GRIDS = ['.kpis', '.plan-cards', '.team-grid', '.board', '.days7', '.hermes-cards', '.rd-grid', '.rd-off']
+const PAGE_GRIDS = ['.kpis', '.plan-cards', '.team-grid', '.board', '.days7', '.hermes-cards', '.rd-grid', '.rd-off', '.mg-body']
 const IN_CARD = ['.meters', '.ladder', '.found-list', '.found-tools']
 // Grids that are one column everywhere, wide screens included.
 const ALWAYS_ONE = new Set(['.hermes-cards'])

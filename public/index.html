@@ -75,6 +75,14 @@
     --orb-error: var(--warn);
     --tile-ink: 55%;
     --mark-mono: #ffffff;
+    --graph-stage: var(--panel);
+    --graph-note: var(--ink);
+    --graph-lonely: var(--warn);
+    --graph-link: var(--link);
+    --graph-mention: var(--kpi-agents);
+    --graph-agent: var(--ok);
+    --graph-day: #f472b6;
+    --graph-tag: #22d3ee;
   }
   @media (prefers-color-scheme: light) {
     :root:not([data-theme="dark"]) {
@@ -109,6 +117,14 @@
       --orb-error: var(--warn);
       --tile-ink: 75%;
       --mark-mono: #000000;
+      --graph-stage: var(--panel);
+      --graph-note: var(--ink);
+      --graph-lonely: var(--warn);
+      --graph-link: var(--link);
+      --graph-mention: var(--kpi-agents);
+      --graph-agent: var(--ok);
+      --graph-day: #be185d;
+      --graph-tag: #0e7490;
     }
   }
   /* Word for word the block above. The test holds them identical, so a value changed in one place
@@ -145,6 +161,14 @@
     --orb-error: var(--warn);
     --tile-ink: 75%;
     --mark-mono: #000000;
+    --graph-stage: var(--panel);
+    --graph-note: var(--ink);
+    --graph-lonely: var(--warn);
+    --graph-link: var(--link);
+    --graph-mention: var(--kpi-agents);
+    --graph-agent: var(--ok);
+    --graph-day: #be185d;
+    --graph-tag: #0e7490;
   }
 
   /* Inter, served from this site: the content security policy allows fonts from nowhere else, and
@@ -663,6 +687,104 @@
   .file:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
   .file:hover { background: var(--panel-2); }
   .file .idx { color: var(--accent); font-size: .6875rem; }
+
+  /* Memory: List or Graph. A pair of buttons, the pressed one raised, each a full 44px target. */
+  .mem-switch { display: inline-flex; gap: .25rem; padding: .25rem; margin: .1rem 0 .7rem; background: var(--chip); border: 1px solid var(--line); border-radius: 999px; }
+  .mem-view, .mg-mode {
+    min-height: 2.75rem; min-width: 5.25rem; padding: 0 1.1rem; border: 0; border-radius: 999px; background: transparent;
+    font: inherit; font-size: .875rem; font-weight: 600; color: var(--muted); cursor: pointer;
+  }
+  .mem-view[aria-pressed="true"], .mg-mode[aria-pressed="true"] { background: var(--panel); color: var(--ink); box-shadow: var(--elev-1); }
+  .mem-view:focus-visible, .mg-mode:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  .mg-mode:disabled { cursor: not-allowed; opacity: .5; }
+
+  /* Memory, Graph (built from elements in app.js, "Memory graph"). Everything may shrink, so a long
+     note name or a narrow phone never pushes the page sideways. The drawing's own colours are the
+     --graph tokens, read by the script; nothing here writes a colour. */
+  .mg { display: grid; gap: .75rem; min-width: 0; }
+  .mg[hidden] { display: none; }
+  .mg-head { display: grid; gap: .45rem; min-width: 0; }
+  .mg-count { margin: 0; font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .mg-status { margin: 0; }
+  .mg-status:empty { display: none; }
+  .mg-sources { padding: 0; }
+  .mg-sources[hidden] { display: none; }
+  .mg-tools-row { display: flex; flex-wrap: wrap; gap: .5rem .75rem; align-items: center; min-width: 0; }
+  .mg-modes { display: inline-flex; gap: .25rem; padding: .25rem; background: var(--chip); border: 1px solid var(--line); border-radius: 999px; }
+  .mg-mode { min-width: 4.25rem; }
+  .mg-tools { display: flex; flex-wrap: wrap; gap: .4rem; min-width: 0; }
+  .mg-toggle { cursor: pointer; min-height: 2.75rem; padding: .3rem .85rem; white-space: normal; overflow-wrap: anywhere; font: inherit; font-size: .6875rem; letter-spacing: .07em; text-transform: uppercase; }
+  .mg-toggle[aria-pressed="true"] { color: var(--ink); border-color: color-mix(in srgb, var(--ink) 30%, var(--line)); }
+  .mg-toggle[aria-pressed="false"] { text-decoration: line-through; }
+  .mg-toggle:focus-visible, .mg-source:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  .mg-source { font: inherit; font-size: .6875rem; letter-spacing: .07em; text-transform: uppercase; }
+  .mg-swatch { display: inline-block; flex: none; width: 1rem; height: .25rem; border-radius: 999px; background: var(--graph-note); }
+  .mg-dot { width: .65rem; height: .65rem; border-radius: 50%; }
+  .mg-k-link { background: var(--graph-link); }
+  .mg-k-mention { background: var(--graph-mention); }
+  .mg-k-agent { background: var(--graph-agent); }
+  .mg-k-day { background: var(--graph-day); }
+  .mg-k-tag { background: var(--graph-tag); }
+  .mg-d-note { background: var(--graph-note); }
+  .mg-d-hub { width: .9rem; height: .9rem; background: linear-gradient(90deg, var(--graph-day) 50%, var(--graph-tag) 50%); }
+  .mg-d-lonely { background: var(--graph-lonely); }
+  .mg-d-picked { background: var(--accent); }
+  .mg-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; min-width: 0; }
+  .mg-stage {
+    position: relative; height: clamp(18rem, 58vh, 38rem); min-width: 0; overflow: hidden;
+    background: var(--graph-stage); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+  }
+  .mg-canvas { position: absolute; inset: 0; }
+  .mg-canvas canvas { display: block; }
+  .mg-stage-note { position: absolute; left: .9rem; right: .9rem; bottom: .7rem; margin: 0; font-size: .75rem; color: var(--muted); pointer-events: none; }
+  .mg-tip { font: inherit; font-size: .8125rem; }
+  .mg-panel { padding: .95rem 1.05rem; min-width: 0; align-self: start; }
+  .mg-panel[hidden] { display: none; }
+  .mg-panel-title { margin: 0; font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
+  .mg-panel-title:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+  .mg-panel-meta { margin: .25rem 0 .55rem; overflow-wrap: anywhere; }
+  .mg-panel-note { margin: .55rem 0 0; }
+  .mg-panel-note:empty { display: none; }
+  .mg-lines { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem; max-height: 18rem; overflow: auto; }
+  .mg-line {
+    display: flex; align-items: center; gap: .55rem; width: 100%; min-height: 2.75rem; padding: .35rem .55rem;
+    font: inherit; font-size: .8125rem; text-align: left; color: var(--ink); background: transparent; border: 0;
+    border-radius: var(--radius-sm); cursor: pointer; overflow-wrap: anywhere;
+  }
+  .mg-line:hover { background: var(--panel-2); }
+  .mg-line:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
+  .mg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; margin-top: .75rem; }
+  .mg-github { display: inline-flex; align-items: center; min-height: 2.75rem; font-size: .8125rem; }
+  .mg-github[hidden], .mg-open[hidden] { display: none; }
+  .mg-close { min-height: 2.75rem; }
+  .mg-legend { padding: .9rem 1.05rem; }
+  .mg-legend-list { list-style: none; margin: .55rem 0 0; padding: 0; display: grid; gap: .4rem; }
+  .mg-legend-row { display: flex; align-items: baseline; gap: .6rem; font-size: .8125rem; color: var(--ink); }
+  .mg-legend-row > .mg-swatch { transform: translateY(-.1rem); }
+  .mg-list > summary, .mg-list-head { min-height: 2.75rem; padding: .55rem 1.05rem; font-weight: 600; font-size: .9rem; cursor: pointer; display: flex; align-items: center; }
+  .mg-list-body { padding: 0 0 .5rem; }
+  .mg-find { margin: .25rem 1.05rem .5rem; width: calc(100% - 2.1rem); }
+  .mg-list-note { margin: 0 1.05rem .4rem; }
+  .mg-list-note:empty { display: none; }
+  .mg-items { list-style: none; margin: 0; padding: 0; max-height: 26rem; overflow: auto; }
+  .mg-item {
+    display: flex; justify-content: space-between; align-items: center; gap: .75rem; width: 100%; min-height: 2.75rem;
+    padding: .45rem 1.05rem; font: inherit; font-size: .875rem; text-align: left; color: var(--ink);
+    background: transparent; border: 0; border-top: 1px solid var(--line); cursor: pointer; overflow-wrap: anywhere;
+  }
+  .mg-item:hover { background: var(--panel-2); }
+  .mg-item:focus-visible { outline: 2px solid var(--link); outline-offset: -2px; }
+  .mg-item[aria-current="true"] { box-shadow: inset 3px 0 0 var(--accent); background: var(--panel-2); }
+  .mg-item-name { min-width: 0; }
+  .mg-item-meta { flex: none; }
+  .mg-foot { display: grid; gap: .3rem; }
+  .mg-foot-note { margin: 0; }
+  /* From a laptop up the panel sits beside the drawing. */
+  @media (min-width: 64rem) {
+    .mg-body { grid-template-columns: minmax(0, 1fr) 20rem; }
+    /* Until a dot is picked there is no panel, and the drawing takes the whole width. */
+    .mg-body:has(> .mg-panel[hidden]) { grid-template-columns: minmax(0, 1fr); }
+  }
 
   /* Viewer overlay */
   #viewer { position: fixed; inset: 0; background: var(--bg); z-index: 20; display: none; flex-direction: column; }
@@ -1598,7 +1720,7 @@
     .screen.active, .screen-banner-home { animation: screen-in var(--dur-3) var(--ease-out); }
 
     /* Colour changes fade rather than snap. */
-    a, nav a, .chip, .link-button, .file, .why > summary {
+    a, nav a, .chip, .link-button, .file, .why > summary, .mem-view, .mg-mode, .mg-item, .mg-line {
       transition: color var(--dur-1) var(--ease-std), background-color var(--dur-1) var(--ease-std), border-color var(--dur-1) var(--ease-std);
     }
     /* Buttons give a little under a finger. */
