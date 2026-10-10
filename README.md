@@ -29,7 +29,7 @@ window, not the engine.
 | **Workflows** | Every job, and whether it is **armed, declared, unapproved or off** |
 | **Readiness** | Every scheduled job on one wall, one light each, **NO GO first**: your team's workflows, the jobs on your Mac, and Hermes's own |
 | **Skills** | What this team can actually do, and which jobs use each skill |
-| **Memory** | Your vault, browsable and searchable **by page name** |
+| **Memory** | Your notes as a list or a **graph** - every note a dot, every reason two notes belong together a line - with search by name, and inside each page once the graph is read |
 | **Connections** | What you proved works, what each of your computers has set up, and every runtime in `runtimes.yml` — alive or silent, from its own heartbeat |
 | **Hermes** | Only if you run Hermes: whether it is up, its version, and each profile's model, skills and week — plus how to open it from your phone |
 
@@ -173,6 +173,53 @@ letters. The rule for each brand, with the page it came from, is in
 A runtime whose schedule runs every few hours needs this, or it will look silent between runs.
 
 ---
+
+### The memory graph
+
+**Memory → Graph** draws your notes as a picture: every note a dot, and every reason two notes belong
+together a line. The board never draws a line it cannot name the reason for, so a repo whose notes do
+not point at each other is a field of lonely dots - and that is worth seeing.
+
+| Line | What draws it |
+|---|---|
+| **Link** | A wikilink or an embed: `[[Note]]`, `![[Note]]`, `[[folder/Note#heading\|alias]]`, found the way Obsidian finds them |
+| **Mention** | A markdown link to a note, `[text](path.md)`, or a repo path written out in a note, such as `shared/about-me.md` - the way most team notes point at each other |
+| **Agent** | A note in `agents/<name>/`, or a task card written `for: <name>`, and that agent's own file in `.claude/agents/` |
+| **Same day** | Notes dated the same day - a date at the start of the file name, a folder named by a date, or `date:` / `created:` in the frontmatter - hang off one day dot |
+| **Same tag** | Notes that share a `tags`, `project` or `people` value hang off one tag dot |
+
+- **A lonely dot** (amber) is a note nothing links to and that links to nothing: a missing link. A note
+  joined to others only by its day, a tag or its agent is still lonely. **Lonely only** shows just those.
+- **Pick a dot** (tap, click, or the list under the graph) to see its name, where it lives, every line
+  with its reason, and **Open** for a team note the board can open.
+- **The legend** under the graph says what every dot, line and colour means. **Every dot, as a list**
+  under it holds every dot and its lines, searchable - the way in for a keyboard or a screen reader.
+- **3D or flat.** On a computer with a mouse or trackpad, WebGL, and no "reduce motion" setting, it is 3D
+  and turns slowly until you take hold of it. On a phone, a slow device, or with reduce motion on, it is
+  flat and still. **3D | Flat** switches, and this device remembers your choice.
+- **What it costs.** Nothing with the board: the graph is read only when you open Memory, and a drawing
+  library only the first time you open **Graph** - the 3D one (about 345 KB) on a computer, the flat one
+  (about 57 KB) on a phone. Reading the graph is one GitHub call per note, up to 400 notes (a note over
+  64 KB is counted, not read); opening Memory again within a minute asks nothing, and after that one call
+  checks whether anything changed.
+
+**Your team repo** is always there. **Other Obsidian vaults** - your Second Brain, say - come from the
+status collector on the computer that has them, in `.agent-team/status/vaults/`. A vault is read only if
+that computer's own `allowed-vaults.yml` allows it **and** `vaults.yml` in your team repo names it; the
+team repo can narrow what a computer allows, never widen it. The template's `.agent-team/status/README.md`
+("How to choose which vaults") has the exact steps. Each vault is shared at one of two levels:
+
+| Level | What reaches GitHub and this board | Never |
+|---|---|---|
+| **shape** (the default) | The vault's name, how many notes and lines, and anonymous dots joined by lines | Titles, folders, tags, dates, what a note says, where the vault is |
+| **titles** (you choose it, per vault) | The same, plus each note's title, top folder and day, and day and tag dots - each held to a safety rule; a title that fails it stays an anonymous dot | What a note says, where the vault is |
+
+A vault file older than seven days is shown as not updated since its time, never as the current graph.
+
+**Search inside pages.** Once the graph has been read, the search box on **Memory → List** looks in each
+team page's name, headings, description, tags and opening words, best match first, and each hit says where
+it found the words. It does not read every word of every page; until the graph is there, it searches
+names, and says so.
 
 ## The look
 
@@ -741,10 +788,13 @@ Locally:
 npm test
 ```
 
-1926 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1931 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
-used only when you connect a picture store.
+used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -
+3d-force-graph 1.80.0 and force-graph 1.51.4, both MIT, copied unchanged from npm and pinned by their
+hash - loaded only when someone opens **Graph** on Memory. Every notice they carry is in
+`public/vendor/THIRD-PARTY-LICENSES.txt`.
 
 ---
 
@@ -782,6 +832,10 @@ used only when you connect a picture store.
 | "Not sent: …" in the voice panel | The board refused the order, and the rest of the line says why. The assistant is told not to say it was sent |
 | Add task, New workflow, Arm or Approve answer "No \"task-intake\" routine is registered" | Those four dispatch to one dedicated routine rather than to a job, so `task-intake` needs its own entry in `FIRE_TRIGGERS`. It is not a workflow slug and wiring every workflow does not supply it |
 | The board looks empty but the repo is fine | Check the branch. `GITHUB_BRANCH` defaults to `main` |
+| **Memory → Graph** says GitHub's rate limit was reached | Reading the graph is one GitHub call per note. Wait the seconds it gives - the board asks nothing before then - and make sure `GITHUB_TOKEN` is set: without one GitHub allows 60 calls an hour |
+| The graph is flat on a computer | 3D needs WebGL, a mouse or trackpad, and no "reduce motion" setting. Press **3D** to choose it anyway; the device remembers |
+| A vault you named is not on the graph | It must be allowed in `allowed-vaults.yml` on its own computer **and** named in `vaults.yml`, and that computer's collector must have run since. At **shape** it is there with no titles, which is the point |
+| The graph is mostly amber dots | Those notes do not point at each other. A `[[link]]`, a markdown link, or a repo path written out (`shared/about-me.md`) draws a line |
 | **Make it yours** says personalising is off, after you made a store | You did not redeploy. A new deployment is the only one that sees the store |
 | "This picture store is public…" | The store was made **Public**, and that cannot be changed. Create a new **Private** store, connect it to this project, disconnect the public one, redeploy |
 | "The board's settings file in the picture store is damaged or too big…" | The file holding the names, the style and which pictures are in use cannot be read, so the board left it alone rather than write over it. To start again from the defaults: Vercel → **Storage** → your store → delete `agent-cockpit/settings.json`. The pictures stay in the store but are no longer shown; put them back from the board |
@@ -826,6 +880,8 @@ used only when you connect a picture store.
 - **Cap your voice spending for you.** It meters it, as an estimate. The hard spend limit on your OpenAI
   project is what stops it
 - **Show you somebody else's data.** It reads one repo, the one you named
+- **Show what your other vaults' notes say.** A vault on another computer reaches the board as dots and
+  lines, with titles only where you chose titles - never a note's words, never where the vault lives
 - **Guess.** Where it does not know, it says it does not know
 
 ---
@@ -870,6 +926,18 @@ fills in times in the reader's own clock. `/api/state?since=<commit>` answers `{
 with one call to GitHub when the branch has not moved, and otherwise the whole board built from the
 new commit. Every answer from `/api/state`, including that one and the refusals, is
 `Cache-Control: private, no-store`.
+
+The memory graph is the same once more. `tests/fixtures/vaults-parity.json` is the collector's
+contract for `.agent-team/status/vaults/`, byte for byte, and `tests/vaults.test.mjs` holds the board to
+it: every vault name, title, folder, day and hub label is checked again, a vault whose lines break the
+contract's rules is left out whole and counted, and a vault at **shape** never yields a title, whatever its
+file says. The team repo's own graph is built by `api/_team-graph.js`, whose links and markdown mentions
+pass every case of the contract's resolution table, so a vault and the team repo draw the same lines from
+the same text. `/api/graph` serves both, read from one commit, behind the same gate and
+`Cache-Control: private, no-store`; it is never part of `/api/state`, so the Readiness wall's
+60-second check stays one call. The libraries are told to use the d3 layout engine - the other one builds
+code from text, which the page's policy refuses - and their hover labels are always elements, never text
+they would put in the page as markup.
 
 Voice is OpenAI's "unified" call: the page makes a WebRTC offer and sends it to `/api/voice-session`
 on its own site; that function adds the key and the whole session (model, instructions, the six
