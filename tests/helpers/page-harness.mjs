@@ -22,7 +22,8 @@ function element(id = '', tag = 'div') {
     hidden: false,
     disabled: false,
     dataset: {},
-    style: {},
+    // Custom properties set the way the page sets them (the orb's --voice-level), read back by name.
+    style: { setProperty(name, value) { this[name] = String(value) } },
     attributes: {},
     children: [],
     listeners: {},

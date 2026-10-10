@@ -127,6 +127,12 @@ test('what was heard and what the assistant says are set as text, never as marku
   }
 })
 
+test('the reply\'s loudness reaches the orb as --voice-level, a number and nothing else', async () => {
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { expose: ['voiceUi'] })
+  page.exposed.voiceUi.level(0.42)
+  assert.equal(page.node('voice-orb').style['--voice-level'], '0.42')
+})
+
 /* ---------- unavailable ---------- */
 
 test('a browser that cannot use a microphone shows the orb as unavailable, and a tap says why instead of failing', async () => {

@@ -1261,6 +1261,11 @@
   }
   @media (prefers-reduced-motion: no-preference) {
     .voice-orb[data-state="listening"] { animation: voice-pulse 1.8s ease-in-out infinite; }
+    /* While it speaks, the glow follows how loud the reply really is: --voice-level, 0 to 1, which
+       the page writes only on a device like this one (voiceLevel). */
+    .voice-orb[data-state="speaking"] {
+      box-shadow: 0 0 0 calc(.15rem + var(--voice-level, 0) * .75rem) color-mix(in srgb, var(--accent) 30%, transparent), var(--shadow);
+    }
   }
   .voice-sheet {
     width: 100%; max-height: min(60vh, 28rem); overflow-y: auto; margin: 0; padding: .9rem 1rem;
@@ -5483,6 +5488,10 @@ function voiceDeps() {
     finePointer,
     headphones: voiceOnHeadphones,
     now: () => Date.now(),
+    // The orb's glow follows the reply's loudness only where the device has not asked for less motion.
+    reducedMotion: () => window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true,
+    requestAnimationFrame: (fn) => requestAnimationFrame(fn),
+    cancelAnimationFrame: (id) => cancelAnimationFrame(id),
     fish: fishMouth({
       speak: (body, signal) => fetch('/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),
       now: () => Date.now()
@@ -5547,7 +5556,8 @@ const voiceUi = {
   you(text) { el('voice-you').textContent = text },
   said(text) { el('voice-said').textContent = text },
   cost(text) { el('voice-cost').textContent = text },
-  who(name) { el('voice-who').textContent = name }
+  who(name) { el('voice-who').textContent = name },
+  level(value) { el('voice-orb')?.style.setProperty('--voice-level', String(value)) }
 }
 
 // A tap on the orb: ends a live call, or starts one. A browser that cannot listen is told why.
@@ -5718,6 +5728,72 @@ const voiceMoney = (usd) => (usd > 0 && usd < 0.01 ? 'under $0.01' : `$${usd.toF
 // browser threw, whose words are for developers.
 const voiceSaid = (words) => Object.assign(new Error(words), { said: true })
 
+// The orb's glow while a reply plays follows how loud it really is. An AnalyserNode reads the sound
+// already playing - the call's own track for OpenAI's voice, Fish's pieces on their way to the
+// speakers - so nothing is fetched and nothing is sent. The level, 0 to 1, rises with the voice at
+// once and falls slowly, so it reads as speech rather than flicker. A device that asks for less
+// motion gets no meter at all: nothing is measured, and no frame is asked for.
+const VOICE_LEVEL_FALL = 0.85 // kept each frame as it falls: about half a second from loud to still
+const VOICE_LEVEL_GAIN = 4 // speech is mostly 0.05 to 0.25 of full scale; this spreads it over 0 to 1
+
+function voiceLevel(context, deps, { playing, show }) {
+  if (!context?.createAnalyser || !deps.requestAnimationFrame || deps.reducedMotion?.() !== false) return null
+  let analyser
+  try {
+    analyser = context.createAnalyser()
+  } catch (error) {
+    return null
+  }
+  analyser.fftSize = 512
+  const samples = new Uint8Array(analyser.fftSize)
+  let source = null
+  let toSpeakers = false
+  let frame = null
+  let level = 0
+  const tick = () => {
+    frame = null
+    analyser.getByteTimeDomainData(samples)
+    let sum = 0
+    for (const sample of samples) sum += ((sample - 128) / 128) ** 2
+    const loud = playing() ? Math.min(1, Math.sqrt(sum / samples.length) * VOICE_LEVEL_GAIN) : 0
+    level = Math.max(loud, level * VOICE_LEVEL_FALL)
+    if (level < 0.01) level = 0
+    show(Math.round(level * 100) / 100)
+    if (playing() || level > 0) frame = deps.requestAnimationFrame(tick)
+  }
+  return {
+    // OpenAI's voice: the call's own track, read here while the <audio> element plays it. Never on to
+    // the speakers from here, or it would be heard twice.
+    listen(stream) {
+      try {
+        source?.disconnect()
+        source = context.createMediaStreamSource(stream)
+        source.connect(analyser)
+      } catch (error) {
+        source = null
+      }
+    },
+    // Fish: the node its pieces play into, which passes them on to the speakers.
+    input() {
+      if (!toSpeakers) analyser.connect(context.destination)
+      toSpeakers = true
+      return analyser
+    },
+    // A reply's sound has started: measure until it has ended and the glow has settled.
+    wake() {
+      if (frame === null) frame = deps.requestAnimationFrame(tick)
+    },
+    stop() {
+      if (frame !== null) deps.cancelAnimationFrame?.(frame)
+      frame = null
+      level = 0
+      show(0)
+      try { source?.disconnect() } catch (error) { /* already let go */ }
+      try { analyser.disconnect() } catch (error) { /* already let go */ }
+    }
+  }
+}
+
 function openVoice(deps, ui) {
   const session = {
     state: 'connecting', stopped: false, turns: { current: 0 }, tally: emptyTally(), claims: null, ticket: '',
@@ -5774,6 +5850,7 @@ function openVoice(deps, ui) {
   session.soundStarted = ({ endsInMs } = {}) => {
     session.soundStartedAt ??= deps.now()
     session.soundPlaying = true
+    session.level?.wake()
     if (!session.speakersMode) return
     restMic()
     // Every new sound starts the safety wait again - from the end of all that is queued when that is
@@ -5819,6 +5896,10 @@ function openVoice(deps, ui) {
   } catch (error) {
     session.context = null
   }
+  session.level = voiceLevel(session.context, deps, {
+    playing: () => session.soundPlaying && !session.stopped,
+    show: (value) => ui.level?.(value)
+  })
   const mic = deps.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
 
   const send = (event) => {
@@ -5868,6 +5949,7 @@ function openVoice(deps, ui) {
     deps.clearTimeout(session.tailTimer)
     deps.clearTimeout(session.restTimer)
     deps.fish?.stop(session)
+    session.level?.stop()
     try { session.channel?.close() } catch (error) { /* already closed */ }
     try { session.pc?.close() } catch (error) { /* already closed */ }
     for (const track of session.stream?.getTracks?.() ?? []) track.stop()
@@ -6126,7 +6208,9 @@ function openVoice(deps, ui) {
     session.pc = pc
     session.audio = deps.createAudio()
     pc.ontrack = (event) => {
-      if (session.audio && !session.stopped) session.audio.srcObject = event.streams?.[0] ?? null
+      if (!session.audio || session.stopped) return
+      session.audio.srcObject = event.streams?.[0] ?? null
+      if (event.streams?.[0]) session.level?.listen(event.streams[0])
     }
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed') end('dropped')
@@ -6279,7 +6363,7 @@ function fishMouth(io) {
       if (session.stopped || isStale(session.turns, turn)) return
       const node = session.context.createBufferSource()
       node.buffer = sound
-      node.connect(session.context.destination)
+      node.connect(session.level?.input() ?? session.context.destination)
       const at = Math.max(session.context.currentTime, fish.playhead)
       node.onended = () => {
         fish.nodes.delete(node)

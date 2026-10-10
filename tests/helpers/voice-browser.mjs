@@ -26,7 +26,9 @@ export async function page(brand = brandAnswer({ voice: VOICE_ON })) {
 }
 
 // A browser that does what the page asks and writes down every step.
-export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false, finePointer = false, headphones = false } = {}) {
+// `motion` is a device that has not asked for less motion: the orb's glow then follows the reply's
+// loudness, which `state.loudness` sets (0 to 127 either side of silence) and `frame()` moves on.
+export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false, finePointer = false, headphones = false, motion = false } = {}) {
   const log = []
   const timers = new Map()
   let nextTimer = 1
@@ -34,7 +36,9 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
   const stream = { getTracks: () => tracks, getAudioTracks: () => tracks }
   const audio = { srcObject: undefined, removed: false, remove() { this.removed = true } }
   // `decodes` holds a decode the test finishes itself, when holdDecode is on.
-  const state = { pc: null, channel: null, context: null, constraints: null, saved: [], ended: [], opened: [], calls: [], decodes: [] }
+  const state = { pc: null, channel: null, context: null, constraints: null, saved: [], ended: [], opened: [], calls: [], decodes: [], loudness: 0 }
+  const frames = new Map()
+  let nextFrame = 1
   const ticket = answer.ticket ?? ticketFor(answer.mouth ?? 'openai')
   class FakeConnection {
     constructor() { state.pc = this; this.closed = false; this.tracks = []; log.push('connection') }
@@ -61,6 +65,8 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
       this.currentTime = 0
       this.destination = { name: 'speakers' }
       this.started = []
+      this.analysers = []
+      this.sources = []
       log.push('audio context')
     }
     resume() { log.push('audio resumed') }
@@ -69,6 +75,23 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
       if (bytes?.broken) throw new Error('not audio')
       if (holdDecode) await new Promise((resolve) => state.decodes.push(resolve))
       return { duration: 1.5, text: bytes?.text }
+    }
+    createAnalyser() {
+      const analyser = {
+        fftSize: 2048, to: null, disconnected: false,
+        connect(to) { this.to = to },
+        disconnect() { this.to = null; this.disconnected = true },
+        getByteTimeDomainData(samples) {
+          for (let at = 0; at < samples.length; at += 1) samples[at] = 128 + (at % 2 ? state.loudness : -state.loudness)
+        }
+      }
+      this.analysers.push(analyser)
+      return analyser
+    }
+    createMediaStreamSource(stream) {
+      const source = { stream, to: null, disconnected: false, connect(to) { this.to = to }, disconnect() { this.to = null; this.disconnected = true } }
+      this.sources.push(source)
+      return source
     }
     createBufferSource() {
       const context = this
@@ -122,22 +145,28 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     finePointer,
     // "I'm on headphones", as this device remembers it.
     headphones: () => headphones,
-    now: () => clock.now
+    now: () => clock.now,
+    reducedMotion: () => !motion,
+    requestAnimationFrame: (fn) => { const id = nextFrame++; frames.set(id, fn); return id },
+    cancelAnimationFrame: (id) => { frames.delete(id) }
   }
   const ui = {
-    shown: [], heard: [], spoken: [], costs: [], names: [],
+    shown: [], heard: [], spoken: [], costs: [], names: [], levels: [],
     show(stateName, { words, live } = {}) { this.shown.push({ state: stateName, words, live }) },
     you(text) { this.heard.push(text) },
     said(text) { this.spoken.push(text) },
     cost(text) { this.costs.push(text) },
-    who(name) { this.names.push(name) }
+    who(name) { this.names.push(name) },
+    level(value) { this.levels.push(value) }
   }
   return {
-    deps, ui, log, tracks, audio, state, ticket, timers, speeches, speak, clock,
+    deps, ui, log, tracks, audio, state, ticket, timers, speeches, speak, clock, frames,
     emit: (event) => state.channel.onmessage({ data: JSON.stringify(event) }),
     open: () => { state.channel.readyState = 'open'; state.channel.onopen() },
     lastState: () => ui.shown.at(-1)?.state,
-    fireTimer: () => { const [id, timer] = [...timers.entries()].at(-1); timers.delete(id); timer.fn() }
+    fireTimer: () => { const [id, timer] = [...timers.entries()].at(-1); timers.delete(id); timer.fn() },
+    // The next animation frame, as the browser would run it.
+    frame: () => { const [id, fn] = [...frames.entries()][0]; frames.delete(id); fn() }
   }
 }
 
