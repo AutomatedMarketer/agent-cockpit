@@ -287,7 +287,7 @@ out loud from what the board already shows, and you can talk over it to stop it.
 | **What it cannot do yet** | Run a job, add a task or change anything. Ask and it says to use the Run button. When it can, you will confirm each one yourself, on a card - never its own words, or anything it read |
 | **Its name** | The assistant's name from **Make it yours**, or "your assistant" |
 | **Its voice** | OpenAI's own voice by default. Fish, for a voice you choose, is an optional upgrade (below) |
-| **While you talk** | The panel above the button says what it heard, what it is saying, and what this conversation has cost so far |
+| **While you talk** | The panel above the button shows your words as it hears them, what it is saying, and what this conversation has cost so far |
 | **It hangs up** | After 2 minutes with nobody talking (`VOICE_IDLE_MINUTES`), when you tap **Stop** or press Esc, or when you leave the tab |
 
 ### Switch it on
@@ -486,7 +486,7 @@ Locally:
 npm test
 ```
 
-1306 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1308 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

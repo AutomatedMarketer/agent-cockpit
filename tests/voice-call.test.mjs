@@ -967,3 +967,41 @@ test('the page sends this device\'s own time zone, and its tools answer in it', 
   assert.equal(sent.timeZone, Intl.DateTimeFormat().resolvedOptions().timeZone)
   assert.equal(loaded.exposed.voiceDeps().view().timeZone, Intl.DateTimeFormat().resolvedOptions().timeZone)
 })
+
+/* ---------- feels alive: the person's words as they say them ---------- */
+
+const partial = (browser, item, delta) => browser.emit({ type: 'conversation.item.input_audio_transcription.delta', item_id: item, delta })
+
+test('what the person says shows as it is heard, and the finished words replace it', async () => {
+  const browser = await connected()
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  partial(browser, 'item_1', 'What is')
+  partial(browser, 'item_1', ' due')
+  assert.deepEqual(browser.ui.heard.slice(-2), ['What is', 'What is due'])
+  partial(browser, 'item_1', 42)
+  partial(browser, 'item_1', null)
+  assert.equal(browser.ui.heard.at(-1), 'What is due', 'something that is not words was shown')
+  browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_1', transcript: 'What is due today?', usage: TRANSCRIPTION_USAGE })
+  assert.equal(browser.ui.heard.at(-1), 'What is due today?')
+  // The next turn starts from nothing - never added to the last one's words.
+  browser.emit({ type: 'input_audio_buffer.speech_started' })
+  partial(browser, 'item_2', 'And')
+  assert.equal(browser.ui.heard.at(-1), 'And')
+  // Words for an older turn arriving late start their own line, not this one's.
+  partial(browser, 'item_1', ' late')
+  assert.equal(browser.ui.heard.at(-1), ' late')
+})
+
+test('no words as they come with captions off, or while a turn might be the assistant\'s own voice', async () => {
+  const off = await connected({ answer: { captions: false } })
+  off.emit({ type: 'input_audio_buffer.speech_started' })
+  partial(off, 'item_1', 'Hello')
+  assert.ok(!off.ui.heard.includes('Hello'), 'words were shown with captions off')
+  const early = await guarded()
+  early.emit({ type: 'response.created' })
+  early.emit({ type: 'output_audio_buffer.started' })
+  early.clock.now += 1200
+  early.emit({ type: 'input_audio_buffer.speech_started' })
+  partial(early, 'item_echo', 'It happened')
+  assert.ok(!early.ui.heard.includes('It happened'), 'what may be its own voice was shown as the person\'s')
+})

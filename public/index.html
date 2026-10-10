@@ -5711,7 +5711,7 @@ function openVoice(deps, ui) {
     userSpeaking: false, replyOwed: false, replyRetries: 0, replyTimer: null, turnTakesReply: false,
     echoGuard: false, soundStartedAt: null, suspectTurn: false, echoRetryLeft: 1,
     speakersMode: false, micMuted: false, soundPlaying: false, tailTimer: null, restTimer: null,
-    replyHadOutput: false, cancelledByUs: false,
+    replyHadOutput: false, cancelledByUs: false, hearing: { item: null, words: '' },
     soundEndedAt: null, listenPending: null,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
@@ -5966,6 +5966,14 @@ function openVoice(deps, ui) {
         if (!session.suspectTurn) armIdle()
         if (session.replyOwed && !session.responding) waitThenAsk()
         show('thinking')
+        break
+      // The person's words as they are heard, so they can see they are: the finished words replace
+      // them. Not while the turn might be the assistant's own voice - its finished words decide that.
+      case 'conversation.item.input_audio_transcription.delta':
+        if (!session.captions || session.suspectTurn || typeof event.delta !== 'string') break
+        if (event.item_id !== session.hearing.item) session.hearing = { item: event.item_id, words: '' }
+        session.hearing.words += event.delta
+        ui.you(session.hearing.words)
         break
       case 'conversation.item.input_audio_transcription.completed': {
         session.tally = addUsage(session.tally, event.usage, 'captions')
