@@ -2416,11 +2416,42 @@ function hermesProfileHtml(item, detail) {
     <span class="hermes-profile-line">${line}</span>${scheduler}</li>`
 }
 
-function hermesGatewayWords(gateway) {
-  if (gateway?.status === 'found') {
-    return `Gateway: ${escapeHtml(gateway.stateLabel)}${gateway.beatAt ? `, last stamp ${escapeHtml(ago(gateway.beatAt))}` : ''}`
-  }
-  return gateway?.status === 'not found' ? 'Gateway not found' : 'Gateway could not be read'
+// The shared contract's alive rule (tests/fixtures/hermes-parity.json `alive`), mirrored so the card's
+// words say which signal the server's Running or Down came from. A test fails if the two drift.
+const HERMES_PAGE_ALIVE = { withinSeconds: 300, gatewayStates: ['running'] }
+const hermesNearCheck = (iso, takenAt) => {
+  const gap = Math.abs(Date.parse(iso) - Date.parse(takenAt))
+  return Number.isFinite(gap) && gap <= HERMES_PAGE_ALIVE.withinSeconds * 1000
+}
+
+// A gateway stamp far from the check is a file nobody has written since - on Nuno's Mac the root
+// gateway file stopped in early September while Hermes ran on. The card says so, instead of
+// offering "Running, last stamp 37 days ago" beside a Running that came from somewhere else.
+function hermesGatewayWords(computer) {
+  const gateway = computer.gateway
+  if (gateway?.status !== 'found') return gateway?.status === 'not found' ? 'Gateway not found' : 'Gateway could not be read'
+  const state = escapeHtml(gateway.stateLabel)
+  if (!gateway.beatAt) return `Gateway: ${state}, with no time on it, so the board does not go by it.`
+  if (hermesNearCheck(gateway.beatAt, computer.takenAt)) return `Gateway: ${state}, last stamp ${escapeHtml(ago(gateway.beatAt))}`
+  const day = new Date(gateway.beatAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+  return `Gateway: its status file still says ${state}, but it was last written ${escapeHtml(ago(gateway.beatAt))} (${escapeHtml(day)}), so the board does not go by it.`
+}
+
+// When Running did not come from the gateway, it came from the profiles' schedulers: name them.
+function hermesRunningBecause(computer) {
+  if (computer.alive !== 'running') return ''
+  const gateway = computer.gateway
+  if (gateway?.status === 'found' && HERMES_PAGE_ALIVE.gatewayStates.includes(gateway.state) &&
+    gateway.beatAt && hermesNearCheck(gateway.beatAt, computer.takenAt)) return ''
+  const names = (computer.profiles?.items ?? [])
+    .filter((item) => item.schedulerBeatAt && hermesNearCheck(item.schedulerBeatAt, computer.takenAt))
+    .map((item) => escapeHtml(item.name))
+  if (!names.length) return ''
+  const shown = names.slice(0, 3)
+  const list = names.length > 3 ? `${shown.join(', ')} and ${names.length - 3} more`
+    : shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`
+  const who = computer.computer ? escapeHtml(computer.computer) : 'the computer'
+  return `Running because the ${list} ${names.length === 1 ? 'scheduler' : 'schedulers'} checked in when ${who} looked.`
 }
 
 function hermesCardHtml(computer, detail) {
@@ -2449,12 +2480,13 @@ function hermesCardHtml(computer, detail) {
       ? `<a class="watch" href="${escapeHtml(runtime.url)}" rel="noreferrer noopener">Open Hermes &rarr;</a>` : ''}</p>`
   // A word the server did not send is drawn as no word at all, never as the class "undefined".
   const alive = ['running', 'down', 'stale'].includes(computer.alive) ? computer.alive : 'stale'
+  const because = hermesRunningBecause(computer)
   return `<article class="panel card hermes-card">
     <div class="hermes-top"><span class="tile tile-hermes" aria-hidden="true">H</span>
       <div class="hermes-name"><p class="title">Hermes</p><p class="hermes-version">${escapeHtml(computer.install?.label ?? '')}</p></div>
       <p class="hermes-alive hermes-${alive}">${escapeHtml(computer.aliveLabel)}</p></div>
-    <p class="hermes-foot">checked ${escapeHtml(ago(computer.takenAt))} on ${where}${alive === 'stale' ? '' : ` &middot; ${hermesGatewayWords(computer.gateway)}`}</p>
-    ${stale}${list}${notes.length ? `<p class="hermes-note">${notes.map(escapeHtml).join(' ')}</p>` : ''}${links}</article>`
+    <p class="hermes-foot">checked ${escapeHtml(ago(computer.takenAt))} on ${where}${alive === 'stale' ? '' : ` &middot; ${hermesGatewayWords(computer)}`}</p>
+    ${because ? `<p class="hermes-foot">${because}</p>` : ''}${stale}${list}${notes.length ? `<p class="hermes-note">${notes.map(escapeHtml).join(' ')}</p>` : ''}${links}</article>`
 }
 
 // The top of Connections: a card per computer that has Hermes, or one sentence when the reading

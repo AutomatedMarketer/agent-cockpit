@@ -5647,6 +5647,112 @@ test('Down and Not checked are words too, and the old one says what to do', () =
   assert.ok(!/Running|Down at last check/.test(stale), 'an old reading claims to know whether Hermes is up')
 })
 
+/* The card says plainly which signal it goes by. On Nuno's Mac Mini (2026-10-10 13:54Z reading) the
+   gateway file still said "running" with a stamp from 2 Sep, while Running really came from the
+   donna and memory-knowledge schedulers. The card printed "Running" beside "Gateway: Running, last
+   stamp 37 days ago" and never said which one counted. */
+const hermesFoot = (card) => [...card.matchAll(/<p class="hermes-foot">([\s\S]*?)<\/p>/g)]
+  .map((match) => match[1].replace(/<[^>]+>/g, ' ').replace(/&middot;/g, '·').replace(/\s+/g, ' ').trim()).join(' | ')
+const hermesDay = (iso) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+// Shaped like the real reading: the gateway's stamp 37.6 days before the check, two schedulers fresh.
+const oldGatewayHermes = ({ state = 'running', beats = ['donna', 'memory-knowledge'], computer = 'Mac Mini' } = {}) => {
+  const doc = hermesSample({ computer })
+  const taken = Date.parse(doc.takenAt)
+  const gap = Date.parse('2026-10-10T13:54:03Z') - Date.parse('2026-09-02T22:19:54Z')
+  doc.gateway = { status: 'found', state, beatAt: new Date(taken - gap).toISOString() }
+  const names = ['default', 'donna', 'memory-knowledge', 'coder', 'seo', 'youtube']
+  doc.profiles.items = names.map((name) => ({
+    name,
+    skills: { status: 'not found' },
+    sessions: { status: 'not found' },
+    scheduler: beats.includes(name) ? { status: 'found', beatAt: new Date(taken - 9000).toISOString() } : { status: 'found', beatAt: new Date(taken - 6 * 3600_000).toISOString() }
+  }))
+  doc.profiles.hidden = 0
+  return doc
+}
+
+test('Hermes card: a fresh gateway stamp reads as today - "Gateway: Running, last stamp" - with no "because" line', () => {
+  for (const card of [hermesCardOf(connectionsScreen({ hermes: hermesPayload() })), hermesCardOf(render({ ...base, hermes: hermesPayload() }).get('hermes').innerHTML)]) {
+    const foot = hermesFoot(card)
+    assert.match(foot, /Gateway: Running, last stamp 1 hr ago/)
+    assert.ok(!/does not go by it|Running because/.test(foot), `a fresh gateway was second-guessed: ${foot}`)
+  }
+})
+
+test('Hermes card: an old gateway stamp says the file is old and the board does not go by it, with its day', () => {
+  const hermes = hermesPayload([oldGatewayHermes()])
+  const beat = hermes.computers[0].gateway.beatAt
+  for (const card of [hermesCardOf(connectionsScreen({ hermes })), hermesCardOf(render({ ...base, hermes }).get('hermes').innerHTML)]) {
+    assert.match(card, /<p class="hermes-alive hermes-running">Running<\/p>/)
+    const foot = hermesFoot(card)
+    assert.ok(foot.includes(`Gateway: its status file still says Running, but it was last written 38 days ago (${hermesDay(beat)}), so the board does not go by it.`), foot)
+    assert.ok(!/last stamp/.test(foot), `the old stamp is still offered as a plain stamp: ${foot}`)
+    assert.ok(foot.includes('Running because the donna and memory-knowledge schedulers checked in when Mac Mini looked.'), foot)
+  }
+})
+
+test('Hermes card: "Running because" names at most three schedulers, then "and N more", and one alone is singular', () => {
+  const many = hermesFoot(hermesCardOf(connectionsScreen({ hermes: hermesPayload([oldGatewayHermes({ beats: ['default', 'donna', 'memory-knowledge', 'coder', 'seo'] })]) })))
+  assert.ok(many.includes('Running because the default, donna, memory-knowledge and 2 more schedulers checked in when Mac Mini looked.'), many)
+  const four = hermesFoot(hermesCardOf(connectionsScreen({ hermes: hermesPayload([oldGatewayHermes({ beats: ['default', 'donna', 'memory-knowledge', 'coder'] })]) })))
+  assert.ok(four.includes('Running because the default, donna, memory-knowledge and 1 more schedulers checked in'), four)
+  const three = hermesFoot(hermesCardOf(connectionsScreen({ hermes: hermesPayload([oldGatewayHermes({ beats: ['default', 'donna', 'memory-knowledge'] })]) })))
+  assert.ok(three.includes('Running because the default, donna and memory-knowledge schedulers checked in'), three)
+  const one = hermesFoot(hermesCardOf(connectionsScreen({ hermes: hermesPayload([oldGatewayHermes({ beats: ['donna'] })]) })))
+  assert.ok(one.includes('Running because the donna scheduler checked in when Mac Mini looked.'), one)
+  const nameless = hermesFoot(hermesCardOf(connectionsScreen({ hermes: hermesPayload([oldGatewayHermes({ computer: '' })]) })))
+  assert.ok(nameless.includes('checked in when the computer looked.'), nameless)
+})
+
+test('Hermes card: down with an old gateway file keeps "Down at last check" and says the file\'s last word and age', () => {
+  const hermes = hermesPayload([oldGatewayHermes({ state: 'stopped', beats: [] })])
+  const card = hermesCardOf(connectionsScreen({ hermes }))
+  assert.match(card, /<p class="hermes-alive hermes-down">Down at last check<\/p>/)
+  const foot = hermesFoot(card)
+  assert.ok(foot.includes(`Gateway: its status file still says Stopped, but it was last written 38 days ago (${hermesDay(hermes.computers[0].gateway.beatAt)}), so the board does not go by it.`), foot)
+  assert.ok(!/Running because/.test(foot), foot)
+  // A reading too old to judge never explains a Running it does not claim, even with beats near its check.
+  const old = oldGatewayHermes()
+  const shift = 10 * 3600_000
+  old.takenAt = new Date(Date.parse(old.takenAt) - shift).toISOString()
+  for (const item of old.profiles.items) item.scheduler.beatAt = new Date(Date.parse(item.scheduler.beatAt) - shift).toISOString()
+  const stale = hermesCardOf(connectionsScreen({ hermes: hermesPayload([old]) }))
+  assert.match(stale, /hermes-stale/)
+  assert.ok(!/Running because|Running/.test(stale.replace(/hermes-running/g, '')), stale)
+})
+
+test('Hermes card: a gateway with no time says so, and Running then names the schedulers', () => {
+  const doc = oldGatewayHermes()
+  delete doc.gateway.beatAt
+  const foot = hermesFoot(hermesCardOf(connectionsScreen({ hermes: hermesPayload([doc]) })))
+  assert.ok(foot.includes('Gateway: Running, with no time on it, so the board does not go by it.'), foot)
+  assert.ok(foot.includes('Running because the donna and memory-knowledge schedulers checked in when Mac Mini looked.'), foot)
+})
+
+test('Hermes card: a gateway not found or unreadable reads as today', () => {
+  const missing = oldGatewayHermes()
+  missing.gateway = { status: 'not found' }
+  assert.match(hermesFoot(hermesCardOf(connectionsScreen({ hermes: hermesPayload([missing]) }))), /Gateway not found/)
+  const broken = oldGatewayHermes()
+  broken.gateway = { status: 'unavailable', why: 'x' }
+  assert.match(hermesFoot(hermesCardOf(connectionsScreen({ hermes: hermesPayload([broken]) }))), /Gateway could not be read/)
+})
+
+test('Hermes card: profile names in the "because" line are escaped', () => {
+  const hermes = hermesPayload([oldGatewayHermes()])
+  hermes.computers[0].profiles.items[1].name = '<img src=x onerror=alert(1)>'
+  hermes.computers[0].computer = '<b>mac</b>'
+  const card = hermesCardOf(connectionsScreen({ hermes }))
+  assert.ok(!card.includes('<img src=x') && !card.includes('<b>mac'), 'raw markup in the because line')
+  assert.match(card, /Running because the &lt;img src=x onerror=alert\(1\)&gt; and memory-knowledge schedulers checked in when &lt;b&gt;mac&lt;\/b&gt; looked\./)
+})
+
+test('Hermes card: the page\'s alive window and gateway states mirror the shared contract, so the words never drift from the verdict', () => {
+  const { HERMES_PAGE_ALIVE } = render(base, { expose: ['HERMES_PAGE_ALIVE'] }).exposed
+  assert.equal(HERMES_PAGE_ALIVE.withinSeconds, hermesContract.alive.withinSeconds)
+  assert.deepEqual(HERMES_PAGE_ALIVE.gatewayStates, hermesContract.alive.gatewayStates)
+})
+
 test('the Hermes tab and page exist only when a reading found Hermes', () => {
   const without = render({ ...base, hermes: hermesPayload([noHermes()]) }, { hash: '#hermes' })
   assert.equal(without.get('tab-hermes').hidden, true, 'a tab for a Hermes nobody has')
