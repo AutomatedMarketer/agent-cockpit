@@ -22,18 +22,19 @@ const moves = (rule) => Object.entries(valuesIn(rule)).some(([property, value]) 
   (isAnimation(property) || isTransition(property)) && !/^none\b/.test(value))
 // The block a rule sits in, outermost first: the motion block is the outermost gate.
 const inMotionBlock = (rule) => NO_PREFERENCE.test(rule.condition ?? '')
+const names = (rule) => rule.selector.split(',').map((one) => one.trim())
 
 test('every animation runs only when motion is allowed', () => {
   const animated = cssRules().filter((rule) => Object.entries(valuesIn(rule))
     .some(([property, value]) => isAnimation(property) && !/^none\b/.test(value)))
-  assert.ok(animated.length >= 2, `only ${animated.length} animated rules found - the sweep has stopped seeing the sheet`)
+  assert.ok(animated.length >= 6, `only ${animated.length} animated rules found - the sweep has stopped seeing the sheet`)
   for (const rule of animated) assert.ok(inMotionBlock(rule), `${rule.selector} animates outside the motion block`)
 })
 
 test('every transition - a transform above all - moves only when motion is allowed', () => {
   const moving = cssRules().filter((rule) => Object.entries(valuesIn(rule))
     .some(([property, value]) => isTransition(property) && !/^none\b/.test(value)))
-  assert.ok(moving.length >= 2, `only ${moving.length} transitions found`)
+  assert.ok(moving.length >= 6, `only ${moving.length} transitions found`)
   for (const rule of moving) assert.ok(inMotionBlock(rule), `${rule.selector} has a transition outside the motion block`)
   // And so nothing needs switching off: no rule anywhere writes transition: none or animation: none
   // under reduce, because there is nothing there to switch off.
@@ -69,4 +70,53 @@ test('durations come from the motion tokens: no raw seconds or milliseconds in a
     }
   }
   assert.deepEqual(offenders, [], `raw durations:\n${offenders.join('\n')}`)
+})
+
+/* ---------- what moves (plan section 3, task T4) ---------- */
+
+const motionRules = () => cssRules().filter(inMotionBlock)
+const animationOf = (rule) => valuesIn(rule).animation ?? valuesIn(rule)['animation-name'] ?? ''
+
+test('a screen fades in when it is opened - on the screen itself, never on a card a redraw rebuilds', () => {
+  const enter = motionRules().filter((rule) => names(rule).includes('.screen.active') && animationOf(rule))
+  assert.equal(enter.length, 1, 'no enter animation on the screen that is shown')
+  assert.match(animationOf(enter[0]), /var\(--dur-3\) var\(--ease-out\)/)
+  // Readiness redraws its cards every minute; an animation on a card would replay each time.
+  const CARDS = /\.(rd-card|rd-grid|rd-group|kpi|agent-card|found-computer|hermes-card)\b/
+  for (const rule of cssRules().filter((one) => animationOf(one) && !/^none\b/.test(animationOf(one)))) {
+    assert.doesNotMatch(rule.selector, CARDS, `${rule.selector} animates a card that is rebuilt on every redraw`)
+  }
+})
+
+test('cards you can press lift under a mouse, and only there; a static panel never lifts', () => {
+  const lifts = motionRules().filter((rule) => /translateY\(-/.test(valuesIn(rule).transform ?? ''))
+  const hovered = lifts.filter((rule) => /:hover/.test(rule.selector))
+  for (const rule of hovered) {
+    assert.match(rule.condition, /\(hover: hover\) and \(pointer: fine\)/, `${rule.selector} lifts on a touch screen, where a hover sticks after a tap`)
+  }
+  for (const card of ['.agent-card', 'a.d7-row', '.copy-card', 'button.job']) {
+    assert.ok(hovered.some((rule) => names(rule).some((one) => one.startsWith(card) && one.includes(':hover'))), `${card} does not lift under a mouse`)
+    assert.ok(lifts.some((rule) => names(rule).some((one) => one.startsWith(card) && one.includes(':focus-visible'))), `${card} does not lift for the keyboard`)
+  }
+  for (const rule of lifts) {
+    assert.ok(!names(rule).some((one) => /^\.panel(:hover|:focus-visible)/.test(one) || /^\.(rd-card|kpi|hermes-card)\b/.test(one)), `${rule.selector} lifts something that cannot be pressed`)
+  }
+})
+
+test('a press answers: buttons and card summaries give a little under the finger', () => {
+  const press = motionRules().filter((rule) => /scale\(\.98\)/.test(valuesIn(rule).transform ?? ''))
+  for (const target of ['button.fire:active', '.agent-card > summary:active', '.copy-card > summary:active']) {
+    assert.ok(press.some((rule) => names(rule).includes(target)), `${target} has no press feedback`)
+  }
+})
+
+test('folds fade open, the sparkline draws once, and the banner pictures drift slowly', () => {
+  const rules = motionRules()
+  assert.ok(rules.some((rule) => /details\[open\] > :not\(summary\)/.test(rule.selector) && /var\(--dur-fold\)/.test(animationOf(rule))), 'opened folds do not fade in')
+  const spark = rules.filter((rule) => names(rule).includes('.spark') && animationOf(rule))
+  assert.equal(spark.length, 1, 'the sparkline does not draw in')
+  assert.doesNotMatch(animationOf(spark[0]), /infinite/, 'the sparkline draws for ever')
+  const drift = rules.filter((rule) => names(rule).some((one) => /\.banner img$/.test(one)) && animationOf(rule))
+  assert.ok(drift.length, 'the banner pictures stand still')
+  assert.match(animationOf(drift[0]), /var\(--dur-drift\).*infinite alternate/)
 })

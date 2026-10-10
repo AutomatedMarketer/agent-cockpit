@@ -1428,6 +1428,20 @@
     .voice-sheet { width: 22rem; }
   }
 
+  /* Cards you can press answer a mouse: the border tints toward the accent and the card steps up one
+     level of depth. Only where there is a real pointer - on a touch screen a hover sticks after a
+     tap. Nothing here moves, so it holds for someone who asked for less motion too; the lift itself
+     is in the motion block below. A static panel never does this: a lift says "press me". */
+  @media (hover: hover) and (pointer: fine) {
+    .agent-card:hover, a.d7-row:hover, .copy-card:not([open]):hover, button.job:not([disabled]):hover {
+      border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); box-shadow: var(--elev-2);
+    }
+  }
+  .agent-card:has(> summary:focus-visible), a.d7-row:focus-visible, .copy-card:has(> summary:focus-visible), button.job:focus-visible {
+    box-shadow: var(--elev-2);
+  }
+  a.d7-row:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
   /* Motion - every moving rule on the board, and nowhere else (plan 2026-10-10, section 3).
      One block, for someone whose device has not asked for less motion: written this way round, a
      device that asks for less never meets a moving rule, rather than meeting one and a second rule
@@ -1437,6 +1451,54 @@
   @media (prefers-reduced-motion: no-preference) {
     .agent-card .chev, .why > summary::after, .found-group > summary::after { transition: transform var(--dur-1) var(--ease-std); }
     .theme-switch::after { transition: transform var(--dur-2) var(--ease-std); }
+
+    /* A screen fades in and rises a little when it is opened. On the screen itself, never on a card:
+       the class only changes when somebody switches screens, so a redraw - Readiness checks every
+       minute - never plays it again. */
+    @keyframes screen-in {
+      from { opacity: 0; transform: translateY(.375rem); }
+      to { opacity: 1; transform: none; }
+    }
+    .screen.active { animation: screen-in var(--dur-3) var(--ease-out); }
+
+    /* Colour changes fade rather than snap. */
+    a, nav a, .chip, .link-button, .file, .why > summary {
+      transition: color var(--dur-1) var(--ease-std), background-color var(--dur-1) var(--ease-std), border-color var(--dur-1) var(--ease-std);
+    }
+    /* Buttons give a little under a finger. */
+    button.fire, label.fire, .copy-btn, .hermes-open, .topbar-btn { transition: transform var(--dur-press) var(--ease-std), border-color var(--dur-1) var(--ease-std); }
+    /* Cards you can press lift 2px under a mouse, or when the keyboard is on them. */
+    .agent-card, a.d7-row, .copy-card, button.job {
+      transition: transform var(--dur-2) var(--ease-std), box-shadow var(--dur-2) var(--ease-std), border-color var(--dur-1) var(--ease-std);
+    }
+    @media (hover: hover) and (pointer: fine) {
+      .agent-card:hover, a.d7-row:hover, .copy-card:not([open]):hover, button.job:not([disabled]):hover { transform: translateY(-2px); }
+    }
+    .agent-card:has(> summary:focus-visible), a.d7-row:focus-visible, .copy-card:has(> summary:focus-visible), button.job:focus-visible { transform: translateY(-2px); }
+    button.fire:active, button.job:not([disabled]):active, .copy-btn:active, .topbar-btn:active,
+    .agent-card > summary:active, .copy-card > summary:active { transform: scale(.98); }
+    .agent-card > summary, .copy-card > summary { transition: transform var(--dur-press) var(--ease-std); }
+
+    /* What a fold opens fades in. Not on Readiness, which redraws itself every minute. */
+    @keyframes fold-in {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .screen:not(#readiness) details[open] > :not(summary) { animation: fold-in var(--dur-fold) var(--ease-out); }
+
+    /* The sparkline draws in once, left to right. */
+    @keyframes spark-draw {
+      from { clip-path: inset(0 100% 0 0); }
+      to { clip-path: inset(0); }
+    }
+    .spark { animation: spark-draw var(--dur-draw) var(--ease-out) both; }
+
+    /* The banner pictures drift, slowly enough that nobody notices it happening. */
+    @keyframes banner-drift {
+      from { transform: scale(1.06) translate(0, 0); }
+      to { transform: scale(1.06) translate(-1.6%, -1%); }
+    }
+    .banner img { animation: banner-drift var(--dur-drift) ease-in-out infinite alternate; }
 
     /* A slow drift across the sidebar's picture, only where the picture shows at all. */
     @keyframes side-art-drift {
