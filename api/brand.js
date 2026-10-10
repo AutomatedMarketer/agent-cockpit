@@ -132,14 +132,15 @@ export function planChange(body) {
 export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}) {
   return async function handler(request, response) {
     const environment = env ?? process.env
+    // The answer is the board as it is right now; a cached one would show an old name. Set first,
+    // so a refusal and a wrong method carry it too.
+    response.setHeader('Cache-Control', 'private, no-store')
     const method = String(request?.method ?? 'GET').toUpperCase()
     if (method !== 'GET' && method !== 'POST') {
       response.setHeader('Allow', 'GET, POST')
       response.status(405).json({ error: 'GET to read the board\'s names and pictures, POST to change one.' })
       return
     }
-    // The answer is the board as it is right now; a cached one would show an old name.
-    response.setHeader('Cache-Control', 'no-store')
 
     // The gate comes before anything else, the store included.
     const denied = method === 'GET' ? viewGate(request, environment) : writeGate(request, environment)

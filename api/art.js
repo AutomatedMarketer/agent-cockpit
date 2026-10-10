@@ -40,14 +40,14 @@ function parseRequest(query = {}) {
 export function makeHandler({ store, env, loadSdk } = {}) {
   return async function handler(request, response) {
     const environment = env ?? process.env
+    // Every answer but the picture itself is kept by nobody: a refusal cached "forever" would
+    // outlive the fix for it. The picture, further down, replaces this with its own rule.
+    response.setHeader('Cache-Control', 'private, no-store')
     if (String(request?.method ?? 'GET').toUpperCase() !== 'GET') {
       response.setHeader('Allow', 'GET')
       response.status(405).json({ error: 'GET /api/art?slot=<slot>&v=<version>&t=<webp|jpeg|png>.' })
       return
     }
-    // Every answer but the picture itself is not to be kept: a refusal cached "forever" would
-    // outlive the fix for it.
-    response.setHeader('Cache-Control', 'no-store')
 
     const denied = viewGate(request, environment)
     if (denied) {

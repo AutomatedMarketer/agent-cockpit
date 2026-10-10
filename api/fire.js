@@ -398,6 +398,9 @@ function readBody(request) {
 }
 
 export default async function handler(request, response) {
+  // Kept by nobody, every answer: a dispatch is a one-off, and a refusal kept by a shared cache
+  // would be handed to the next person to ask.
+  response.setHeader('Cache-Control', 'private, no-store')
   if (String(request?.method ?? 'GET').toUpperCase() !== 'POST') {
     response.setHeader('Allow', 'POST')
     response.status(405).json({ error: 'POST only. Send { "workflow": "<slug>", "action": "run" | "pause" | "arm" } — or { "action": "task", "title": "…" } or { "action": "approve", "task": "…" }.' })

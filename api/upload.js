@@ -85,12 +85,14 @@ async function pointBack(pictures, slot, failed, previous) {
 export function makeHandler({ store, env, now = () => new Date(), loadSdk, version = newVersion } = {}) {
   return async function handler(request, response) {
     const environment = env ?? process.env
+    // Kept by nobody: not a shared cache (it keys on the address, not on who asked) and not the
+    // browser. Set first, so a refusal and a wrong method carry it too.
+    response.setHeader('Cache-Control', 'private, no-store')
     if (String(request?.method ?? 'GET').toUpperCase() !== 'POST') {
       response.setHeader('Allow', 'POST')
       response.status(405).json({ error: 'POST the picture\'s bytes to /api/upload?slot=<slot>.' })
       return
     }
-    response.setHeader('Cache-Control', 'no-store')
 
     const denied = writeGate(request, environment, 'application/octet-stream')
     if (denied) {

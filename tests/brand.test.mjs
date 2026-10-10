@@ -47,7 +47,7 @@ test('with no store connected, GET says personalising is off, in the one sentenc
   assert.match(NOT_CONNECTED, /redeploy/, 'and the step people forget')
   assert.deepEqual(response.body.names, {})
   assert.deepEqual(response.body.pictures, {})
-  assert.equal(response.headers['Cache-Control'], 'no-store')
+  assert.equal(response.headers['Cache-Control'], 'private, no-store')
 })
 
 test('with no store in the environment at all, GET is off and the SDK is never loaded', async () => {
@@ -77,7 +77,7 @@ test('a connected, empty store reads as the defaults, with the full day\'s allow
   const { get, fake } = board()
   const response = await get()
   assert.equal(response.statusCode, 200)
-  assert.equal(response.headers['Cache-Control'], 'no-store', 'a cached answer would show a name the owner already changed')
+  assert.equal(response.headers['Cache-Control'], 'private, no-store', 'a cached answer would show a name the owner already changed')
   assert.deepEqual(response.body, {
     enabled: true,
     canGenerate: false,

@@ -73,7 +73,7 @@ test('a portrait is asked for exactly as planned, and its bytes come straight ba
   assert.equal(response.statusCode, 200)
   assert.deepEqual(Buffer.from(response.sent), bytes)
   assert.equal(response.headers['Content-Type'], 'image/webp')
-  assert.equal(response.headers['Cache-Control'], 'no-store')
+  assert.equal(response.headers['Cache-Control'], 'private, no-store')
   assert.equal(response.headers['X-Content-Type-Options'], 'nosniff')
 
   assert.equal(calls.length, 1)

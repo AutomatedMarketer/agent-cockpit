@@ -133,13 +133,14 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk } = {}
   return async function handler(request, response) {
     const started = now().getTime()
     const environment = env ?? process.env
+    // A made picture is for this one request; the browser keeps it, nothing else should. Set first,
+    // so a refusal and a wrong method carry it too.
+    response.setHeader('Cache-Control', 'private, no-store')
     if (String(request?.method ?? 'GET').toUpperCase() !== 'POST') {
       response.setHeader('Allow', 'POST')
       response.status(405).json({ error: 'POST { "slot": "<slot>", "description": "<what to paint>" }.' })
       return
     }
-    // A made picture is for this one request; the browser keeps it, nothing else should.
-    response.setHeader('Cache-Control', 'no-store')
 
     const denied = writeGate(request, environment)
     if (denied) {
