@@ -55,3 +55,12 @@ test('fire is sent as JSON from the board, with no view key: the signed-in cooki
   assert.equal(fires[0].headers['x-view-key'], undefined)
   assert.deepEqual(JSON.parse(fires[0].body), { workflow: 'monday-brief' })
 })
+
+test('an order sent by a spoken yes never asks for the fire key: with ask off, a 401 for it is the answer', async () => {
+  const { page, asked, fires } = firePage({ answers: [json(401, { needs: 'fire-key', error: 'Missing or wrong fire key.' })] })
+  await flush()
+  const result = await page.exposed.postFire({ action: 'task', title: 'Draft it' }, { ask: false })
+  assert.equal(result.status, 401)
+  assert.deepEqual(asked, [], 'a spoken yes was met with a key prompt')
+  assert.equal(fires.length, 1)
+})

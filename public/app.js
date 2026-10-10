@@ -2037,10 +2037,12 @@ async function callFire(body, key) {
 // person asked for the fire key would be asked for the wrong thing.
 const needsFireKey = (result) => result.status === 401 && result.payload?.needs === 'fire-key'
 
-async function postFire(body) {
+// `ask: false` never prompts: an order sent by the owner's spoken yes has no hands free to type a key,
+// so it is only spoken when the key is already in this tab (or the board needs none).
+async function postFire(body, { ask = true } = {}) {
   let key = sessionStorage.getItem(FIRE_KEY_STORE) || ''
   let result = await callFire(body, key)
-  if (needsFireKey(result)) {
+  if (needsFireKey(result) && ask) {
     const entered = window.prompt(
       'This dashboard needs its fire key to dispatch jobs.\n\nPaste the FIRE_KEY you set in the hosting environment — it is kept in this tab only, never in the page.'
     )
@@ -4224,6 +4226,45 @@ function confirmsYes(event) {
   return event.type === 'keydown' && (event.key === 'Enter' || event.key === ' ')
 }
 
+// --- an order the assistant proposes, checked before any card ---
+// The rules /api/fire holds a task card to - a title of 3 to 200 characters on one plain line - and a
+// shorter cap on details for a spoken order; a job only when this board can fire it: its slug is one
+// with a trigger link (orders.jobs) and its file says fire: true. Fire checks all of it again. A
+// refusal is our own sentence and never repeats what the model sent.
+const VOICE_DETAILS_MAX = 500
+const ORDER_TITLE = { least: 3, most: 200 }
+const ORDER_CONTROL = /[\u0000-\u001f\u007f]/
+
+function orderFrom(name, args, { orders, data } = {}) {
+  if (orders?.on !== true) return { error: 'Orders are off on this board, so nothing can be sent.' }
+  if (name === 'add_task') {
+    if (orders.tasks !== true) return { error: 'Task cards are not set up on this board: there is no task-intake routine.' }
+    const title = typeof args?.title === 'string' ? args.title.trim() : ''
+    if (title.length < ORDER_TITLE.least || title.length > ORDER_TITLE.most || ORDER_CONTROL.test(title)) {
+      return { error: 'A task needs a title of 3 to 200 characters on one plain line, so ask for a shorter one.' }
+    }
+    const raw = args?.details
+    if (raw !== undefined && raw !== null && typeof raw !== 'string') return { error: 'The details of a task must be words.' }
+    const details = typeof raw === 'string' ? raw.trim() : ''
+    if (details.length > VOICE_DETAILS_MAX) return { error: `The details of a task can be at most ${VOICE_DETAILS_MAX} characters by voice.` }
+    return { order: { kind: 'task', title, ...(details ? { details } : {}) } }
+  }
+  if (name === 'run_job') {
+    const slug = args?.workflow
+    if (typeof slug !== 'string' || !Array.isArray(orders.jobs) || !orders.jobs.includes(slug)) {
+      return { error: 'That job has no trigger link on this board, so it cannot be started from here.' }
+    }
+    const workflow = (Array.isArray(data?.workflows) ? data.workflows : []).find((one) => one?.slug === slug)
+    if (!workflow) return { error: 'That job is not on the board, so it cannot be started from here.' }
+    if (workflow.fire !== true) {
+      return { error: 'That job is not set to be started from the board (fire: true in its file), so it cannot be started from here.' }
+    }
+    const named = typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim().slice(0, 120) : slug
+    return { order: { kind: 'run', slug, name: named } }
+  }
+  return { error: 'There is no order with that name.' }
+}
+
 // --- the owner's spoken yes ---
 // Nuno's rule (2026-10-10): a spoken yes counts only after the card appears, within 60 s, as a plain
 // yes, with the microphone open and no reply playing. A trusted tap always works. In full, every one of:
@@ -4416,6 +4457,14 @@ function voiceDeps() {
     // A developer's machine - the board served from this computer, or VOICE_DEBUG_STORE switched on
     // here - where the page logs how long the first sound took.
     debug: () => ['localhost', '127.0.0.1'].includes(location.hostname) || readStore(VOICE_DEBUG_STORE) === 'on',
+    // Orders go the way the board's buttons go: postFire, which asks for the fire key once - on a tap
+    // only, never for a spoken yes.
+    dispatch: (body, options) => postFire(body, options),
+    fireKeyHeld: () => {
+      try { return Boolean(sessionStorage.getItem(FIRE_KEY_STORE)) } catch (error) { return false }
+    },
+    saveOrder: (entry) => writeStore(VOICE_ORDERS_STORE, JSON.stringify([entry, ...voiceOrdersLog()].slice(0, VOICE_ORDERS_KEPT))),
+    ordersLog: voiceOrdersLog,
     fish: fishMouth({
       speak: (body, signal) => fetch('/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),
       now: () => Date.now()
@@ -4578,6 +4627,9 @@ document.addEventListener('click', (event) => {
   if (target?.closest?.('#voice-orb')) voiceTap()
   else if (target?.closest?.('#voice-stop')) voiceStopPressed()
   else if (target?.closest?.('#voice-headphones')) toggleHeadphones()
+  // The card's Yes: the event itself goes along, so the call can check it was the person's own tap.
+  else if (target?.closest?.('#voice-order-yes')) voiceSession?.confirm?.(event, el('voice-order-for')?.value ?? '')
+  else if (target?.closest?.('#voice-order-no')) voiceSession?.decline?.()
 })
 // Space on the orb itself: a browser focuses the orb when it is clicked, and would then press it with
 // Space - a tap, which can end the call. Space is the interrupt and never ends a call, so on the orb
@@ -4586,8 +4638,10 @@ const voiceOrbIn = (target) => Boolean(target?.closest?.('#voice-orb'))
 document.addEventListener('keydown', (event) => {
   if (!voiceSession) return
   // Esc interrupts a reply in speakers mode (or just after one), and otherwise ends the call.
-  // Space only ever interrupts.
-  if (event?.key === 'Escape') {
+  // Space only ever interrupts. With an order card open, Esc is its No and nothing else.
+  if (event?.key === 'Escape' && voiceSession.orderOpen?.()) {
+    voiceSession.decline?.()
+  } else if (event?.key === 'Escape') {
     if (!(voiceSession.handlesTap ? voiceSession.handlesTap() : voiceSession.interrupt?.())) voiceSession.stop('stopped')
   } else if (event?.key === ' ' && voiceOrbIn(event.target)) {
     event.preventDefault?.()
@@ -4646,7 +4700,50 @@ const VOICE_DOING = {
   connections_status: 'Checking your connections…',
   open_screen: 'Opening that screen…'
 }
+VOICE_DOING.add_task = 'Putting the card up…'
+VOICE_DOING.run_job = 'Putting the card up…'
 const VOICE_DOING_ELSE = 'Looking that up…'
+// Orders by voice (Phase 11): the card's words, what the model is told in a system note, and what the
+// sheet says. The model is never told an order went until the board's answer says it did.
+const VOICE_ORDER_TOOLS = ['add_task', 'run_job']
+const VOICE_ORDER = {
+  taskHeading: 'Send to the team?',
+  taskWhat: 'A task card goes to your team. It shows on the board about a minute after you say yes.',
+  runWhat: 'Starts this job now. It uses one routine run.',
+  orchestrator: 'Let the orchestrator choose',
+  waiting: { status: 'waiting', for: 'the owner', expiresInSeconds: CONFIRM_WINDOW_MS / 1000 },
+  justSent: 'That was just sent, so it is on its way. Nothing more to do.',
+  sentTask: 'The owner said yes. The task card was sent to the team; it shows on the board in about a minute.',
+  sentRun: (name) => `The owner said yes. The job ${name} was started.`,
+  no: 'The owner said no. Nothing was sent.',
+  expired: 'The card ran out after 60 seconds without a yes. Nothing was sent.',
+  replaced: 'That card was replaced by a newer one. Nothing was sent for it.',
+  unclear: "Didn't catch a clear yes - tap Yes.",
+  sending: 'Sending it…',
+  unreachable: 'the board could not be reached.'
+}
+// The orders sent from this device, newest first, for "is it done?": at most ten, kept on the device.
+const VOICE_ORDERS_STORE = 'agent-cockpit-voice-orders'
+const VOICE_ORDERS_KEPT = 10
+function voiceOrdersLog() {
+  let parsed = null
+  try { parsed = JSON.parse(readStore(VOICE_ORDERS_STORE) ?? 'null') } catch (error) { parsed = null }
+  const text = (value) => typeof value === 'string' && value.length <= 200
+  return (Array.isArray(parsed) ? parsed : []).filter((entry) => isRecord(entry) && text(entry.sentAt) && !Number.isNaN(Date.parse(entry.sentAt)) &&
+    ((entry.kind === 'task' && text(entry.title)) || (entry.kind === 'run' && text(entry.slug) && text(entry.name)))).slice(0, VOICE_ORDERS_KEPT)
+}
+// What the board said orders may do on this call (api/_orders.js, ordersView), or off.
+function voiceOrdersFrom(raw) {
+  if (!isRecord(raw) || raw.on !== true) return { on: false }
+  return {
+    on: true,
+    tasks: raw.tasks === true,
+    jobs: Array.isArray(raw.jobs) ? raw.jobs.filter((slug) => typeof slug === 'string').slice(0, 40) : [],
+    key: raw.key === 'public' ? 'public' : 'fire-key',
+    spokenYes: raw.spokenYes === true,
+    jev: raw.jev === true
+  }
+}
 const voiceDoing = (calls) =>
   [...new Set(calls.map((call) => (Object.hasOwn(VOICE_DOING, call.name) ? VOICE_DOING[call.name] : VOICE_DOING_ELSE)))].join('\n')
 const VOICE_OUTBOX_STORE = 'agent-cockpit-voice-outbox'
@@ -4784,7 +4881,10 @@ function openVoice(deps, ui) {
     echoGuard: false, soundStartedAt: null, suspectTurn: false, echoRetryLeft: 1,
     speakersMode: false, micMuted: false, soundPlaying: false, tailTimer: null, restTimer: null,
     replyHadOutput: false, cancelledByUs: false, hearing: { item: null, words: '' }, heardAt: null,
-    soundEndedAt: null, listenPending: null,
+    soundEndedAt: null, listenPending: null, noteIsCut: false,
+    // Orders: what this call may propose, the card waiting for a yes, what was just sent, and each of
+    // the person's turns as it began - when, and whether the mic rested or a reply played in it.
+    orders: { on: false }, card: null, sent: [], utterances: new Map(), hearingNow: null,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
   const show = (state, words) => {
@@ -4838,6 +4938,7 @@ function openVoice(deps, ui) {
     session.heardAt = null
     session.soundStartedAt ??= deps.now()
     session.soundPlaying = true
+    if (session.hearingNow) session.hearingNow.soundDuring = true
     session.level?.wake()
     if (!session.speakersMode) return
     restMic()
@@ -4939,6 +5040,7 @@ function openVoice(deps, ui) {
     deps.clearTimeout(session.restTimer)
     deps.fish?.stop(session)
     session.level?.stop()
+    closeCard(null)
     try { session.channel?.close() } catch (error) { /* already closed */ }
     try { session.pc?.close() } catch (error) { /* already closed */ }
     for (const track of session.stream?.getTracks?.() ?? []) track.stop()
@@ -4964,7 +5066,7 @@ function openVoice(deps, ui) {
     for (const call of calls) {
       let args = {}
       try { args = JSON.parse(call.arguments || '{}') } catch (error) { args = {} }
-      const answer = voiceToolAnswer(call.name, args, deps.view())
+      const answer = VOICE_ORDER_TOOLS.includes(call.name) ? proposeOrder(call.name, args) : voiceToolAnswer(call.name, args, deps.view())
       if (answer.opened) deps.openScreen(answer.opened)
       send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(answer) } })
     }
@@ -5017,6 +5119,163 @@ function openVoice(deps, ui) {
     if (typeof itemId === 'string' && itemId) send({ type: 'conversation.item.delete', item_id: itemId })
   }
 
+  // --- orders by voice ---
+  // The model proposes; the card waits; only the owner's trusted tap, or their own spoken yes under
+  // spokenYesCounts, sends it, through the board's own fire path. The model hears the outcome in a
+  // system note, and only then is asked to say it.
+  const keyReady = () => session.orders.key === 'public' || deps.fireKeyHeld?.() === true
+  const orderKey = (order) => (order.kind === 'task' ? `task:${order.title}` : `run:${order.slug}`)
+  const tellModel = (text) => send({ type: 'conversation.item.create', item: { type: 'message', role: 'system', content: [{ type: 'input_text', text }] } })
+  const showOutcome = (words) => {
+    session.noteIsCut = false
+    ui.note?.(words)
+  }
+
+  function closeCard(said) {
+    const card = session.card
+    if (!card) return
+    deps.clearTimeout(card.expiry)
+    deps.clearTimeout(card.tick)
+    session.card = null
+    ui.order?.(null)
+    if (said && !session.stopped) tellModel(said)
+  }
+
+  function cardWords(order) {
+    const view = deps.view()
+    const names = isRecord(view?.names) ? view.names : {}
+    const agents = Array.isArray(view?.data?.agents) ? view.data.agents : []
+    const owners = order.kind !== 'task' ? [] : [
+      { value: '', label: VOICE_ORDER.orchestrator },
+      ...agents
+        .filter((agent) => typeof agent?.slug === 'string' && agent.state !== 'not-in-use')
+        .map((agent) => ({ value: agent.slug, label: Object.hasOwn(names, agent.slug) && names[agent.slug] ? `${names[agent.slug]} (${agent.slug})` : agent.slug }))
+    ]
+    return {
+      heading: order.kind === 'task' ? VOICE_ORDER.taskHeading : `Run ${order.name}?`,
+      what: order.kind === 'task' ? VOICE_ORDER.taskWhat : VOICE_ORDER.runWhat,
+      text: order.kind === 'task' ? order.title : '',
+      details: order.details ?? '',
+      owners,
+      owner: '',
+      pick: '',
+      // "Or say yes" only where a spoken yes can count: allowed on this board, and no key to type.
+      sayYes: session.orders.spokenYes === true && keyReady()
+    }
+  }
+
+  function openCard(order) {
+    closeCard(VOICE_ORDER.replaced)
+    const card = { order, openedAt: deps.now(), busy: false, left: CONFIRM_WINDOW_MS / 1000, words: cardWords(order), expiry: null, tick: null }
+    session.card = card
+    ui.order?.(card.words)
+    ui.orderTime?.(card.left)
+    const countdown = () => {
+      card.left -= 1
+      if (session.card !== card || card.left <= 0) return
+      ui.orderTime?.(card.left)
+      card.tick = deps.setTimeout(countdown, 1000)
+    }
+    card.tick = deps.setTimeout(countdown, 1000)
+    card.expiry = deps.setTimeout(() => {
+      if (session.card !== card || card.busy) return
+      closeCard(VOICE_ORDER.expired)
+      session.replyRetries = 1
+      askForReply()
+    }, CONFIRM_WINDOW_MS)
+  }
+
+  // A proposal: checked first (orderFrom), then shown. The model is told it waits for the owner.
+  function proposeOrder(name, args) {
+    const made = orderFrom(name, args, { orders: session.orders, data: deps.view()?.data })
+    if (made.error) return { error: made.error }
+    const key = orderKey(made.order)
+    if (session.sent.some((one) => one.key === key && deps.now() - one.at < DOUBLE_SEND_MS)) return { error: VOICE_ORDER.justSent }
+    openCard(made.order)
+    return { ...VOICE_ORDER.waiting }
+  }
+
+  async function sendOrder(card, owner, how) {
+    // Both callers check card.busy first, and this sets it before anything waits: one send per card.
+    if (session.stopped || session.card !== card) return false
+    card.busy = true
+    deps.clearTimeout(card.expiry)
+    deps.clearTimeout(card.tick)
+    ui.orderBusy?.(true)
+    ui.orderNote?.(VOICE_ORDER.sending)
+    const order = card.order
+    const forAgent = order.kind === 'task' && owner && card.words.owners.some((one) => one.value === owner) ? owner : ''
+    const body = order.kind === 'task'
+      ? { action: 'task', title: order.title, ...(order.details ? { details: order.details } : {}), ...(forAgent ? { for: forAgent } : {}) }
+      : { workflow: order.slug, action: 'run' }
+    const sent = { key: orderKey(order), at: deps.now() }
+    session.sent.push(sent)
+    let result
+    try {
+      result = await deps.dispatch(body, { ask: how === 'tap' })
+    } catch (error) {
+      result = { ok: false, status: 0, payload: { error: VOICE_ORDER.unreachable } }
+    }
+    if (session.stopped) return true
+    closeCard(null)
+    if (result?.ok) {
+      deps.saveOrder?.({
+        kind: order.kind,
+        ...(order.kind === 'task' ? { title: order.title } : { slug: order.slug, name: order.name }),
+        sentAt: new Date(sent.at).toISOString()
+      })
+      showOutcome(order.kind === 'task' ? `Sent: "${order.title}". It shows on the board in about a minute.` : `Started: ${order.name}.`)
+      tellModel(order.kind === 'task' ? VOICE_ORDER.sentTask : VOICE_ORDER.sentRun(order.name))
+    } else {
+      // Not sent, so not "just sent" either: the same order may be proposed again at once.
+      session.sent = session.sent.filter((one) => one !== sent)
+      const said = typeof result?.payload?.error === 'string' && result.payload.error.trim() ? result.payload.error.trim().slice(0, 300) : `the board answered ${result?.status ?? 'nothing'}.`
+      showOutcome(`Not sent: ${said}`)
+      tellModel(`Not sent: ${said} Do not say it was sent.`)
+    }
+    session.replyRetries = 1
+    askForReply()
+    return true
+  }
+
+  // The card's Yes, tapped: only a real, trusted click (or Enter or Space) by the person - confirmsYes.
+  function confirm(event, owner) {
+    const card = session.card
+    if (session.stopped || !card || card.busy || !confirmsYes(event)) return false
+    sendOrder(card, typeof owner === 'string' ? owner : '', 'tap')
+    return true
+  }
+
+  // The card's No, or Esc.
+  function decline() {
+    if (!session.card || session.card.busy) return false
+    closeCard(VOICE_ORDER.no)
+    session.replyRetries = 1
+    askForReply()
+    return true
+  }
+
+  // A turn's words are in: was it the owner answering the card? Only their own transcript, judged by
+  // spokenYesCounts against how that turn began. A "no" turn gets the server's own reply, so the model
+  // is only told; a yes is told once the board answers.
+  function heardForCard(itemId, transcript) {
+    const record = typeof itemId === 'string' ? session.utterances.get(itemId) : undefined
+    if (record) session.utterances.delete(itemId)
+    const card = session.card
+    if (!record || !card || card.busy || session.orders.spokenYes !== true) return
+    const verdict = spokenYesCounts({
+      utterance: { startedAt: record.startedAt, transcript, suspect: record.suspect },
+      card: { openedAt: card.openedAt, open: true },
+      mic: { mutedDuring: record.mutedDuring },
+      sound: { playingDuring: record.soundDuring, endedAt: record.soundEndedAt },
+      keyReady: keyReady(),
+      now: deps.now()
+    })
+    if (verdict === 'yes') sendOrder(card, card.words.owner, 'spoken')
+    else if (verdict === 'no') closeCard(VOICE_ORDER.no)
+    else if (verdict === 'unclear') ui.orderNote?.(VOICE_ORDER.unclear)
+  }
+
   // The person started talking: over a reply, that is a new turn. OpenAI cancels the reply and cuts
   // its sound by itself; the page just listens.
   function bargeIn() {
@@ -5039,6 +5298,15 @@ function openVoice(deps, ui) {
         // and until they do it does not count as the person talking for the idle hang-up.
         session.suspectTurn = session.echoGuard && session.soundStartedAt !== null &&
           deps.now() - session.soundStartedAt < ECHO_WINDOW_MS
+        // How this turn began, for a card it may answer: kept by its item id until its words are in.
+        session.hearingNow = {
+          startedAt: deps.now(), mutedDuring: session.micMuted, soundDuring: session.soundPlaying,
+          soundEndedAt: session.soundEndedAt, suspect: session.suspectTurn
+        }
+        if (typeof event.item_id === 'string') {
+          session.utterances.set(event.item_id, session.hearingNow)
+          if (session.utterances.size > 20) session.utterances.delete(session.utterances.keys().next().value)
+        }
         if (!session.suspectTurn) armIdle()
         bargeIn()
         ui.you('')
@@ -5046,6 +5314,7 @@ function openVoice(deps, ui) {
         break
       case 'input_audio_buffer.speech_stopped':
         session.userSpeaking = false
+        session.hearingNow = null
         session.heardAt = deps.now()
         // A turn ending with the tool reply owed: the outputs went before it, so the response OpenAI
         // starts for it already has them.
@@ -5065,6 +5334,7 @@ function openVoice(deps, ui) {
       case 'conversation.item.input_audio_transcription.completed': {
         session.tally = addUsage(session.tally, event.usage, 'captions')
         saveTally()
+        heardForCard(event.item_id, event.transcript)
         const suspect = session.suspectTurn
         session.suspectTurn = false
         const words = typeof event.transcript === 'string' ? event.transcript.split(/\s+/).filter(Boolean).length : 0
@@ -5088,7 +5358,11 @@ function openVoice(deps, ui) {
         session.replyTimer = null
         session.replyTurn = session.turns.current
         session.said = ''
-        ui.note?.('')
+        // The cut-short line belongs to the last reply; an order's outcome stays until the next one.
+        if (session.noteIsCut) {
+          ui.note?.('')
+          session.noteIsCut = false
+        }
         fish()?.replyStarted(session)
         break
       case 'response.output_audio_transcript.delta':
@@ -5160,6 +5434,7 @@ function openVoice(deps, ui) {
         }
         if (event.response?.status === 'incomplete' && event.response?.status_details?.reason === 'max_output_tokens') {
           ui.note?.(VOICE_CUT_SHORT)
+          session.noteIsCut = true
         }
         if (unexplained) {
           show('listening', VOICE_NO_REPLY)
@@ -5246,6 +5521,7 @@ function openVoice(deps, ui) {
     // The echo guard is for a computer in talk-over mode (headphones); in speakers mode the microphone
     // rests while it talks, so there is no echo to guard - and the two never act on the same turn.
     session.echoGuard = answer.echoGuard === true && deps.finePointer === true && !session.speakersMode
+    session.orders = voiceOrdersFrom(answer.orders)
     if (typeof answer.name === 'string' && answer.name) ui.who(answer.name)
     if (!session.captions) ui.you('Captions are off on this board.')
     showCost()
@@ -5286,7 +5562,7 @@ function openVoice(deps, ui) {
   }
 
   connect().catch(fail)
-  return { stop: (reason) => end(reason), interrupt, handlesTap, setSpeakersMode, session }
+  return { stop: (reason) => end(reason), interrupt, handlesTap, setSpeakersMode, confirm, decline, orderOpen: () => Boolean(session.card), session }
 }
 
 /* ---------- Talk to the board: Fish's voice ----------

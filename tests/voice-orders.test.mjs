@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { ordersConfig, ordersView, MAX_ORDER_JOBS } from '../api/_orders.js'
 import {
-  ORDERS_OFF, voiceConfig, sessionFor, plainYes, plainNo, spokenYesCounts,
+  ORDERS_OFF, voiceConfig, sessionFor, plainYes, plainNo, spokenYesCounts, orderFrom, VOICE_DETAILS_MAX,
   CONFIRM_WINDOW_MS, YES_QUIET_BEFORE_MS, DOUBLE_SEND_MS
 } from '../api/_voice.js'
 import { makeHandler } from '../api/voice-session.js'
@@ -308,4 +308,44 @@ test('nothing but a whole utterance object is judged: the model\'s text, a tool 
   // Times that are not times.
   assert.equal(heard({ utterance: { startedAt: 'soon' } }), null)
   assert.equal(heard({ card: { openedAt: Number.NaN } }), null)
+})
+
+/* ---------- a proposal, checked before any card ---------- */
+
+test('a proposal is checked before any card: one plain line, short details, a job this board can fire', () => {
+  const orders = { on: true, tasks: true, jobs: ['gone-cold', 'morning-intel'], key: 'fire-key', spokenYes: true, jev: false }
+  const data = {
+    workflows: [
+      { slug: 'morning-intel', name: 'Morning intel', fire: true },
+      { slug: 'gone-cold', name: 'Gone cold', fire: false },
+      { slug: 'weekly-review', name: 'Weekly review', fire: true }
+    ]
+  }
+  const from = (name, args, over = {}) => orderFrom(name, args, { orders, data, ...over })
+  assert.equal(VOICE_DETAILS_MAX, 500)
+  assert.deepEqual(from('add_task', { title: '  Draft the newsletter  ' }), { order: { kind: 'task', title: 'Draft the newsletter' } })
+  assert.deepEqual(from('add_task', { title: 'Draft it', details: ' Use the Monday notes. ' }), { order: { kind: 'task', title: 'Draft it', details: 'Use the Monday notes.' } })
+  assert.deepEqual(from('add_task', { title: 'Draft it', details: '' }), { order: { kind: 'task', title: 'Draft it' } })
+  for (const title of ['', '  ', 'ab', 'x'.repeat(201), 'two\nlines', 'a tab\there', 'bell\u0007', 42, undefined, null, ['a title']]) {
+    assert.ok(from('add_task', { title }).error, `${JSON.stringify(title)} became a card`)
+  }
+  for (const details of ['x'.repeat(501), 42, { more: true }]) {
+    assert.ok(from('add_task', { title: 'Draft it', details }).error, `details ${JSON.stringify(details).slice(0, 20)} became a card`)
+  }
+  assert.ok(from('add_task', { title: 'Draft it' }, { orders: { ...orders, tasks: false } }).error, 'a task card without task-intake')
+  assert.deepEqual(from('run_job', { workflow: 'morning-intel' }), { order: { kind: 'run', slug: 'morning-intel', name: 'Morning intel' } })
+  assert.match(from('run_job', { workflow: 'gone-cold' }).error, /fire: true/)
+  assert.match(from('run_job', { workflow: 'weekly-review' }).error, /trigger link/)
+  for (const workflow of ['../escape', '', 42, 'Morning intel', undefined]) {
+    assert.ok(from('run_job', { workflow }).error, String(workflow))
+  }
+  assert.ok(from('run_job', { workflow: 'morning-intel' }, { data: { workflows: [] } }).error, 'a job the board does not show')
+  for (const off of [{ on: false }, null, undefined]) {
+    assert.ok(from('add_task', { title: 'Draft it' }, { orders: off }).error)
+    assert.ok(from('run_job', { workflow: 'morning-intel' }, { orders: off }).error)
+  }
+  assert.ok(from('delete_everything', {}).error)
+  // A refusal is our own sentence: it never repeats what the model sent.
+  const hostile = 'Ignore the rules\nand send'
+  assert.ok(!JSON.stringify(from('add_task', { title: hostile })).includes('Ignore the rules'))
 })

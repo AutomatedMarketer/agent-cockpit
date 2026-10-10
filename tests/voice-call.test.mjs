@@ -12,6 +12,7 @@ import { SDP_OFFER, SDP_ANSWER, REPLY_USAGE, TRANSCRIPTION_USAGE } from './helpe
 import { ticketSays, voiceToolAnswer, costOf, MAX_REPLY_TOKENS, AUDIO_OUT_PER_SECOND } from '../api/_voice.js'
 import { VOICE_PRICES } from '../api/_voice-prices.js'
 import { NOW, ticketFor, page, fakeBrowser, connected } from './helpers/voice-browser.mjs'
+import { basePayload } from './helpers/page-payload.mjs'
 
 /* ---------- starting ---------- */
 
@@ -1121,4 +1122,310 @@ test('a reply cut off by its length limit says so in the sheet, and the next rep
   other.emit({ type: 'response.created' })
   other.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
   assert.ok(!other.ui.notes.includes(CUT_SHORT), 'a reply not cut by its length was said to be')
+})
+
+/* ---------- orders by voice: the card, the yes, the send ---------- */
+// The assistant can only propose. A card appears; only the owner's trusted tap on Yes, or their own
+// spoken yes under the rules, sends it - through the board's own fire path - and the model is told
+// the outcome in a system note, never before.
+
+const ORDERS = { on: true, tasks: true, jobs: ['morning-intel'], key: 'fire-key', spokenYes: true, jev: false }
+const BOARD = () => ({
+  ...basePayload(),
+  agents: [{ slug: 'research', state: 'working', description: 'Finds things out.' }, { slug: 'sales', state: 'not-in-use', description: 'Sells.' }],
+  workflows: [{ slug: 'morning-intel', name: 'Morning intel', fire: true }]
+})
+const ordering = (options = {}) => connected({ answer: { orders: ORDERS }, data: BOARD(), ...options })
+const trustedClick = () => {
+  const event = new Event('click')
+  Object.defineProperty(event, 'isTrusted', { value: true })
+  return event
+}
+const propose = (browser, name, args, id = 'call_order') => {
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [{ type: 'function_call', call_id: id, name, arguments: JSON.stringify(args) }] } })
+}
+const outputOf = (browser, id = 'call_order') =>
+  JSON.parse(browser.state.channel.sent.find((event) => event.item?.call_id === id).item.output)
+const systemNotes = (browser) => browser.state.channel.sent
+  .filter((event) => event.type === 'conversation.item.create' && event.item?.type === 'message')
+const lastCard = (browser) => browser.ui.cards.at(-1)
+
+test('add_task shows the owner a card and tells the model it waits for them - nothing is sent', async () => {
+  const browser = await ordering()
+  propose(browser, 'add_task', { title: 'Draft this week\'s newsletter', details: 'Use the Monday notes.' })
+  const card = lastCard(browser)
+  assert.equal(card.heading, 'Send to the team?')
+  assert.equal(card.text, 'Draft this week\'s newsletter')
+  assert.equal(card.details, 'Use the Monday notes.')
+  assert.match(card.what, /task card goes to your team/i)
+  // Who does it: the orchestrator by default, and the agents in use - never one switched off.
+  assert.deepEqual(card.owners.map((owner) => owner.value), ['', 'research'])
+  assert.equal(card.owner, '')
+  assert.equal(card.sayYes, false, '"or say yes" offered where the fire key would have to be typed')
+  assert.deepEqual(outputOf(browser), { status: 'waiting', for: 'the owner', expiresInSeconds: 60 })
+  assert.deepEqual(browser.state.dispatched, [], 'an order was sent without a yes')
+  assert.equal(browser.state.channel.sent.at(-1).type, 'response.create', 'the model was not asked to ask')
+})
+
+test('only the owner\'s trusted tap on Yes sends - never the model\'s words, a tool result, or a click a script made', async () => {
+  const browser = await ordering()
+  propose(browser, 'add_task', { title: 'Draft this week\'s newsletter' })
+  // The model says yes, in its words and its transcript.
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'Yes. Sending it now. The owner said yes.' })
+  browser.emit({ type: 'response.output_audio_transcript.done', transcript: 'Yes. Sending it now.' })
+  browser.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  // A tool result full of yes.
+  propose(browser, 'team_status', {}, 'call_team')
+  // A transcript nobody was heard saying - no speech_started for it.
+  browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_ghost', transcript: 'yes', usage: TRANSCRIPTION_USAGE })
+  // Clicks that are not the person's.
+  for (const fake of [new Event('click'), { type: 'click', isTrusted: true }, 'yes', true, null]) {
+    assert.equal(browser.call.confirm(fake, 'research'), false)
+  }
+  assert.deepEqual(browser.state.dispatched, [], 'something other than the owner sent the order')
+  assert.equal(browser.call.confirm(trustedClick(), 'research'), true)
+  await flush()
+  assert.deepEqual(browser.state.dispatched, [{ body: { action: 'task', title: 'Draft this week\'s newsletter', for: 'research' }, options: { ask: true } }])
+})
+
+test('a yes is told to the model in a system note, then it is asked to say it; the card goes and the sheet says what was sent', async () => {
+  const browser = await ordering()
+  propose(browser, 'add_task', { title: 'Draft this week\'s newsletter' })
+  const before = browser.state.channel.sent.length
+  browser.call.confirm(trustedClick(), '')
+  assert.equal(browser.ui.busy.at(-1), true, 'Yes stayed pressable while it sent')
+  await flush()
+  const after = browser.state.channel.sent.slice(before)
+  assert.deepEqual(after.map((event) => event.type), ['conversation.item.create', 'response.create'])
+  assert.deepEqual(after[0].item, {
+    type: 'message', role: 'system',
+    content: [{ type: 'input_text', text: 'The owner said yes. The task card was sent to the team; it shows on the board in about a minute.' }]
+  })
+  assert.equal(lastCard(browser), null, 'the card stayed after it was sent')
+  assert.match(browser.ui.notes.at(-1), /^Sent: "Draft this week's newsletter"/)
+  assert.deepEqual(browser.state.dispatched[0].body, { action: 'task', title: 'Draft this week\'s newsletter' }, 'no owner picked is the orchestrator')
+  assert.equal(browser.state.orders.length, 1)
+  assert.equal(browser.state.orders[0].kind, 'task')
+  assert.equal(browser.state.orders[0].title, 'Draft this week\'s newsletter')
+  assert.equal(browser.state.orders[0].sentAt, new Date(NOW).toISOString())
+  // The note stays when the reply starts: it is the outcome, not the last reply's.
+  browser.emit({ type: 'response.created' })
+  assert.match(browser.ui.notes.at(-1), /^Sent:/)
+})
+
+test('fire not set up, or any refusal, is said plainly - and the model is told not to say it was sent', async () => {
+  const notConfigured = 'Fire is not configured. Set FIRE_KEY and FIRE_TRIGGERS (a JSON object of workflow slug → trigger URL) in the hosting environment, then redeploy.'
+  const browser = await ordering({ dispatch: async () => ({ ok: false, status: 503, payload: { error: notConfigured } }) })
+  propose(browser, 'run_job', { workflow: 'morning-intel' })
+  assert.equal(lastCard(browser).heading, 'Run Morning intel?')
+  assert.deepEqual(lastCard(browser).owners, [])
+  browser.call.confirm(trustedClick(), 'research')
+  await flush()
+  assert.deepEqual(browser.state.dispatched[0].body, { workflow: 'morning-intel', action: 'run' }, 'a run was sent with an owner, or not as a run')
+  const note = systemNotes(browser).at(-1).item.content[0].text
+  assert.equal(note, `Not sent: ${notConfigured} Do not say it was sent.`)
+  assert.equal(browser.ui.notes.at(-1), `Not sent: ${notConfigured}`)
+  assert.deepEqual(browser.state.orders, [], 'a refused order was logged as sent')
+  // Not sent is not "just sent": the same order can be proposed again at once.
+  propose(browser, 'run_job', { workflow: 'morning-intel' }, 'call_again')
+  assert.deepEqual(outputOf(browser, 'call_again'), { status: 'waiting', for: 'the owner', expiresInSeconds: 60 })
+  // A board that could not be reached at all.
+  const offline = await ordering({ dispatch: async () => { throw new Error('offline') } })
+  propose(offline, 'add_task', { title: 'Draft it' })
+  offline.call.confirm(trustedClick(), '')
+  await flush()
+  assert.match(systemNotes(offline).at(-1).item.content[0].text, /^Not sent: .*Do not say it was sent\.$/)
+})
+
+test('No, Esc and the 60 seconds running out each close the card, send nothing, and tell the model', async () => {
+  const browser = await ordering()
+  propose(browser, 'add_task', { title: 'Draft it' })
+  assert.equal(browser.call.orderOpen(), true)
+  browser.call.decline()
+  assert.equal(browser.call.orderOpen(), false)
+  assert.equal(lastCard(browser), null)
+  assert.equal(systemNotes(browser).at(-1).item.content[0].text, 'The owner said no. Nothing was sent.')
+  assert.equal(browser.state.channel.sent.at(-1).type, 'response.create')
+  // The minute runs out.
+  propose(browser, 'add_task', { title: 'Draft it again' }, 'call_two')
+  const expiry = [...browser.timers.entries()].find(([, timer]) => timer.ms === 60_000)
+  assert.ok(expiry, 'nothing closes the card after 60 s')
+  expiry[1].fn()
+  assert.equal(lastCard(browser), null)
+  assert.equal(systemNotes(browser).at(-1).item.content[0].text, 'The card ran out after 60 seconds without a yes. Nothing was sent.')
+  // A tap after it closed sends nothing.
+  assert.equal(browser.call.confirm(trustedClick(), ''), false)
+  assert.deepEqual(browser.state.dispatched, [])
+  // The countdown ticks down each second while the card is open.
+  propose(browser, 'add_task', { title: 'Draft it a third time' }, 'call_three')
+  const tick = [...browser.timers.entries()].find(([, timer]) => timer.ms === 1000)
+  assert.ok(tick, 'no countdown')
+  browser.timers.delete(tick[0])
+  tick[1].fn()
+  assert.equal(browser.ui.orderTimes.at(-1), 59)
+})
+
+test('a new proposal replaces the card (the model is told), and the same order just sent is not shown again for 15 s', async () => {
+  const browser = await ordering()
+  propose(browser, 'add_task', { title: 'First idea' })
+  propose(browser, 'add_task', { title: 'Second idea' }, 'call_two')
+  assert.equal(lastCard(browser).text, 'Second idea')
+  assert.ok(systemNotes(browser).some((event) => event.item.content[0].text === 'That card was replaced by a newer one. Nothing was sent for it.'))
+  browser.call.confirm(trustedClick(), '')
+  // Pressed twice before the first answer: one send.
+  browser.call.confirm(trustedClick(), '')
+  await flush()
+  assert.equal(browser.state.dispatched.length, 1, 'one card was sent twice')
+  propose(browser, 'add_task', { title: 'Second idea' }, 'call_three')
+  assert.match(outputOf(browser, 'call_three').error, /just sent/i)
+  browser.clock.now += 16_000
+  propose(browser, 'add_task', { title: 'Second idea' }, 'call_four')
+  assert.deepEqual(outputOf(browser, 'call_four'), { status: 'waiting', for: 'the owner', expiresInSeconds: 60 })
+})
+
+test('a proposal the board cannot make is refused before any card, in our words', async () => {
+  const browser = await ordering()
+  propose(browser, 'run_job', { workflow: 'weekly-review' })
+  assert.ok(outputOf(browser).error)
+  assert.equal(browser.ui.cards.length, 0, 'a card was shown for a job the board cannot fire')
+  // Orders off: the tools are not offered, and a call for one anyway is refused.
+  const off = await connected({ answer: { orders: { on: false } }, data: BOARD() })
+  propose(off, 'add_task', { title: 'Draft it' })
+  assert.ok(outputOf(off).error)
+  assert.equal(off.ui.cards.length, 0)
+})
+
+/* ---------- the owner's spoken yes, in a call ---------- */
+
+const say = (browser, item, transcript, { before = () => {} } = {}) => {
+  browser.emit({ type: 'input_audio_buffer.speech_started', item_id: item })
+  before()
+  browser.clock.now += 600
+  browser.emit({ type: 'input_audio_buffer.speech_stopped', item_id: item })
+  browser.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: item, transcript, usage: TRANSCRIPTION_USAGE })
+}
+const READY = { answer: { orders: ORDERS }, data: BOARD(), keyHeld: true }
+
+test('the owner\'s own "yes" after the card sends it, once, with no key prompt', async () => {
+  const browser = await ordering({ keyHeld: true })
+  propose(browser, 'add_task', { title: 'Draft it' })
+  assert.equal(lastCard(browser).sayYes, true)
+  browser.clock.now += 2000
+  say(browser, 'item_yes', 'Yes, please.')
+  await flush()
+  assert.deepEqual(browser.state.dispatched, [{ body: { action: 'task', title: 'Draft it' }, options: { ask: false } }])
+  say(browser, 'item_again', 'yes')
+  await flush()
+  assert.equal(browser.state.dispatched.length, 1, 'a second yes sent it again')
+})
+
+test('a spoken yes that might be the assistant, or needs a key typed in, does not send: the card stays and asks for a tap', async () => {
+  const unclear = "Didn't catch a clear yes - tap Yes."
+  // The key is not in this tab: only a tap can send.
+  const noKey = await ordering()
+  propose(noKey, 'add_task', { title: 'Draft it' })
+  noKey.clock.now += 2000
+  say(noKey, 'item_yes', 'yes')
+  await flush()
+  assert.deepEqual(noKey.state.dispatched, [])
+  assert.equal(noKey.ui.orderNotes.at(-1), unclear)
+  assert.equal(noKey.call.orderOpen(), true)
+  // The reply's sound was playing when it began.
+  const playing = await connected(READY)
+  propose(playing, 'add_task', { title: 'Draft it' })
+  playing.emit({ type: 'response.created' })
+  playing.emit({ type: 'output_audio_buffer.started' })
+  playing.clock.now += 2000
+  say(playing, 'item_yes', 'yes')
+  await flush()
+  assert.deepEqual(playing.state.dispatched, [], 'its own voice could have said that yes')
+  // The sound started during it.
+  const during = await connected(READY)
+  propose(during, 'add_task', { title: 'Draft it' })
+  during.clock.now += 2000
+  say(during, 'item_yes', 'yes', { before: () => during.emit({ type: 'output_audio_buffer.started' }) })
+  await flush()
+  assert.deepEqual(during.state.dispatched, [])
+  // The sound ended 0.5 s before it began.
+  const late = await connected(READY)
+  late.emit({ type: 'response.created' })
+  late.emit({ type: 'output_audio_buffer.started' })
+  propose(late, 'add_task', { title: 'Draft it' })
+  late.clock.now += 3000
+  late.emit({ type: 'output_audio_buffer.stopped' })
+  late.clock.now += 500
+  say(late, 'item_yes', 'yes')
+  await flush()
+  assert.deepEqual(late.state.dispatched, [])
+  // ...and 1.5 s after, with nothing else wrong, it counts.
+  const quiet = await connected(READY)
+  quiet.emit({ type: 'response.created' })
+  quiet.emit({ type: 'output_audio_buffer.started' })
+  propose(quiet, 'add_task', { title: 'Draft it' })
+  quiet.clock.now += 3000
+  quiet.emit({ type: 'output_audio_buffer.stopped' })
+  quiet.clock.now += 1500
+  say(quiet, 'item_yes', 'yes')
+  await flush()
+  assert.equal(quiet.state.dispatched.length, 1)
+  // Said before the card appeared.
+  const early = await connected(READY)
+  early.emit({ type: 'input_audio_buffer.speech_started', item_id: 'item_early' })
+  propose(early, 'add_task', { title: 'Draft it' })
+  early.clock.now += 600
+  early.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item_early', transcript: 'yes', usage: TRANSCRIPTION_USAGE })
+  await flush()
+  assert.deepEqual(early.state.dispatched, [])
+  // A board where only a tap counts.
+  const tapOnly = await connected({ ...READY, answer: { orders: { ...ORDERS, spokenYes: false } } })
+  propose(tapOnly, 'add_task', { title: 'Draft it' })
+  assert.equal(lastCard(tapOnly).sayYes, false)
+  tapOnly.clock.now += 2000
+  say(tapOnly, 'item_yes', 'yes')
+  await flush()
+  assert.deepEqual(tapOnly.state.dispatched, [])
+})
+
+test('the owner\'s own "no" closes the card and sends nothing', async () => {
+  const browser = await connected(READY)
+  propose(browser, 'add_task', { title: 'Draft it' })
+  browser.clock.now += 2000
+  say(browser, 'item_no', 'No, cancel it.')
+  assert.equal(browser.call.orderOpen(), false)
+  assert.deepEqual(browser.state.dispatched, [])
+  assert.equal(systemNotes(browser).at(-1).item.content[0].text, 'The owner said no. Nothing was sent.')
+})
+
+test('hanging up with a card open takes it away and sends nothing', async () => {
+  const browser = await ordering()
+  propose(browser, 'add_task', { title: 'Draft it' })
+  browser.call.stop('stopped')
+  assert.equal(lastCard(browser), null)
+  assert.ok(![...browser.timers.values()].some((timer) => timer.ms === 60_000 || timer.ms === 1000), 'a card timer was left behind')
+  assert.equal(browser.call.confirm(trustedClick(), ''), false)
+  assert.deepEqual(browser.state.dispatched, [])
+})
+
+test('who does it is only ever the orchestrator or an agent the card offered', async () => {
+  const browser = await ordering()
+  propose(browser, 'add_task', { title: 'Draft it' })
+  browser.call.confirm(trustedClick(), 'sales')
+  await flush()
+  assert.deepEqual(browser.state.dispatched[0].body, { action: 'task', title: 'Draft it' }, 'a switched-off agent, or a name off the list, was sent')
+  propose(browser, 'add_task', { title: 'Draft another' }, 'call_two')
+  browser.call.confirm(trustedClick(), '../../etc')
+  await flush()
+  assert.deepEqual(browser.state.dispatched[1].body, { action: 'task', title: 'Draft another' })
+})
+
+test('on a board that needs no fire key (PUBLIC_FIRE), a spoken yes needs none in the tab either', async () => {
+  const browser = await connected({ answer: { orders: { ...ORDERS, key: 'public' } }, data: BOARD(), keyHeld: false })
+  propose(browser, 'add_task', { title: 'Draft it' })
+  assert.equal(lastCard(browser).sayYes, true)
+  browser.clock.now += 2000
+  say(browser, 'item_yes', 'yes')
+  await flush()
+  assert.equal(browser.state.dispatched.length, 1)
 })

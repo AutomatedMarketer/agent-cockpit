@@ -582,3 +582,33 @@ test('the orb moves only by transform: it breathes, ripples, turns and swells wi
     assert.ok(!('width' in declared(rule)) && !('height' in declared(rule)), `${rule.selector} resizes the orb, which moves the page around it`)
   }
 })
+
+test('with an order card open, Esc is its No and never a hang-up; Yes hands the call the tap itself and who does it', async () => {
+  const session = {
+    stopped: [], declined: 0, confirmed: [], interrupted: 0, open: true,
+    orderOpen() { return this.open },
+    decline() { this.declined += 1; this.open = false; return true },
+    confirm(event, owner) { this.confirmed.push({ event, owner }); return true },
+    interrupt() { this.interrupted += 1; return false },
+    stop(reason) { this.stopped.push(reason) }
+  }
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { after: 'voiceSession = given.session', given: { session } })
+  const fire = (type, event) => { for (const listener of page.documentListeners.filter((entry) => entry.type === type)) listener.handler(event) }
+  fire('keydown', { key: 'Escape' })
+  assert.equal(session.declined, 1)
+  assert.deepEqual(session.stopped, [], 'Esc on an open card ended the call')
+  assert.equal(session.interrupted, 0, 'Esc on an open card did something besides No')
+  // With the card gone, Esc is what it always was.
+  fire('keydown', { key: 'Escape' })
+  assert.deepEqual(session.stopped, ['stopped'])
+  const yes = { closest: (selector) => (selector === '#voice-order-yes' ? yes : null) }
+  const no = { closest: (selector) => (selector === '#voice-order-no' ? no : null) }
+  page.node('voice-order-for').value = 'research'
+  const tap = { target: yes, isTrusted: true }
+  fire('click', tap)
+  assert.equal(session.confirmed.length, 1)
+  assert.equal(session.confirmed[0].event, tap, 'the call was not handed the tap itself to check')
+  assert.equal(session.confirmed[0].owner, 'research')
+  fire('click', { target: no })
+  assert.equal(session.declined, 2)
+})

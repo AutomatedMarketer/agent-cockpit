@@ -961,6 +961,45 @@ export function confirmsYes(event) {
   return event.type === 'keydown' && (event.key === 'Enter' || event.key === ' ')
 }
 
+// --- an order the assistant proposes, checked before any card ---
+// The rules /api/fire holds a task card to - a title of 3 to 200 characters on one plain line - and a
+// shorter cap on details for a spoken order; a job only when this board can fire it: its slug is one
+// with a trigger link (orders.jobs) and its file says fire: true. Fire checks all of it again. A
+// refusal is our own sentence and never repeats what the model sent.
+export const VOICE_DETAILS_MAX = 500
+const ORDER_TITLE = { least: 3, most: 200 }
+const ORDER_CONTROL = /[\u0000-\u001f\u007f]/
+
+export function orderFrom(name, args, { orders, data } = {}) {
+  if (orders?.on !== true) return { error: 'Orders are off on this board, so nothing can be sent.' }
+  if (name === 'add_task') {
+    if (orders.tasks !== true) return { error: 'Task cards are not set up on this board: there is no task-intake routine.' }
+    const title = typeof args?.title === 'string' ? args.title.trim() : ''
+    if (title.length < ORDER_TITLE.least || title.length > ORDER_TITLE.most || ORDER_CONTROL.test(title)) {
+      return { error: 'A task needs a title of 3 to 200 characters on one plain line, so ask for a shorter one.' }
+    }
+    const raw = args?.details
+    if (raw !== undefined && raw !== null && typeof raw !== 'string') return { error: 'The details of a task must be words.' }
+    const details = typeof raw === 'string' ? raw.trim() : ''
+    if (details.length > VOICE_DETAILS_MAX) return { error: `The details of a task can be at most ${VOICE_DETAILS_MAX} characters by voice.` }
+    return { order: { kind: 'task', title, ...(details ? { details } : {}) } }
+  }
+  if (name === 'run_job') {
+    const slug = args?.workflow
+    if (typeof slug !== 'string' || !Array.isArray(orders.jobs) || !orders.jobs.includes(slug)) {
+      return { error: 'That job has no trigger link on this board, so it cannot be started from here.' }
+    }
+    const workflow = (Array.isArray(data?.workflows) ? data.workflows : []).find((one) => one?.slug === slug)
+    if (!workflow) return { error: 'That job is not on the board, so it cannot be started from here.' }
+    if (workflow.fire !== true) {
+      return { error: 'That job is not set to be started from the board (fire: true in its file), so it cannot be started from here.' }
+    }
+    const named = typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim().slice(0, 120) : slug
+    return { order: { kind: 'run', slug, name: named } }
+  }
+  return { error: 'There is no order with that name.' }
+}
+
 // --- the owner's spoken yes ---
 // Nuno's rule (2026-10-10): a spoken yes counts only after the card appears, within 60 s, as a plain
 // yes, with the microphone open and no reply playing. A trusted tap always works. In full, every one of:

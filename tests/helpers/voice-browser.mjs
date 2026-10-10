@@ -28,7 +28,7 @@ export async function page(brand = brandAnswer({ voice: VOICE_ON })) {
 // A browser that does what the page asks and writes down every step.
 // `motion` is a device that has not asked for less motion: the orb's glow then follows the reply's
 // loudness, which `state.loudness` sets (0 to 127 either side of silence) and `frame()` moves on.
-export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false, finePointer = false, headphones = false, motion = false, debug = false } = {}) {
+export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false, finePointer = false, headphones = false, motion = false, debug = false, dispatch = null, keyHeld = false, data = null } = {}) {
   const log = []
   const timers = new Map()
   let nextTimer = 1
@@ -36,7 +36,7 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
   const stream = { getTracks: () => tracks, getAudioTracks: () => tracks }
   const audio = { srcObject: undefined, removed: false, remove() { this.removed = true } }
   // `decodes` holds a decode the test finishes itself, when holdDecode is on.
-  const state = { pc: null, channel: null, context: null, constraints: null, saved: [], ended: [], opened: [], calls: [], decodes: [], loudness: 0 }
+  const state = { pc: null, channel: null, context: null, constraints: null, saved: [], ended: [], opened: [], calls: [], decodes: [], loudness: 0, dispatched: [], orders: [] }
   const frames = new Map()
   let nextFrame = 1
   const ticket = answer.ticket ?? ticketFor(answer.mouth ?? 'openai')
@@ -133,7 +133,7 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
       if (refusal) throw new Error(refusal)
       return { json: async () => ({ sdp: SDP_ANSWER, ticket, mouth: 'openai', model: 'gpt-realtime-2.1-mini', name: 'Penny', idleMinutes: 2, captions: true, ...answer }) }
     },
-    view: () => ({ data: basePayload(), names: {}, now: NOW, hermes: false, spend: null }),
+    view: () => ({ data: data ?? basePayload(), names: {}, now: NOW, hermes: false, spend: null }),
     openScreen: (screen) => state.opened.push(screen),
     prices: () => prices,
     saveOutbox: (entry) => state.saved.push(structuredClone(entry)),
@@ -149,18 +149,31 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     reducedMotion: () => !motion,
     // A developer's machine, where the page may log timings.
     debug: () => debug,
+    // Orders: what /api/fire is sent (answered by `dispatch`, or as a success), whether the fire key is
+    // already in this tab, and the device's log of orders sent, newest first.
+    async dispatch(body, options) {
+      state.dispatched.push({ body, options })
+      return dispatch ? dispatch(body, options) : { ok: true, status: 200, payload: { ok: true, accepted: true } }
+    },
+    fireKeyHeld: () => keyHeld,
+    saveOrder: (entry) => state.orders.push(entry),
+    ordersLog: () => [...state.orders].reverse(),
     requestAnimationFrame: (fn) => { const id = nextFrame++; frames.set(id, fn); return id },
     cancelAnimationFrame: (id) => { frames.delete(id) }
   }
   const ui = {
-    shown: [], heard: [], spoken: [], costs: [], names: [], levels: [], notes: [],
+    shown: [], heard: [], spoken: [], costs: [], names: [], levels: [], notes: [], cards: [], orderTimes: [], orderNotes: [], busy: [],
     show(stateName, { words, live } = {}) { this.shown.push({ state: stateName, words, live }) },
     you(text) { this.heard.push(text) },
     said(text) { this.spoken.push(text) },
     cost(text) { this.costs.push(text) },
     who(name) { this.names.push(name) },
     level(value) { this.levels.push(value) },
-    note(text) { this.notes.push(text) }
+    note(text) { this.notes.push(text) },
+    order(card) { this.cards.push(card) },
+    orderTime(seconds) { this.orderTimes.push(seconds) },
+    orderNote(words) { this.orderNotes.push(words) },
+    orderBusy(busy) { this.busy.push(busy) }
   }
   return {
     deps, ui, log, tracks, audio, state, ticket, timers, speeches, speak, clock, frames,
