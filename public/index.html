@@ -696,6 +696,7 @@
   .mem-hit-words { display: grid; gap: .1rem; min-width: 0; }
   .mem-hit-path { overflow-wrap: anywhere; }
   .mem-hit-where { overflow-wrap: anywhere; }
+  .mem-hit-size { flex: none; white-space: nowrap; }
 
   /* Memory: List or Graph. A pair of buttons, the pressed one raised, each a full 44px target. */
   .mem-switch { display: inline-flex; gap: .25rem; padding: .25rem; margin: .1rem 0 .7rem; background: var(--chip); border: 1px solid var(--line); border-radius: 999px; }
@@ -746,6 +747,9 @@
   .mg-canvas { position: absolute; inset: 0; }
   .mg-canvas canvas { display: block; }
   .mg-stage-note { position: absolute; left: .9rem; right: .9rem; bottom: .7rem; margin: 0; font-size: .75rem; color: var(--muted); pointer-events: none; }
+  /* Nothing to draw: a short stage with its sentence in the middle, not an empty field. */
+  .mg-stage-empty { height: auto; min-height: 9rem; display: grid; place-items: center; padding: 1.5rem; }
+  .mg-stage-empty .mg-stage-note { position: static; font-size: .9375rem; text-align: center; }
   .mg-tip { font: inherit; font-size: .8125rem; }
   .mg-panel { padding: .95rem 1.05rem; min-width: 0; align-self: start; }
   .mg-panel[hidden] { display: none; }
@@ -772,7 +776,9 @@
   .mg-legend-row > .mg-swatch { transform: translateY(-.1rem); }
   .mg-list > summary, .mg-list-head { min-height: 2.75rem; padding: .55rem 1.05rem; font-weight: 600; font-size: .9rem; cursor: pointer; display: flex; align-items: center; }
   .mg-list-body { padding: 0 0 .5rem; }
-  .mg-find { margin: .25rem 1.05rem .5rem; width: calc(100% - 2.1rem); }
+  /* As specific as the page-wide search box rule, which would otherwise make it full width and push the
+     list (and with it the page) sideways by its margin. */
+  input[type=search].mg-find { display: block; margin: .25rem 1.05rem .5rem; width: calc(100% - 2.1rem); }
   .mg-list-note { margin: 0 1.05rem .4rem; }
   .mg-list-note:empty { display: none; }
   .mg-items { list-style: none; margin: 0; padding: 0; max-height: 26rem; overflow: auto; }

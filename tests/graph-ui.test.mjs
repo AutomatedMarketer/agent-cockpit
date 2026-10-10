@@ -446,6 +446,7 @@ test('picking a dot opens its panel: its name as text, every line with its reaso
   exposed.graphSelect(claude.id)
   const lines = withClass(panel, 'mg-line').map(textOf)
   assert.deepEqual(lines.sort(), ['Mention · about-me', 'Mention · business-brain'])
+  assert.equal(withClass(panel, 'mg-panel-meta')[0].textContent, 'CLAUDE.md · 2 lines')
   const [open] = withClass(panel, 'mg-open')
   assert.equal(open.hidden, false)
   open.listeners.click[0]({ preventDefault() {} })
@@ -465,6 +466,36 @@ test('a lonely note says what a lonely dot means instead of listing lines', asyn
   exposed.graphSelect(lonely.id)
   const [panel] = withClass(graphRoot(page), 'mg-panel')
   assert.match(textOf(panel), /missing link/)
+})
+
+test('a team repo with no notes yet says so in the middle of a short stage, and loads no library', async () => {
+  const empty = graphPayload({ team: { notes: [], hubs: [], edges: [], lines: 0, lonely: 0, moreLines: 0, search: [], hidden: 0, more: 0, unread: 0 }, vaults: { status: 'none', why: 'No vault has been read yet.', read: 0, skipped: 0, unreadable: 0, notShown: 0, computers: [] } })
+  const { page, exposed, libraries } = await boot({ graph: empty })
+  exposed.memorySetView('graph')
+  await flush()
+  const [stage] = withClass(graphRoot(page), 'mg-stage')
+  assert.equal(stage.classList.contains('mg-stage-empty'), true)
+  assert.match(textOf(stage), /No notes to draw yet/)
+  assert.deepEqual(libraries.loads, [])
+  assert.match(textOf(graphRoot(page)), /No other vault is shared yet\. One appears here once its own computer allows it, vaults\.yml names it/)
+})
+
+test('what was left out is counted under the graph, in sentences that agree with their numbers', async () => {
+  const graph = graphPayload()
+  graph.team = { ...graph.team, hidden: 1, more: 2, unread: 1, moreLines: 3 }
+  const { page, exposed } = await boot({ graph })
+  exposed.memorySetView('graph')
+  await flush()
+  const foot = () => withClass(graphRoot(page), 'mg-foot-note').map((node) => node.textContent)
+  assert.deepEqual(foot(), [
+    '1 note is over 64 KB, too big to read, so it is not drawn.',
+    '2 notes are past the first 400 and not drawn.',
+    '1 note could not be read from GitHub, so its lines are missing.',
+    '3 lines are past the board\'s limit and not drawn (day and tag lines go first).'
+  ])
+  exposed.graphSetSource('vault:0:1')
+  assert.ok(foot().includes('1 note in Ideas has a title the board does not show.'), foot().join(' | '))
+  assert.match(foot()[0], /^Ideas: shared by Mac Mini /)
 })
 
 test('the legend names every dot and every line kind, in words beside each colour', async () => {
@@ -595,4 +626,8 @@ test('nothing in the graph can push a phone sideways: the stage and the panels m
   assert.match(body('.mg-stage'), /overflow:\s*hidden/)
   for (const selector of ['.mg-panel-title', '.mg-item', '.mg-line']) assert.match(body(selector), /overflow-wrap:\s*anywhere/, `${selector} lets a long name run off the screen`)
   assert.match(body('.mg[hidden]'), /display:\s*none/, 'the hidden graph is still laid out')
+  // Found in Chromium at 390: the page-wide input[type=search] rule outranks a bare .mg-find, so the find
+  // box was full width plus its margin, and opening the list widened the page by 17px.
+  assert.match(body('input[type=search].mg-find'), /width:\s*calc\(100% - 2\.1rem\)/, 'the find box can be pushed to full width by the page-wide search rule')
+  assert.equal(rules.filter((rule) => rule.selector === '.mg-find').length, 0, 'a bare .mg-find rule loses to input[type=search]')
 })

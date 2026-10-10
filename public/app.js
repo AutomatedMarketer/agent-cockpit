@@ -2422,9 +2422,9 @@ function graphRenderPanel(model) {
   refs.panel.hidden = !node
   if (!node) return
   refs.panelTitle.textContent = node.label
-  refs.panelMeta.textContent = graphPanelMeta(node, model)
   const byId = new Map(model.nodes.map((one) => [one.id, one]))
   const lines = model.links.filter((link) => link.source === node.id || link.target === node.id)
+  refs.panelMeta.textContent = `${graphPanelMeta(node, model)}${node.kind === 'note' && lines.length ? ` · ${plural(lines.length, 'line')}` : ''}`
   readinessReplace(refs.panelLines, lines.map((link) => {
     const other = byId.get(link.source === node.id ? link.target : link.source)
     const line = readinessNode('button', { cls: 'mg-line', attrs: { type: 'button' } },
@@ -2443,25 +2443,26 @@ function graphRenderPanel(model) {
 
 function graphRenderFoot(model) {
   const notes = []
-  const say = (count, one, many, tail) => { if (count > 0) notes.push(`${plural(count, one, many)} ${tail}`) }
+  // A count, then the words that agree with it: [one, many].
+  const say = (count, one, many, [tailOne, tailMany]) => { if (count > 0) notes.push(`${plural(count, one, many)} ${count === 1 ? tailOne : tailMany}`) }
   const parts = model.source.kind === 'all' ? graphSources(graphState.data).filter((one) => one.kind !== 'all') : [model.source]
   for (const source of parts) {
     const part = source.data
     if (source.kind === 'team') {
-      say(part.hidden ?? 0, 'note', 'notes', 'over 64 KB not drawn: too big to read.')
-      say(part.more ?? 0, 'note', 'notes', 'past the first 400 not drawn.')
-      say(part.unread ?? 0, 'note', 'notes', 'GitHub would not return, so their lines are missing.')
-      say(part.moreLines ?? 0, 'line', 'lines', 'past the board\'s limit not drawn: day and tag lines go first.')
+      say(part.hidden ?? 0, 'note', 'notes', ['is over 64 KB, too big to read, so it is not drawn.', 'are over 64 KB, too big to read, so they are not drawn.'])
+      say(part.more ?? 0, 'note', 'notes', ['is past the first 400 and not drawn.', 'are past the first 400 and not drawn.'])
+      say(part.unread ?? 0, 'note', 'notes', ['could not be read from GitHub, so its lines are missing.', 'could not be read from GitHub, so their lines are missing.'])
+      say(part.moreLines ?? 0, 'line', 'lines', ['is past the board\'s limit and not drawn (day and tag lines go first).', 'are past the board\'s limit and not drawn (day and tag lines go first).'])
       continue
     }
     const computer = source.computer?.computer ?? 'its computer'
     notes.push(`${part.name}: shared by ${computer} ${ago(source.computer?.takenAt)}.`)
     if (source.computer?.freshness === 'stale') notes.push(`${part.name} has not been updated since ${stamp(source.computer.takenAt)}: the collector on ${computer} has not shared a newer one.`)
     if (part.level === 'shape') notes.push(`The titles stay on ${computer}: ${part.name} is shared as dots and lines only.`)
-    say(part.untitled ?? 0, 'note in ' + part.name, 'notes in ' + part.name, 'have a title the board does not show.')
-    say(part.hidden ?? 0, 'note in ' + part.name, 'notes in ' + part.name, 'could not be read on its computer.')
-    say(part.more ?? 0, 'note in ' + part.name, 'notes in ' + part.name, 'past its cap not shared.')
-    say(part.moreLines ?? 0, 'line in ' + part.name, 'lines in ' + part.name, 'past its cap not shared.')
+    say(part.untitled ?? 0, 'note in ' + part.name, 'notes in ' + part.name, ['has a title the board does not show.', 'have titles the board does not show.'])
+    say(part.hidden ?? 0, 'note in ' + part.name, 'notes in ' + part.name, ['could not be read on its computer.', 'could not be read on its computer.'])
+    say(part.more ?? 0, 'note in ' + part.name, 'notes in ' + part.name, ['is past its cap and was not shared.', 'are past its cap and were not shared.'])
+    say(part.moreLines ?? 0, 'line in ' + part.name, 'lines in ' + part.name, ['is past its cap and was not shared.', 'are past its cap and were not shared.'])
   }
   const vaults = graphState.data?.vaults
   if (vaults?.status === 'unusable') notes.push(`Your other vaults could not be shown. ${vaults.why ?? ''}`.trim())
@@ -2469,7 +2470,7 @@ function graphRenderFoot(model) {
     if (computer?.vaults?.status === 'unavailable') notes.push(`The vaults on ${computer.computer ?? 'a computer'} could not be shared${computer.vaults.why ? `: ${computer.vaults.why}` : ''}.`)
   }
   if (model.source.kind === 'team' && graphSources(graphState.data).length === 1) {
-    notes.push('No other vault is shared yet. One appears here once it is named in vaults.yml and the collector on its computer has run.')
+    notes.push('No other vault is shared yet. One appears here once its own computer allows it, vaults.yml names it, and the collector there has run.')
   }
   readinessReplace(graphState.refs.foot, notes.map((text) => readinessNode('p', { cls: 'mg-foot-note small muted', text })))
 }
@@ -2507,7 +2508,7 @@ function graphRestyle(instance = graphState.instance, mode = graphState.drawn?.m
   const colours = graphDeps.colours()
   const picked = graphState.selected
   instance.backgroundColor(colours.stage)
-  instance.nodeVal((node) => (node.kind === 'note' ? 1 : 4) * (node.id === picked ? 3 : 1))
+  instance.nodeVal((node) => (node.kind === 'note' ? 1 : 4) * (node.id === picked ? 2 : 1))
   instance.nodeColor((node) => (node.id === picked ? colours.picked
     : node.kind === 'day' ? colours.day
       : node.kind === 'tag' ? colours.tag
@@ -2562,6 +2563,7 @@ function graphConfigure(instance, mode, capped) {
 async function graphDraw(model) {
   const refs = graphState.refs
   const mode = graphState.mode
+  refs.stage.classList.toggle('mg-stage-empty', !model.nodes.length)
   if (!model.nodes.length) {
     graphTeardownInstance()
     refs.stageNote.textContent = model.source.kind === 'team'
@@ -2837,7 +2839,7 @@ function memoryHitsNode() {
       readinessNode('span', { cls: 'mem-hit-words' },
         readinessNode('span', { cls: 'mem-hit-path', text: hit.path }),
         readinessNode('span', { cls: 'mem-hit-where small muted', text: hit.where })),
-      readinessNode('span', { cls: 'small muted', text: hit.size ? `${Math.round(hit.size / 1024)} kb` : '' }))
+      readinessNode('span', { cls: 'mem-hit-size small muted', text: hit.size ? `${Math.round(hit.size / 1024)} kb` : '' }))
     // The board's click handler opens any .file with a data-path in the viewer.
     row.dataset.path = hit.path
     return row
