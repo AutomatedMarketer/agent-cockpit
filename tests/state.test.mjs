@@ -1755,3 +1755,19 @@ test('a failure to read the repo is never kept by a shared cache either', async 
   assert.equal(response.statusCode, 500)
   assert.equal(response.headers['Cache-Control'], 'private, no-store')
 })
+
+test('a jobs file whose lists were unavailable reaches the wall as SILENT cards, and still has its collector card', async () => {
+  const reading = jobsReading()
+  reading.launchd = { status: 'unavailable', why: 'refused by the safety check' }
+  reading.hermes = { status: 'unavailable', why: 'could not be read' }
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: jobsPath }],
+    overrideFiles: { [jobsPath]: JSON.stringify(reading) }
+  })
+  const byId = Object.fromEntries(body.readiness.cards.map((card) => [card.id, card]))
+  assert.equal(byId['jobs-list:Mac Mini:launchd'].light, 'silent')
+  assert.match(byId['jobs-list:Mac Mini:launchd'].sentence.text, /refused by the safety check\.$/)
+  assert.match(byId['jobs-list:Mac Mini:hermes'].sentence.text, /could not be read\.$/)
+  assert.ok(byId['collector:Mac Mini'])
+  assert.ok(body.readiness.badge >= 2)
+})

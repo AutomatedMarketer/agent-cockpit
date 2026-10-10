@@ -41,6 +41,8 @@ export const READINESS_WORDS = {
   faded: 'Its last report is older than its own schedule.',
   unknownSchedule: 'The schedule could not be read, so lateness is not judged.',
   noRecentSlot: 'Nothing has been due to run lately, so lateness is not judged.',
+  listUnavailable: "The Mac's list of {what} was not available at {time}: {why}.",
+  listUnavailableNoWhy: "The Mac's list of {what} was not available at {time}, and the Mac did not say why.",
   launchdEndedUnknown: '{name} has not said how its last run ended. Its log was last written at {time}.',
   managedOwner: 'Its scheduler is running. Whether its last report was written is checked on the Mac control center, not here.',
   neverReported: 'Has never reported.',
@@ -463,6 +465,25 @@ function collectorCard(computer, now) {
 
 const GATEWAY_LABEL = /^ai\.hermes\.gateway/
 
+// A list the collector wrote as "unavailable": the Mac was asked for it and could not give it (it
+// could not be read, or the safety check refused the file). That is not an empty list. It is a hole
+// in the wall, and it is a card of its own - SILENT, so it counts in the tab - with the collector's
+// fixed reason, never the file's own words.
+const LIST_WORDS = { launchd: { name: 'Mac LaunchAgents', what: 'LaunchAgents', ref: 'LaunchAgents list' }, hermes: { name: 'Hermes cron jobs', what: 'Hermes cron jobs', ref: 'Hermes cron jobs list' } }
+
+function listUnavailableCard(computer, which, ctx) {
+  const words = LIST_WORDS[which]
+  const block = computer[which]
+  const text = block.why
+    ? fill(READINESS_WORDS.listUnavailable, { what: words.what, time: '{time}', why: block.why })
+    : fill(READINESS_WORDS.listUnavailableNoWhy, { what: words.what, time: '{time}' })
+  const card = makeCard({
+    id: `jobs-list:${ctx.where}:${which}`, source: 'jobs-list', name: words.name, ref: `${ctx.where} · ${words.ref}`,
+    light: 'silent', sentence: sentence(text, ctx.takenAt), schedule: 'Not known', lastReport: lastReportOf(ctx.takenAt)
+  })
+  return ctx.stale ? staleCard(card, ctx.takenAt) : card
+}
+
 function switchedOffEntry(id, source, name, ref, reason) {
   return { id, source, name, ref, reason }
 }
@@ -535,7 +556,9 @@ export function shapeReadiness({ workflows = [], routines = null, jobs = null, h
   let hiddenBySafety = 0
   for (const computer of computers) {
     const ctx = macContext(computer, now)
-    if (computer.launchd.status === 'found' || computer.hermes.status === 'found') cards.push(collectorCard(computer, now))
+    // Whatever else the reading holds, the collector wrote it: its own card is always there.
+    cards.push(collectorCard(computer, now))
+    for (const which of ['launchd', 'hermes']) if (computer[which].status === 'unavailable') cards.push(listUnavailableCard(computer, which, ctx))
     hiddenBySafety += computer.launchd.hidden + computer.hermes.hidden
     if (computer.launchd.status === 'found') {
       for (const job of computer.launchd.items) {

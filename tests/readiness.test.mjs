@@ -498,6 +498,57 @@ test('the collector row: faded after three hours and a half, silent after six an
   assert.deepEqual(silentCard.sentence, { text: 'The status collector has not written its readings since {date}, so nothing on the Mac is being checked.', at: TAKEN })
 })
 
+/* ---------- a list the Mac could not give ----------------------------------------------------- */
+
+const UNAVAILABLE = (why) => ({ status: 'unavailable', ...(why === undefined ? {} : { why }) })
+
+test('a LaunchAgents list the Mac could not give is a SILENT card with the fixed reason, counted in the badge', () => {
+  const result = mac(reading({ launchdBlock: UNAVAILABLE('refused by the safety check') }))
+  const card = cardOf(result, 'jobs-list:Mac Mini:launchd')
+  assert.equal(card.light, 'silent')
+  assert.equal(card.source, 'jobs-list')
+  assert.equal(card.name, 'Mac LaunchAgents')
+  assert.deepEqual(card.sentence, { text: "The Mac's list of LaunchAgents was not available at {time}: refused by the safety check.", at: TAKEN })
+  assert.equal(card.ref, 'Mac Mini · LaunchAgents list')
+  assert.equal(result.counts.silent >= 1, true)
+  assert.equal(result.badge, result.counts.noGo + result.counts.silent)
+  assert.ok(result.badge >= 1, 'a list that could not be read left the tab at zero')
+})
+
+test('a Hermes list the Mac could not give is its own SILENT card, and a reason that is not given is said so', () => {
+  const unreadable = cardOf(mac(reading({ hermesBlock: UNAVAILABLE('could not be read') })), 'jobs-list:Mac Mini:hermes')
+  assert.equal(unreadable.name, 'Hermes cron jobs')
+  assert.equal(unreadable.sentence.text, "The Mac's list of Hermes cron jobs was not available at {time}: could not be read.")
+  const noReason = cardOf(mac(reading({ hermesBlock: UNAVAILABLE() })), 'jobs-list:Mac Mini:hermes')
+  assert.equal(noReason.sentence.text, "The Mac's list of Hermes cron jobs was not available at {time}, and the Mac did not say why.")
+})
+
+test('a jobs file the safety check refused leaves both lists unavailable, and still has its collector card', () => {
+  const result = mac(reading({ launchdBlock: UNAVAILABLE('refused by the safety check'), hermesBlock: UNAVAILABLE('refused by the safety check') }))
+  assert.deepEqual(result.cards.map((card) => card.id).sort(), ['collector:Mac Mini', 'jobs-list:Mac Mini:hermes', 'jobs-list:Mac Mini:launchd'])
+  assert.equal(cardOf(result, 'collector:Mac Mini').light, 'go')
+  assert.equal(result.badge, 2)
+})
+
+test('a list that is simply not there is not a problem: no card for "not found", on any computer', () => {
+  const result = mac(reading({ launchdBlock: { status: 'not found' }, hermesBlock: { status: 'not found' } }))
+  assert.deepEqual(result.cards.map((card) => card.id), ['collector:Mac Mini'])
+  assert.equal(result.badge, 0)
+})
+
+test('a list that could not be given, in a reading that is old, says how old - not that it was unavailable at a time long gone', () => {
+  const now = at('2026-10-10T00:30:00Z')
+  const result = shapeReadiness({ jobs: jobsFrom(reading({ launchdBlock: UNAVAILABLE('could not be read') }), now), now })
+  const card = cardOf(result, 'jobs-list:Mac Mini:launchd')
+  assert.deepEqual(card.sentence, { text: READINESS_WORDS.notChecked, at: TAKEN })
+  assert.equal(card.light, 'silent')
+})
+
+test('each computer\'s lists are named by that computer', () => {
+  const result = mac([reading({ launchdBlock: UNAVAILABLE('could not be read') }), reading({ computer: 'Laptop', launchdBlock: UNAVAILABLE('could not be read') })])
+  assert.deepEqual(result.cards.filter((card) => card.source === 'jobs-list').map((card) => card.id).sort(), ['jobs-list:Laptop:launchd', 'jobs-list:Mac Mini:launchd'])
+})
+
 test('the collector row without its own launchd row still exists, on the three-hour schedule', () => {
   const card = cardOf(mac(reading({ launchd: [lj()] })), 'collector:Mac Mini')
   assert.equal(card.schedule, 'Every 3 hours')
