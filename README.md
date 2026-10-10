@@ -122,6 +122,23 @@ most.
 Servers set up for one project folder are counted, never named. A name that looks like a key, an
 address or a path is never shown; the wall says how many it left out.
 
+**Tiles and logos.** Every tool the board names has a small tile beside it: on the wall, in your
+connections and runtimes, in Subscriptions, on the plan cards and in Voice spend.
+
+| Tile | When |
+|---|---|
+| **Our own letter tile** | Every tool, by default: a soft wash of the tool's colour and its first letter. A colour is not a logo |
+| **The real logo** | Only **GitHub** and **Vercel**, whose own rules let a site show that it uses them. Drawn from Simple Icons (CC0), unchanged, in plain white on dark or plain black on light |
+| **A plain grey letter** | A name the board does not know |
+
+Claude, Google, Node.js and Obsidian ask for approval before their logos are used, so they stay
+letters. The rule for each brand, with the page it came from, is in
+[`docs/logo-rules.md`](docs/logo-rules.md). To use your own logo files on your own board, add them to
+`public/logos/` and to `BRANDS` in `public/app.js`.
+
+> Product names and logos belong to their owners. They appear only to name the tools your own
+> computer reports, and no endorsement is implied. Logo drawings from Simple Icons (CC0). Vercel, the Vercel design, Next.js and related marks, designs and logos are trademarks or registered trademarks of Vercel, Inc. or its affiliates in the US and other countries.
+
 ### Writing an entry in `runtimes.yml`
 
 | Field | What the board does with it |
@@ -617,7 +634,7 @@ Locally:
 npm test
 ```
 
-1724 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1733 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

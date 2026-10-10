@@ -952,7 +952,7 @@ function subscriptionRowHtml(item) {
   const mismatch = item.mismatch && item.planRead
     ? `<span class="subs-mismatch">Your usage reading found ${escapeHtml(item.planRead)}. Worth checking which one you pay for.</span>`
     : ''
-  return `<li class="subs-row"><span class="subs-name">${escapeHtml(item.name)}</span>${price}${mismatch}</li>`
+  return `<li class="subs-row"><span class="subs-name">${brandTileHtml(item.name, 'subs-tile')}<span class="subs-label">${escapeHtml(item.name)}</span></span>${price}${mismatch}</li>`
 }
 
 function subscriptionsHtml(subscriptions) {
@@ -2294,6 +2294,88 @@ const FOUND_CHIP = { connected: 'chip ok', failed: 'chip warn', 'waiting for app
 // A sentence read out of a file ends with its full stop, wherever it came from.
 const sentence = (text) => (/[.!?]$/.test(text) ? text : `${text}.`)
 
+/* ---------- Tool tiles ----------
+   A tile beside every tool the board names. Our own letter tile for every brand - a soft wash of
+   the brand's colour and the first letter of the name - because a colour is not a logo. A real mark
+   only where the brand's own rules let a site show that it uses the product, and Nuno approved it
+   (2026-10-10): GitHub and Vercel, Simple Icons 16.32.0 drawings (CC0), unmodified, in the one plain
+   colour each allows (--mark-mono). Each brand's rule, with the page it was read from, is in
+   docs/logo-rules.md. Colours are Simple Icons 16.32.0's own data; a brand it does not have takes
+   one of the board's hues. Hermes is ours on purpose: Simple Icons' "Hermes" is another company. */
+const BRANDS = [
+  { key: 'github', hex: '#181717', mark: true, names: ['github', 'github cli', 'gh'] },
+  { key: 'vercel', hex: '#000000', mark: true, names: ['vercel'] },
+  { key: 'claude', hex: '#D97757', names: ['claude', 'claude code', 'claude app', 'anthropic'] },
+  { key: 'codex', tone: 'kpi-agents', names: ['codex'] },
+  { key: 'hermes', tone: 'link', names: ['hermes', 'hermes agent'] },
+  { key: 'openai', tone: 'muted', names: ['openai', 'chatgpt', 'chatgpt app'] },
+  { key: 'gmail', hex: '#EA4335', names: ['gmail'] },
+  { key: 'googlecalendar', hex: '#4285F4', names: ['google calendar'] },
+  { key: 'googledrive', hex: '#4285F4', names: ['google drive'] },
+  { key: 'google', hex: '#4285F4', names: ['google', 'google docs', 'google sheets'] },
+  { key: 'nodejs', hex: '#5FA04E', names: ['node.js', 'nodejs', 'node'] },
+  { key: 'git', hex: '#F03C2E', names: ['git'] },
+  { key: 'tailscale', hex: '#242424', names: ['tailscale'] },
+  { key: 'n8n', hex: '#EA4B71', names: ['n8n'] },
+  { key: 'elevenlabs', hex: '#000000', names: ['elevenlabs', 'eleven labs'] },
+  { key: 'fishaudio', hex: '#9B90E8', names: ['fish audio', 'fish'] },
+  { key: 'notion', hex: '#000000', names: ['notion'] },
+  { key: 'supabase', hex: '#3FCF8E', names: ['supabase'] },
+  { key: 'openrouter', hex: '#94A3B8', names: ['openrouter'] },
+  { key: 'perplexity', hex: '#1FB8CD', names: ['perplexity', 'perplexity-ask'] },
+  { key: 'figma', hex: '#F24E1E', names: ['figma'] },
+  { key: 'clickup', hex: '#7B68EE', names: ['clickup'] },
+  { key: 'fathom', hex: '#9187FF', names: ['fathom'] },
+  { key: 'obsidian', hex: '#7C3AED', names: ['obsidian'] },
+  { key: 'davinciresolve', hex: '#233A51', names: ['davinci resolve', 'davinci-resolve'] },
+  { key: 'similarweb', hex: '#092540', names: ['similarweb'] },
+  { key: 'stripe', hex: '#635BFF', names: ['stripe'] },
+  { key: 'cloudflare', hex: '#F38020', names: ['cloudflare'] },
+  { key: 'youtube', hex: '#FF0000', names: ['youtube'] },
+  { key: 'substack', hex: '#FF6719', names: ['substack'] },
+  { key: 'telegram', hex: '#26A5E4', names: ['telegram'] },
+  { key: 'discord', hex: '#5865F2', names: ['discord'] },
+  { key: 'zapier', hex: '#FF4F00', names: ['zapier'] },
+  { key: 'docker', hex: '#2496ED', names: ['docker'] },
+  { key: 'linear', hex: '#5E6AD2', names: ['linear'] },
+  { key: 'airtable', hex: '#18BFFF', names: ['airtable'] },
+  { key: 'calendly', hex: '#006BFF', names: ['calendly'] },
+  { key: 'zoom', hex: '#0B5CFF', names: ['zoom'] }
+]
+
+// The words under the tiles on the Connections wall, and in the README.
+const LOGO_CREDITS = 'Product names and logos belong to their owners. They appear only to name the tools your own computer reports, and no endorsement is implied. Logo drawings from Simple Icons (CC0). Vercel, the Vercel design, Next.js and related marks, designs and logos are trademarks or registered trademarks of Vercel, Inc. or its affiliates in the US and other countries.'
+
+// A name as the wall writes it, down to the brand's part: "claude.ai Gmail" is Gmail,
+// "plugin:marketing:notion" is Notion, "n8n-mcp" is n8n. The longest name that matches wins, and a
+// name matches only whole or followed by a space, so "Claude Max" is Claude and "github-x" is not.
+const brandWords = (name) => String(name ?? '').toLowerCase()
+  .replace(/^claude\.ai\s+/, '').split(':').at(-1)
+  .replace(/[\s_-]+(mcp(\s+server)?|server)$/, '').trim()
+function brandOf(name) {
+  const words = brandWords(name)
+  if (!words) return null
+  let best = null
+  for (const brand of BRANDS) {
+    for (const alias of brand.names) {
+      if ((words === alias || words.startsWith(`${alias} `)) && (!best || alias.length > best.alias.length)) best = { brand, alias }
+    }
+  }
+  return best?.brand ?? null
+}
+
+// The tile itself: decoration (aria-hidden); the name is always in words beside it. A mark keeps its
+// letter underneath, which is what shows where a browser cannot draw masks.
+function brandTileHtml(name, extraClass = '') {
+  const brand = brandOf(name)
+  const letter = escapeHtml(foundLetter(name))
+  const classes = ['tile', extraClass, brand?.mark ? 'has-mark' : ''].filter(Boolean).join(' ')
+  const colour = brand?.hex ?? (brand?.tone ? `var(--${brand.tone})` : null)
+  const style = colour ? ` style="--tile:${escapeHtml(colour)}"` : ''
+  const inner = brand?.mark ? `<span class="tile-letter">${letter}</span><span class="tile-mark mark-${brand.key}"></span>` : letter
+  return `<span class="${classes}" aria-hidden="true"${style}>${inner}</span>`
+}
+
 // The letter on a server's tile: its own name's first letter or number, after the parts every
 // plugin server or claude.ai connector shares - so three plugin servers are not three Ps.
 function foundLetter(name) {
@@ -2302,7 +2384,7 @@ function foundLetter(name) {
 }
 
 function foundItemHtml(entry, { meta = '', label, chip = 'chip' }) {
-  return `<li class="found-item"><span class="tile found-tile" aria-hidden="true">${escapeHtml(foundLetter(entry.name))}</span>
+  return `<li class="found-item">${brandTileHtml(entry.name, 'found-tile')}
     <span class="found-name"><span class="found-title">${breakable(entry.name)}</span>${meta ? `<span class="found-meta">${meta}</span>` : ''}</span>
     <span class="found-chips"><span class="${chip}">${escapeHtml(label)}</span>${entry.proved === true ? '<span class="chip ok">Proved</span>' : ''}</span></li>`
 }
@@ -2380,7 +2462,7 @@ function foundToolsHtml(tools, open) {
     const value = tool.state === 'found'
       ? `<span class="found-version">${escapeHtml(tool.version ?? tool.label)}</span>`
       : `<span class="found-version muted">${escapeHtml(tool.label)}</span>`
-    return `<li class="found-tool"><span class="found-title">${escapeHtml(tool.name)}</span>${value}</li>`
+    return `<li class="found-tool"><span class="found-tool-name">${brandTileHtml(tool.name, 'found-tile')}<span class="found-title">${escapeHtml(tool.name)}</span></span>${value}</li>`
   }).join('')
   return foundGroupHtml('Installed tools', `${found} of ${tools.length} found`, `<ul class="found-tools">${rows}</ul>`, open)
 }
@@ -2422,7 +2504,8 @@ function foundWallHtml(found) {
   if (found.unreadable) notes.push(`${plural(found.unreadable, 'connections file', 'connections files')} could not be used (damaged, too big, or not returned by GitHub), so ${found.unreadable === 1 ? 'it was' : 'they were'} left out.`)
   if (found.skipped) notes.push(`${plural(found.skipped, 'more connections file was', 'more connections files were')} not read - the board reads only five.`)
   return wrap(computers.map((computer, index) => foundComputerHtml(computer, index === 0)).join('') +
-    (notes.length ? `<p class="found-note">${notes.map(escapeHtml).join(' ')}</p>` : ''))
+    (notes.length ? `<p class="found-note">${notes.map(escapeHtml).join(' ')}</p>` : '') +
+    `<p class="found-note logo-credits">${escapeHtml(LOGO_CREDITS)}</p>`)
 }
 
 /* ---------- Hermes ----------
@@ -2677,7 +2760,7 @@ function renderConnections() {
     return `
     <div class="conn ${connection.proved ? 'live' : 'attention'}">
       <div class="row between">
-        <span class="row"><span class="dot"></span><span class="title">${escapeHtml(connection.name)}</span><span class="chip">${escapeHtml(connection.kind)}</span>${scopes}</span>
+        <span class="row"><span class="dot"></span>${brandTileHtml(connection.name, 'conn-tile')}<span class="title">${escapeHtml(connection.name)}</span><span class="chip">${escapeHtml(connection.kind)}</span>${scopes}</span>
         ${proof}
       </div>
       <p class="small" style="margin:.35rem 0 .25rem">${detail}</p>
@@ -2694,7 +2777,7 @@ function renderConnections() {
          its own class the same way. -->
     <div class="conn ${escapeHtml(runtime.status)}">
       <div class="row between">
-        <span class="row"><span class="dot"></span><span class="title">${escapeHtml(runtime.name)}</span><span class="chip">${escapeHtml(runtime.kind)}</span></span>
+        <span class="row"><span class="dot"></span>${brandTileHtml(runtime.name, 'conn-tile')}<span class="title">${escapeHtml(runtime.name)}</span><span class="chip">${escapeHtml(runtime.kind)}</span></span>
         <span class="state">${escapeHtml(STATE_LABEL[runtime.status] ?? runtime.status)}</span>
       </div>
       <div class="row between" style="margin-top:.35rem">
@@ -5219,11 +5302,11 @@ function voiceFishHtml(fishBytes) {
   const parts = Object.entries(isRecord(fishBytes) ? fishBytes : {})
     .filter(([, bytes]) => Number.isInteger(bytes) && bytes > 0)
     .map(([model, bytes]) => `about ${bytes.toLocaleString('en-US')} characters (${model === 's2.1-pro-free' ? 'free model, $0' : `${escapeHtml(model)}, priced in the total`})`)
-  return parts.length ? `<p class="voice-spend-line">Fish: ${parts.join('; ')}</p>` : ''
+  return parts.length ? `<p class="voice-spend-line voice-fish">${brandTileHtml('Fish Audio', 'voice-tile')}<span>Fish: ${parts.join('; ')}</span></p>` : ''
 }
 
 function voiceSpendInnerHtml() {
-  const head = '<p class="title">Voice spend</p>'
+  const head = `<div class="voice-spend-head">${brandTileHtml('OpenAI', 'voice-tile')}<p class="title">Voice spend</p></div>`
   const checked = typeof voiceMeter?.prices?.checked === 'string' ? voiceMeter.prices.checked : ''
   const estimate = `<p class="voice-spend-note"><span class="chip">estimate</span> From OpenAI&rsquo;s own token counts
     &times; prices ${checked ? `checked ${escapeHtml(checked)}` : 'not loaded yet'}. Your bill is at

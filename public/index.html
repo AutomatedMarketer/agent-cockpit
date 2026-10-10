@@ -1102,12 +1102,32 @@
   .plan-card { display: grid; gap: .8rem; align-content: start; }
   .card > .plan-head, .card > .meters { margin: 0; }
   .plan-head { display: flex; align-items: center; gap: .65rem; flex-wrap: wrap; }
+  /* A tool's tile: our own letter on a soft wash of the tool's colour (--tile, handed in by
+     brandTileHtml, or a class below). The letter is that colour pulled toward the ink by --tile-ink,
+     the way an owner chip's is, and tests/logos.test.mjs measures every brand colour against its own
+     wash in both themes. A thin top edge catches the light, as on the cards. */
   .tile {
-    --tile: var(--kpi-ledger);
+    --tile: var(--muted);
     display: grid; place-items: center; flex: none; width: 2.25rem; height: 2.25rem; border-radius: var(--radius-sm);
-    font-size: .8125rem; font-weight: 700; letter-spacing: -.02em; color: var(--ink);
-    background: color-mix(in srgb, var(--tile) 22%, var(--panel));
+    font-size: .8125rem; font-weight: 650; letter-spacing: -.02em;
+    color: color-mix(in srgb, var(--tile), var(--ink) var(--tile-ink));
+    background: color-mix(in srgb, var(--tile) 20%, var(--panel));
     border: 1px solid color-mix(in srgb, var(--tile) 45%, var(--line));
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--ink) 8%, transparent);
+  }
+  /* A real mark (GitHub, Vercel) is drawn only where the browser can mask: until then, and in any
+     browser that cannot, the tile keeps its letter rather than showing an empty square. */
+  .tile-mark { display: none; }
+  @supports (mask-image: none) or (-webkit-mask-image: none) {
+    .tile.has-mark { background: var(--panel-2); border-color: var(--line); }
+    .has-mark > .tile-letter { display: none; }
+    .tile-mark {
+      display: block; width: 58%; height: 58%; background: var(--mark-mono);
+      -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center;
+      -webkit-mask-size: contain; mask-size: contain;
+    }
+    .mark-github { -webkit-mask-image: url('/logos/github.svg'); mask-image: url('/logos/github.svg'); }
+    .mark-vercel { -webkit-mask-image: url('/logos/vercel.svg'); mask-image: url('/logos/vercel.svg'); }
   }
   .tile-claude { --tile: var(--kpi-ledger); }
   .tile-codex { --tile: var(--kpi-agents); }
@@ -1155,7 +1175,8 @@
     display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .1rem .75rem;
     padding: .55rem 0; border-top: 1px solid var(--line); font-size: .875rem;
   }
-  .subs-name { flex: 1 1 10rem; min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+  .subs-name { flex: 1 1 10rem; min-width: 0; overflow-wrap: anywhere; font-weight: 600; display: flex; align-items: center; gap: .55rem; }
+  .subs-label { min-width: 0; overflow-wrap: anywhere; }
   .subs-price { font-variant-numeric: tabular-nums; }
   .subs-sub, .subs-mismatch { flex: 1 0 100%; font-size: .75rem; overflow-wrap: anywhere; }
   .subs-sub { color: var(--muted); }
@@ -1201,6 +1222,10 @@
   .found-list { grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); gap: 0 1.1rem; }
   .found-item { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; min-width: 0; padding: .4rem 0; }
   .found-tile { --tile: var(--muted); width: 1.9rem; height: 1.9rem; font-size: .75rem; }
+  /* The smaller tiles beside a connection, a runtime, a subscription and the voice's makers. */
+  .conn-tile, .subs-tile, .voice-tile { width: 1.75rem; height: 1.75rem; font-size: .6875rem; border-radius: 9px; }
+  .found-tool-name { display: flex; align-items: center; gap: .55rem; min-width: 0; }
+  .logo-credits { max-width: 62ch; }
   .found-name { display: grid; flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
   .found-title { min-width: 0; font-size: .875rem; font-weight: 600; overflow-wrap: anywhere; }
   .found-meta { font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
@@ -1475,6 +1500,9 @@
   /* Voice spend, in Today's Usage section under Subscriptions. "estimate" is a chip in plain view. */
   .voice-spend { margin-top: .75rem; padding: .9rem 1.05rem; }
   .voice-spend .title { margin: 0 0 .4rem; }
+  .voice-spend-head { display: flex; align-items: center; gap: .55rem; margin: 0 0 .4rem; }
+  .voice-spend .voice-spend-head .title { margin: 0; }
+  .voice-fish { display: flex; align-items: center; gap: .55rem; }
   .voice-spend-total { margin: 0 0 .35rem; font-size: .9375rem; }
   .voice-spend-line { margin: 0 0 .35rem; font-size: .8125rem; }
   .voice-spend-warn { margin: 0 0 .35rem; font-size: .8125rem; color: var(--warn); }

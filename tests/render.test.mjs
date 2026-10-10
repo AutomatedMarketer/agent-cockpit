@@ -5408,7 +5408,9 @@ test('servers are grouped by where they come from, each with a letter tile', () 
   const order = ['Your servers', 'Plugin servers', 'claude.ai connectors', 'Other'].map((heading) => wall.indexOf(`>${heading}<`))
   assert.ok(order.every((at) => at > 0), `a scope heading is missing: ${order}`)
   assert.deepEqual([...order].sort((a, b) => a - b), order, 'the scope groups are out of order')
-  const tiles = [...wall.matchAll(/<span class="tile found-tile" aria-hidden="true">([^<]*)<\/span>/g)].map((match) => match[1])
+  // A tile is the server's letter, on its brand's colour where the board knows the brand, or a real
+  // mark with the letter kept under it (GitHub, Vercel) - tests/logos.test.mjs holds which is which.
+  const tiles = [...wall.matchAll(/<li class="found-item"><span class="tile found-tile[^"]*" aria-hidden="true"[^>]*>(?:<span class="tile-letter">)?([^<]*)</g)].map((match) => match[1])
   // Seven Claude servers, three Codex servers and two plugins.
   assert.equal(tiles.length, 12)
   // The letter is the server's own: the last part of a plugin server's name, and a connector's
@@ -5450,9 +5452,10 @@ test('a found tile the register proved gets a Proved badge; found alone never do
 test('installed tools show a version when found, and words when not', () => {
   const wall = wallOf({ found: foundPayload() })
   assert.match(wall, /Installed tools/)
-  assert.match(wall, /<span class="found-title">Claude Code<\/span><span class="found-version">2\.1\.293<\/span>/)
-  assert.match(wall, /<span class="found-title">GitHub CLI<\/span><span class="found-version muted">Not found<\/span>/)
-  assert.match(wall, /<span class="found-title">ChatGPT app<\/span><span class="found-version muted">Could not check<\/span>/)
+  // Each tool with its tile before its name (look and feel T7), then the version or the words.
+  assert.match(wall, /<span class="found-tool-name"><span class="tile found-tile"[^>]*>C<\/span><span class="found-title">Claude Code<\/span><\/span><span class="found-version">2\.1\.293<\/span>/)
+  assert.match(wall, /<span class="found-tool-name"><span class="tile found-tile has-mark"[^>]*><span class="tile-letter">G<\/span><span class="tile-mark mark-github"><\/span><\/span><span class="found-title">GitHub CLI<\/span><\/span><span class="found-version muted">Not found<\/span>/)
+  assert.match(wall, /<span class="found-title">ChatGPT app<\/span><\/span><span class="found-version muted">Could not check<\/span>/)
 })
 
 test('no reading yet is said in words, with what to run, and draws no zero', () => {

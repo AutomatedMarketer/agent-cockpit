@@ -52,7 +52,8 @@ async function cardWith(meter, storage = {}) {
   await flush()
   return page.exposed.voiceSpendInnerHtml()
 }
-const text = (markup) => markup.replace(/<[^>]+>/g, '').replace(/&middot;/g, '·').replace(/&mdash;/g, '—').replace(/&rsquo;/g, '\'').replace(/&times;/g, '×').replace(/&hellip;/g, '…').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim()
+// A tool's tile is decoration (aria-hidden), so the card is read without it, as a screen reader hears it.
+const text = (markup) => markup.replace(/<span class="tile[^"]*" aria-hidden="true"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').replace(/&middot;/g, '·').replace(/&mdash;/g, '—').replace(/&rsquo;/g, '\'').replace(/&times;/g, '×').replace(/&hellip;/g, '…').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim()
 
 /* ---------- what the card says ---------- */
 
