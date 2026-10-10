@@ -55,16 +55,16 @@ const MAX_MEMORY_FILES = 2000
 // An error whose message is a sentence this board wrote, safe to send to the page. Anything else
 // that reaches the handler's catch - GitHub's own text, a parser's message, a bug - is not, and the
 // page gets our own sentence instead (audit finding #9, 2026-10-10).
-function ourError(sentence, status) {
+export function ourError(sentence, status) {
   const error = new Error(sentence)
   error.ours = true
   if (status !== undefined) error.status = status
   return error
 }
 
-const READ_FAILED = 'Something went wrong reading your team repo, so try again in a minute.'
+export const READ_FAILED = 'Something went wrong reading your team repo, so try again in a minute.'
 
-function config() {
+export function config() {
   const owner = process.env.GITHUB_OWNER
   const repo = process.env.GITHUB_REPO
   const branch = process.env.GITHUB_BRANCH || 'main'
@@ -96,7 +96,7 @@ function rateLimitWait(response) {
   return response.status === 429 ? 60 : null
 }
 
-async function gh(path) {
+export async function gh(path) {
   const response = await fetch(`${GITHUB}${path}`, { headers: headers() })
   if (!response.ok) {
     // GitHub's own words stay here: they are for a developer, and can say things about the token.
@@ -110,7 +110,7 @@ async function gh(path) {
 
 // The id of the commit at the head of the branch, and nothing else: one small call. null when GitHub
 // cannot say - the board is then read from the branch by name, and has no commit to offer.
-async function headCommit({ owner, repo, branch }) {
+export async function headCommit({ owner, repo, branch }) {
   try {
     const response = await fetch(`${GITHUB}/repos/${owner}/${repo}/commits/${branch}`, { headers: headers('application/vnd.github.sha') })
     if (!response.ok) return null
@@ -126,7 +126,7 @@ const COMMIT_ID = /^[0-9a-f]{40}$/
 
 // `?since=<commit>` from Vercel's parsed query or, failing that, the address. Anything that is not
 // one whole commit id is no `since` at all, so it can never be answered "unchanged".
-function sinceOf(request) {
+export function sinceOf(request) {
   let value = request?.query?.since
   if (value === undefined && typeof request?.url === 'string') {
     try {
@@ -138,7 +138,7 @@ function sinceOf(request) {
   return typeof value === 'string' && COMMIT_ID.test(value) ? value : null
 }
 
-async function rawFile({ owner, repo, branch }, filePath) {
+export async function rawFile({ owner, repo, branch }, filePath) {
   const response = await fetch(
     `${GITHUB}/repos/${owner}/${repo}/contents/${encodeURI(filePath)}?ref=${branch}`,
     { headers: headers('application/vnd.github.raw') }
