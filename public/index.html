@@ -1276,6 +1276,8 @@
   .voice-who { display: block; font-size: .6875rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
   .voice-said { display: block; overflow-wrap: anywhere; }
   .voice-cost, .voice-mouth { margin: 0 0 .5rem; font-size: .8125rem; color: var(--muted); }
+  .voice-note { margin: 0 0 .5rem; font-size: .8125rem; }
+  .voice-note:empty { display: none; }
   .voice-stop { margin-top: .25rem; }
   .voice-mode { margin: 0 0 .5rem; font-size: .8125rem; }
   .voice-toggle { margin: 0 .5rem .5rem 0; }
@@ -5518,6 +5520,7 @@ function voiceDockHtml() {
       <p class="voice-state" id="voice-state" role="status" aria-live="polite"></p>
       <p class="voice-line"><span class="voice-who">You</span><span class="voice-said" id="voice-you"></span></p>
       <p class="voice-line"><span class="voice-who" id="voice-who">${name}</span><span class="voice-said" id="voice-said"></span></p>
+      <p class="voice-note" id="voice-note" role="status" aria-live="polite"></p>
       <p class="voice-cost" id="voice-cost"></p>
       <p class="voice-mouth">${escapeHtml(mouth)}</p>
       ${mode}
@@ -5560,6 +5563,7 @@ const voiceUi = {
   you(text) { el('voice-you').textContent = text },
   said(text) { el('voice-said').textContent = text },
   cost(text) { el('voice-cost').textContent = text },
+  note(text) { el('voice-note').textContent = text },
   who(name) { el('voice-who').textContent = name },
   level(value) { el('voice-orb')?.style.setProperty('--voice-level', String(value)) }
 }
@@ -5658,6 +5662,8 @@ const VOICE_UNHEARD = 'OpenAI could not answer that, so try asking again.'
 // did not cancel itself. Seen live (2026-10-09): the first turn of a call got an empty response
 // 367 ms after it started, and the person heard silence with nothing to say why.
 const VOICE_NO_REPLY = 'No reply came back. Say it again.'
+// A reply OpenAI stopped at its length limit (VOICE_REPLY_TOKENS): said under it, until the next reply.
+const VOICE_CUT_SHORT = 'That answer was cut short. Ask me to go on.'
 // What it is doing while it looks something up: a short line for each tool it asked for, in the
 // state line, so the wait between a question and its answer is not a blank on screen. The board's
 // own words for each tool it defines - never the name the model sent.
@@ -5698,11 +5704,12 @@ const VOICE_MIC_TAIL_MS = 300
 // this long, not as a hang-up: people react in about 400 ms, so "stop" pressed as the reply finishes
 // must not end the call. Only Stop, or the orb or Esc after this, ends it. Space never does.
 const VOICE_TAP_GRACE_MS = 1500
-// The longest the microphone rests with no new sound before it comes back by itself. A reply is at
-// most 300 output tokens - about 15 s of OpenAI's voice at ~20 audio tokens a second - and a Fish
-// piece is a sentence, and every new sound starts this again; 30 s without one means the event that
-// ends the sound was lost, and the person must not be left unable to talk.
-const VOICE_MIC_MAX_REST_MS = 30_000
+// The longest the microphone rests with no new sound before it comes back by itself. The longest
+// reply anyone can set is 800 output tokens (VOICE_REPLY_TOKENS) - at most 40 s of OpenAI's voice at
+// ~20 audio tokens a second - and a Fish piece is a sentence, and every new sound starts this again;
+// 45 s without one means the event that ends the sound was lost, and the person must not be left
+// unable to talk. It must outlast the longest reply, or the microphone opens mid-sentence.
+const VOICE_MIC_MAX_REST_MS = 45_000
 // Fish's pieces are scheduled ahead on the AudioContext clock, so their end is known: the safety
 // then waits for the last queued piece to finish, plus this, rather than 30 s from each queueing -
 // 25 pieces queued at once play for 37.5 s, and the microphone must not open in the middle.
@@ -5898,6 +5905,7 @@ function openVoice(deps, ui) {
   ui.you('')
   ui.said('')
   ui.cost('')
+  ui.note?.('')
 
   // Both inside the tap itself: an iPhone allows the microphone and sound only from a person's tap.
   try {
@@ -6109,6 +6117,7 @@ function openVoice(deps, ui) {
         session.replyTimer = null
         session.replyTurn = session.turns.current
         session.said = ''
+        ui.note?.('')
         fish()?.replyStarted(session)
         break
       case 'response.output_audio_transcript.delta':
@@ -6177,6 +6186,9 @@ function openVoice(deps, ui) {
           fish().replyDone(session)
         } else if (session.state !== 'speaking') {
           show('listening')
+        }
+        if (event.response?.status === 'incomplete' && event.response?.status_details?.reason === 'max_output_tokens') {
+          ui.note?.(VOICE_CUT_SHORT)
         }
         if (unexplained) {
           show('listening', VOICE_NO_REPLY)

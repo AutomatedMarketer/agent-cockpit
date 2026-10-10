@@ -445,6 +445,7 @@ has no evidence for.
 | `VOICE_IDLE_MINUTES` | Minutes with nobody talking before a call hangs up, 1 to 10. Default `2` | No |
 | `VOICE_CAPTIONS` | `off` to stop showing what it heard you say. On a computer it is still transcribed, and paid for, while `VOICE_ECHO_GUARD` is on, because the guard reads it. On unless set | No |
 | `VOICE_LANGUAGE` | The language you speak, as a two-letter code (`pt`, `fr`), for the transcript of what you say (the captions, and the echo guard's): OpenAI says giving it makes the transcript more accurate and quicker. `auto` lets it guess. `en` unless set | No |
+| `VOICE_REPLY_TOKENS` | How long one spoken reply may run, 300 to 800. Its sound counts at about 20 a second, so the default `700` is about 30 seconds of speech; `800` is the most, about 40. With Fish it is always 300, which is already longer than that | No |
 | `VOICE_ECHO_GUARD` | On a computer, a turn of one or two words in the first 1.5 seconds of a reply is treated as the assistant's own voice coming back through the speakers: it is ignored and the reply resumes (once per question). So to stop it right at the start, use **Stop** or Esc rather than saying "stop". The guard reads a transcript of what it hears, so on a computer that is on with it, captions or not: about $0.002 a minute of your talking (gpt-4o-mini-transcribe: 600 audio tokens a minute at $1.25 a million, plus the words at $5 a million). Phones never use the guard. Phones do not pay it unless captions are on. `off` to switch it off. On unless set | No |
 | `VOICE_VAD_THRESHOLD` | How loud a sound must be to count as you talking, `0.1` to `0.95`. Default `0.6` - a little above OpenAI's example, because a computer on speakers heard its own voice as you talking. Raise it if it keeps cutting itself off; lower it if it misses you | No |
 | `FISH_API_KEY` | Your Fish Audio key, for a voice you choose. Mark it sensitive | For Fish |
@@ -487,7 +488,7 @@ Locally:
 npm test
 ```
 
-1322 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1325 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 all seven screens and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -538,6 +539,7 @@ used only when you connect a picture store.
 | Voice spend says **Incomplete** | A price the board has no source for yet. The total is lower than the truth; your bill at platform.openai.com is the real number |
 | Voice spend says conversations are **not recorded yet** | The board used today's spare store writes. They are kept on this device and recorded with your next conversation |
 | "The voice meter's file in the picture store is damaged…" | Vercel → **Storage** → your store → delete `agent-cockpit/voice-meter.json`. The meter starts again; nothing else is touched |
+| "That answer was cut short. Ask me to go on." | The reply reached its length limit, about 30 seconds of speech. Say "go on". To allow longer replies, raise `VOICE_REPLY_TOKENS` (at most `800`) and redeploy |
 | With Fish on, some sentences are not spoken | Fish did not answer in time for that piece, so it was skipped; its words are still in the panel. If none are spoken, check `FISH_API_KEY` and `FISH_VOICE_ID` |
 
 ---

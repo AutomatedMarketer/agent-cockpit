@@ -30,7 +30,7 @@ import {
   meterWritesPerDay,
   spendMeterWrite
 } from './_picture-store.js'
-import { readTicket, costOf, METER_TICKET_MS, TRANSCRIBE_MODEL, MAX_REPLY_TOKENS } from './_voice.js'
+import { readTicket, costOf, METER_TICKET_MS, TRANSCRIBE_MODEL, MAX_REPLY_TOKENS, AUDIO_OUT_PER_SECOND } from './_voice.js'
 import { VOICE_PRICES, PRICES_CHECKED } from './_voice-prices.js'
 
 export const MAX_REPORTS = 20
@@ -42,7 +42,6 @@ export const MAX_REPORTS = 20
 // pasted in by hand, an overflow - not a key holder who wants to lie, which no check here can.
 const HOUR_SECONDS = 60 * 60
 const USER_AUDIO_PER_SECOND = 10
-const ASSISTANT_AUDIO_PER_SECOND = 20
 const HOUR_OF_REPLIES = HOUR_SECONDS / 2
 const LONG_CONTEXT = 128_000
 const INPUT_CEILING = HOUR_OF_REPLIES * LONG_CONTEXT
@@ -56,7 +55,7 @@ export const COUNT_CEILINGS = {
   audioIn: INPUT_CEILING,
   cachedAudioIn: INPUT_CEILING,
   textOut: HOUR_OF_REPLIES * MAX_REPLY_TOKENS,
-  audioOut: HOUR_SECONDS * ASSISTANT_AUDIO_PER_SECOND,
+  audioOut: HOUR_SECONDS * AUDIO_OUT_PER_SECOND,
   transcribeTextIn: CAPTION_CEILING,
   transcribeAudioIn: HOUR_SECONDS * USER_AUDIO_PER_SECOND,
   transcribeOut: CAPTION_CEILING,

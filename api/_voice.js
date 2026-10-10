@@ -64,8 +64,20 @@ const MAX_NAME_HINTS = 24
 const MAX_NAME_HINT_CHARS = 400
 const VAD_RANGE = { least: 0.1, most: 0.95 }
 
-// Short spoken answers. Audio counts as output tokens too, about 20 a second.
-export const MAX_REPLY_TOKENS = 300
+// How long a spoken reply may run. OpenAI counts a reply's sound as output tokens - about 20 a second,
+// the rate the meter uses too - and its words as well. The first limit, 300 (about 15 s), cut a live
+// reply off mid-sentence (2026-10-09: response.done "incomplete", reason max_output_tokens). About
+// 30 s of speech is 30 x 20 = 600 for the sound, plus about 100 for the 75 or so words in it: 700.
+// VOICE_REPLY_TOKENS sets another, 300 to 800. 800 is at most 40 s of sound, which the page's
+// speakers-mode safety wait (VOICE_MIC_MAX_REST_MS, 45 s) outlasts - so the range stops there.
+export const AUDIO_OUT_PER_SECOND = 20
+export const DEFAULT_REPLY_TOKENS = 700
+const REPLY_TOKEN_RANGE = { least: 300, most: 800 }
+// The most one reply can be, whatever is set: what the meter allows a reply.
+export const MAX_REPLY_TOKENS = REPLY_TOKEN_RANGE.most
+// Fish speaks the words alone (the reply comes back as text), and 300 of them are already well past
+// 30 s of its speech - so its limit stays where it was.
+const FISH_REPLY_TOKENS = 300
 // One piece of a reply sent to Fish. The page cuts at sentences and clauses well under this; the
 // limit is for anything that did not come from the page.
 export const SPEAK_MAX_CHARS = 400
@@ -127,6 +139,10 @@ export function voiceConfig(env = {}) {
     ? Number(idle)
     : DEFAULT_IDLE_MINUTES
   const captions = !/^(off|false|0)$/i.test(setting(env.VOICE_CAPTIONS))
+  const reply = setting(env.VOICE_REPLY_TOKENS)
+  const replyTokens = /^\d+$/.test(reply) && Number(reply) >= REPLY_TOKEN_RANGE.least && Number(reply) <= REPLY_TOKEN_RANGE.most
+    ? Number(reply)
+    : DEFAULT_REPLY_TOKENS
   const spoken = setting(env.VOICE_LANGUAGE).toLowerCase()
   const language = spoken === 'auto' ? null : /^[a-z]{2}$/.test(spoken) ? spoken : DEFAULT_VOICE_LANGUAGE
   // The page's echo guard (a computer hearing its own voice through its speakers), on unless switched off.
@@ -144,6 +160,7 @@ export function voiceConfig(env = {}) {
     idleMinutes,
     captions,
     language,
+    replyTokens,
     vadThreshold,
     echoGuard,
     fishModel: env.FISH_MODEL === FISH_PAID_MODEL ? FISH_PAID_MODEL : FISH_FREE_MODEL,
@@ -276,7 +293,7 @@ export function sessionFor(config, name, { echoGuardHere = false, names = [], mi
     instructions: instructionsFor(assistantLabel(name), voiceZone(timeZone)),
     // With Fish the words come back as text and Fish speaks them; otherwise OpenAI's own voice does.
     output_modalities: [fish ? 'text' : 'audio'],
-    max_output_tokens: MAX_REPLY_TOKENS,
+    max_output_tokens: fish ? FISH_REPLY_TOKENS : config.replyTokens,
     tools: VOICE_TOOLS,
     tool_choice: 'auto',
     audio: {

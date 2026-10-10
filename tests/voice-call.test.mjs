@@ -9,7 +9,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { flush } from './helpers/page-harness.mjs'
 import { SDP_OFFER, SDP_ANSWER, REPLY_USAGE, TRANSCRIPTION_USAGE } from './helpers/voice-fixtures.mjs'
-import { ticketSays, voiceToolAnswer, costOf } from '../api/_voice.js'
+import { ticketSays, voiceToolAnswer, costOf, MAX_REPLY_TOKENS, AUDIO_OUT_PER_SECOND } from '../api/_voice.js'
 import { VOICE_PRICES } from '../api/_voice-prices.js'
 import { NOW, ticketFor, page, fakeBrowser, connected } from './helpers/voice-browser.mjs'
 
@@ -806,13 +806,15 @@ test('"Listening" shows only when the microphone is on: not during the tail, and
   assert.equal(browser.lastState(), 'listening')
 })
 
-test('a microphone rested 30 s with no new sound comes back on by itself, and the idle wait with it', async () => {
-  // A reply is at most 300 output tokens - about 15 s of OpenAI's voice - and a Fish piece is a
-  // sentence; 30 s with no new sound means the end of the sound was lost, not that it is still talking.
+test('a microphone rested 45 s with no new sound comes back on by itself, and the idle wait with it', async () => {
+  // The longest reply anyone can set is 800 output tokens - at most 40 s of OpenAI's voice - and a Fish
+  // piece is a sentence; 45 s with no new sound means the end of the sound was lost, not that it is
+  // still talking. The safety must outlast the longest reply, or the microphone opens mid-sentence.
+  assert.ok(MAX_REPLY_TOKENS / AUDIO_OUT_PER_SECOND * 1000 < 45_000, 'the longest reply outlasts the safety wait')
   const browser = await speakers()
   browser.emit({ type: 'response.created' })
   browser.emit({ type: 'output_audio_buffer.started' })
-  const safety = () => [...browser.timers.entries()].find(([, timer]) => timer.ms === 30_000)
+  const safety = () => [...browser.timers.entries()].find(([, timer]) => timer.ms === 45_000)
   assert.ok(safety(), 'nothing brings a stuck microphone back')
   const [id, timer] = safety()
   browser.timers.delete(id)
@@ -820,10 +822,10 @@ test('a microphone rested 30 s with no new sound comes back on by itself, and th
   assert.deepEqual(mic(browser), [true])
   assert.equal(idleWaits(browser), 1)
   assert.equal(browser.lastState(), 'listening')
-  // More sound while rested starts the 30 s again.
+  // More sound while rested starts the 45 s again.
   const longer = await speakers()
   longer.emit({ type: 'output_audio_buffer.started' })
-  const first = [...longer.timers.entries()].find(([, entry]) => entry.ms === 30_000)[0]
+  const first = [...longer.timers.entries()].find(([, entry]) => entry.ms === 45_000)[0]
   longer.emit({ type: 'output_audio_buffer.started' })
   assert.ok(!longer.timers.has(first), 'the first safety wait was left running')
 })
@@ -1095,4 +1097,28 @@ test('anywhere else nothing is logged, and the page counts only its own machine 
   assert.equal(await debug({}), false)
   assert.equal(await debug({ hostname: 'localhost.evil.example' }), false)
   assert.equal(await debug({ storage: { 'agent-cockpit-voice-debug': 'yes' } }), false)
+})
+
+/* ---------- a reply cut short by its length limit ---------- */
+
+const CUT_SHORT = 'That answer was cut short. Ask me to go on.'
+const cutReply = (browser, reason) => {
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.output_audio_transcript.delta', delta: 'Here is everything due this week: the brief on Monday, the' })
+  browser.emit({ type: 'response.done', response: { status: 'incomplete', status_details: { type: 'incomplete', reason }, usage: REPLY_USAGE, output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_audio' }] }] } })
+}
+
+test('a reply cut off by its length limit says so in the sheet, and the next reply clears it', async () => {
+  const browser = await connected()
+  assert.equal(browser.ui.notes.at(-1), '', 'a new call does not start with a clear note')
+  cutReply(browser, 'max_output_tokens')
+  assert.equal(browser.ui.notes.at(-1), CUT_SHORT)
+  browser.emit({ type: 'response.created' })
+  assert.equal(browser.ui.notes.at(-1), '', 'the note stayed on the next reply')
+  // Cut short for any other reason, or finished, says nothing of the kind.
+  const other = await connected()
+  cutReply(other, 'content_filter')
+  other.emit({ type: 'response.created' })
+  other.emit({ type: 'response.done', response: { status: 'completed', usage: REPLY_USAGE, output: [] } })
+  assert.ok(!other.ui.notes.includes(CUT_SHORT), 'a reply not cut by its length was said to be')
 })

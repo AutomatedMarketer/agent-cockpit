@@ -153,13 +153,14 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     cancelAnimationFrame: (id) => { frames.delete(id) }
   }
   const ui = {
-    shown: [], heard: [], spoken: [], costs: [], names: [], levels: [],
+    shown: [], heard: [], spoken: [], costs: [], names: [], levels: [], notes: [],
     show(stateName, { words, live } = {}) { this.shown.push({ state: stateName, words, live }) },
     you(text) { this.heard.push(text) },
     said(text) { this.spoken.push(text) },
     cost(text) { this.costs.push(text) },
     who(name) { this.names.push(name) },
-    level(value) { this.levels.push(value) }
+    level(value) { this.levels.push(value) },
+    note(text) { this.notes.push(text) }
   }
   return {
     deps, ui, log, tracks, audio, state, ticket, timers, speeches, speak, clock, frames,

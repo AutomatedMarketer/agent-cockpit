@@ -112,7 +112,8 @@ test('what was heard and what the assistant says are set as text, never as marku
   page.exposed.voiceUi.said(hostile)
   page.exposed.voiceUi.you(hostile)
   page.exposed.voiceUi.cost(hostile)
-  for (const id of ['voice-said', 'voice-you', 'voice-cost']) {
+  page.exposed.voiceUi.note(hostile)
+  for (const id of ['voice-said', 'voice-you', 'voice-cost', 'voice-note']) {
     assert.equal(page.node(id).textContent, hostile)
     assert.equal(page.node(id).innerHTML, '', `${id} was given markup`)
   }
@@ -125,6 +126,11 @@ test('what was heard and what the assistant says are set as text, never as marku
   for (const write of writes) {
     assert.match(write, /^(dock = voiceDockHtml\(\)|dock = ''|card = voiceSpendInnerHtml\(\))$/, `an innerHTML write in the voice code: ${write}`)
   }
+})
+
+test('the sheet has a line for a note about the reply, read out politely', async () => {
+  const page = await boot(brandAnswer({ voice: VOICE_ON }), { expose: ['voiceDockHtml'] })
+  assert.match(page.exposed.voiceDockHtml(), /<p class="voice-note" id="voice-note" role="status" aria-live="polite"><\/p>/)
 })
 
 test('the reply\'s loudness reaches the orb as --voice-level, a number and nothing else', async () => {
