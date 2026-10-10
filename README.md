@@ -160,8 +160,11 @@ phone's or computer's own light/dark setting.
 | Part | What to know |
 |---|---|
 | **Typeface** | Inter, served from this site (`public/fonts/`, with its OFL licence in `public/fonts/OFL.txt`). It is not loaded from Google, because the page's security header only allows its own files |
-| **Pictures** | Today's harbour, Team's workshop and the eight agent portraits are original art made for this board |
+| **Pictures** | Every screen opens with its own picture: Today's harbour, Team's workshop, and a calm night scene for Ledger, Workflows, Readiness, Skills, Memory, Connections and Hermes. The sidebar and the sign-in page have one each, and there are eight agent portraits. All original art made for this board |
 | **Your own agents** | An agent you add later gets a coloured tile with its initial until it has a picture |
+| **Phone, tablet, laptop** | One column on a phone and a tablet. The grids (number cards, plan cards, team cards, the task board, the week) start at 1024 px wide |
+| **Loading** | Before your repo has been read, Today shows grey blocks shaped like the screen that is coming, and a screen reader hears "Loading your board" |
+| **Empty screens** | A screen with nothing on it yet is centred, with its own icon and the one thing to run |
 
 **The built-in art** is what every copy of this board starts with. To change the pictures and names
 on *your* board without touching code, see [Make it yours](#make-it-yours) below. To add a portrait
@@ -178,12 +181,25 @@ slow the board down on a phone:
 | File | Limit |
 |---|---|
 | A banner (Today, Team) | 100 KB |
+| Any other screen's banner, and the sign-in picture | 90 KB |
+| The sidebar's square picture | 40 KB |
 | An agent portrait | 45 KB |
-| All the pictures together | 450 KB |
+| All the pictures together | 1,100 KB |
 | The typeface | 64 KB |
 
 Only Today's banner loads straight away. Every other picture loads when you scroll to it or open
-its screen.
+its screen, so the total is only ever paid by someone who opens every screen.
+
+**Movement.** Screens fade in when you open them, cards you can press lift a little under a mouse,
+buttons give when pressed, folds fade open, the voice orb breathes and ripples, and the banner
+pictures drift very slowly. If your phone or computer is set to **reduce motion**, none of it
+happens: every moving rule sits in one block at the end of the stylesheet that such a device never
+applies, and each state still differs by its shape and its words. Nothing moves on the Readiness
+cards themselves, because that screen redraws every minute.
+
+**The design numbers** (spacing, type sizes and weights, corner radius, depth, how long each
+movement takes) are tokens at the top of the stylesheet in `public/index.html`, beside the colours.
+Change one there and the whole board follows. The colours stay navy and red in both themes.
 
 **The three numbers on Today**, and where each comes from:
 
