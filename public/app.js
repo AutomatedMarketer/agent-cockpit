@@ -4214,6 +4214,64 @@ function voiceToolAnswer(name, args, view) {
   }
 }
 
+// --- "is it done?" (job_status) ---
+// Answered from the board, re-checked first by the page, and from this device's own log of the orders
+// it sent. A run order is matched to the newest run of that job that began no earlier than two minutes
+// before it was sent (a routine stamps its start from its own clock); a task order to the card with the
+// same title. Never a guess: an order nothing has answered yet says so, with when it was sent.
+const ORDER_RUN_SLACK_MS = 120_000
+const FINISHED_BADLY = ['failed', 'blocked', 'partial']
+const firstSentence = (value) => toolText(toolText(value).split(/(?<=[.!?])\s/)[0])
+
+function runSaid(run, running, zone) {
+  if (running) return { state: 'running', since: toolTime(run.started_at, zone) }
+  if (FINISHED_BADLY.includes(run.status)) {
+    return { state: 'did not finish', status: toolText(run.status), at: toolTime(run.finished_at ?? run.started_at, zone), summary: firstSentence(run.summary) }
+  }
+  return { state: 'finished', status: toolText(run.status) || 'ok', at: toolTime(run.finished_at ?? run.started_at, zone), summary: firstSentence(run.summary) }
+}
+
+function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fresh = false } = {}) {
+  const zone = voiceZone(timeZone) ?? 'UTC'
+  const when = {
+    timeZone: zone,
+    localNow: toolClock(now, zone),
+    checkedJustNow: fresh === true,
+    ...(fresh === true ? {} : { note: 'The board could not be re-checked just now, so this is what it showed before.' })
+  }
+  const runs = toolList(data?.runs)
+  const running = toolList(data?.board?.running)
+  const isRunning = (run) => running.some((one) => one.name === run.workflow && one.started_at === run.started_at)
+  const which = typeof args?.which === 'string' ? args.which.trim().toLowerCase() : ''
+  if (which === 'last order' || which === 'last' || which === '') {
+    const order = Array.isArray(log) ? log[0] : null
+    if (!order) return { ...when, which: 'last order', state: 'unknown', said: 'No order has been sent from this device yet.' }
+    const sentAt = Date.parse(order.sentAt)
+    const sent = { sentAt: toolTime(order.sentAt, zone) }
+    if (order.kind === 'run') {
+      const mine = runs
+        .filter((run) => (run.workflow === order.slug || run.workflow === order.name) && Date.parse(run.started_at) >= sentAt - ORDER_RUN_SLACK_MS)
+        .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
+      const job = { which: 'last order', kind: 'run', job: toolText(order.name), ...sent }
+      return mine.length ? toolFits({ ...when, ...job, ...runSaid(mine[0], isRunning(mine[0]), zone) }) : { ...when, ...job, state: 'sent, nothing has reported yet' }
+    }
+    const task = { which: 'last order', kind: 'task', title: toolText(order.title), ...sent }
+    const open = toolList(data?.board?.todo).find((card) => card.title === order.title)
+    if (open) return { ...when, ...task, state: open.doing ? 'doing' : 'to do' }
+    const finished = [...toolList(data?.board?.done), ...toolList(data?.board?.finishedTasks)].find((card) => card.kind === 'task' && card.title === order.title)
+    if (finished) return { ...when, ...task, state: 'done' }
+    return { ...when, ...task, state: 'not filed yet' }
+  }
+  const workflow = toolList(data?.workflows).find((one) => one.slug === which || (typeof one.name === 'string' && one.name.trim().toLowerCase() === which))
+  if (!workflow) return { ...when, which: toolText(which), state: 'unknown', said: 'There is no job with that name on the board.' }
+  const job = { which: toolText(workflow.slug), job: toolText(workflow.name) || toolText(workflow.slug) }
+  const mine = runs
+    .filter((run) => run.workflow === workflow.slug || run.workflow === workflow.name)
+    .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
+  if (!mine.length) return { ...when, ...job, state: 'has not run yet' }
+  return toolFits({ ...when, ...job, ...runSaid(mine[0], isRunning(mine[0]), zone) })
+}
+
 // --- the owner's yes ---
 // One of the two ways an order card is answered yes (voice orders, Phase 11). Only the person's own
 // click on the card, or Enter or Space on it, says yes: a real Event that the browser itself marks
@@ -4465,6 +4523,8 @@ function voiceDeps() {
     },
     saveOrder: (entry) => writeStore(VOICE_ORDERS_STORE, JSON.stringify([entry, ...voiceOrdersLog()].slice(0, VOICE_ORDERS_KEPT))),
     ordersLog: voiceOrdersLog,
+    // The Readiness wall's own check: one small call when nothing changed, the new board when it has.
+    recheck: () => recheckBoardNow(),
     fish: fishMouth({
       speak: (body, signal) => fetch('/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),
       now: () => Date.now()
@@ -4702,6 +4762,12 @@ const VOICE_DOING = {
 }
 VOICE_DOING.add_task = 'Putting the card up…'
 VOICE_DOING.run_job = 'Putting the card up…'
+VOICE_DOING.job_status = 'Checking on it…'
+// "Is it done?" re-checks the board first - the same one-call check the Readiness wall makes - but
+// never waits more than JOB_STATUS_WAIT_MS for it, and asks GitHub at most once every
+// JOB_STATUS_EVERY_MS however often it is asked.
+const JOB_STATUS_WAIT_MS = 3500
+const JOB_STATUS_EVERY_MS = 20_000
 const VOICE_DOING_ELSE = 'Looking that up…'
 // Orders by voice (Phase 11): the card's words, what the model is told in a system note, and what the
 // sheet says. The model is never told an order went until the board's answer says it did.
@@ -4885,6 +4951,7 @@ function openVoice(deps, ui) {
     // Orders: what this call may propose, the card waiting for a yes, what was just sent, and each of
     // the person's turns as it began - when, and whether the mic rested or a reply played in it.
     orders: { on: false }, card: null, sent: [], utterances: new Map(), hearingNow: null,
+    recheckedAt: -Infinity, recheckOk: false,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
   const show = (state, words) => {
@@ -5062,16 +5129,39 @@ function openVoice(deps, ui) {
 
   // A tool the model asked for, answered from the board this page already has.
   // The outputs go the moment they are ready, a request for the reply only when OpenAI can take one.
-  function answerTools(calls) {
+  // A batch with job_status in it waits for the board's re-check first (at most JOB_STATUS_WAIT_MS);
+  // any other batch is answered at once, as it always was.
+  function answerTools(calls, fresh = null) {
+    if (fresh === null && calls.some((call) => call.name === 'job_status')) {
+      recheckBoard().then((checked) => {
+        if (!session.stopped) answerTools(calls, checked)
+      })
+      return
+    }
     for (const call of calls) {
       let args = {}
       try { args = JSON.parse(call.arguments || '{}') } catch (error) { args = {} }
-      const answer = VOICE_ORDER_TOOLS.includes(call.name) ? proposeOrder(call.name, args) : voiceToolAnswer(call.name, args, deps.view())
+      const answer = VOICE_ORDER_TOOLS.includes(call.name) ? proposeOrder(call.name, args)
+        : call.name === 'job_status' ? jobStatusAnswer(args, { ...deps.view(), log: deps.ordersLog?.() ?? [], fresh: fresh === true })
+          : voiceToolAnswer(call.name, args, deps.view())
       if (answer.opened) deps.openScreen(answer.opened)
       send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(answer) } })
     }
     session.replyRetries = 1
     askForReply()
+  }
+
+  // True when the board was re-checked just now. At most once every JOB_STATUS_EVERY_MS (the answer
+  // then is the last one's), and never waited on longer than JOB_STATUS_WAIT_MS.
+  async function recheckBoard() {
+    if (deps.now() - session.recheckedAt < JOB_STATUS_EVERY_MS) return session.recheckOk
+    session.recheckedAt = deps.now()
+    let timer = null
+    const late = new Promise((resolve) => { timer = deps.setTimeout(() => resolve(false), JOB_STATUS_WAIT_MS) })
+    const checked = Promise.resolve().then(() => deps.recheck?.()).then((ok) => ok === true, () => false)
+    session.recheckOk = await Promise.race([checked, late])
+    deps.clearTimeout(timer)
+    return session.recheckOk
   }
 
   // The reply to a batch of tool outputs. OpenAI refuses response.create while another response is
@@ -6225,6 +6315,13 @@ function renderReadiness(nowMs = Date.now()) {
   readinessReplace(refs.body, sections)
   readinessSync()
 }
+// The same check, asked for by the voice assistant's "is it done?" (job_status): true when it worked.
+// Here, beside the rest of the checking, so there is one way the page asks "has anything changed?".
+async function recheckBoardNow() {
+  await checkReadiness()
+  return !readinessFailed
+}
+
 /* ---------- Readiness: end ---------- */
 
 /* ---------- shell ---------- */

@@ -1429,3 +1429,70 @@ test('on a board that needs no fire key (PUBLIC_FIRE), a spoken yes needs none i
   await flush()
   assert.equal(browser.state.dispatched.length, 1)
 })
+
+/* ---------- "is it done?" in a call ---------- */
+
+test('job_status re-checks the board first, says it is checking, and answers from what came back', async () => {
+  const browser = await ordering()
+  propose(browser, 'add_task', { title: 'Draft it' })
+  browser.call.confirm(trustedClick(), '')
+  await flush()
+  propose(browser, 'job_status', { which: 'last order' }, 'call_status')
+  assert.equal(browser.ui.shown.at(-1).words, 'Checking on it…')
+  await flush()
+  assert.equal(browser.state.rechecks, 1)
+  const answer = outputOf(browser, 'call_status')
+  assert.equal(answer.kind, 'task')
+  assert.equal(answer.title, 'Draft it')
+  assert.equal(answer.state, 'not filed yet')
+  assert.equal(answer.checkedJustNow, true)
+  assert.equal(browser.state.channel.sent.at(-1).type, 'response.create')
+  // Asked again within 20 s: the board is not asked again.
+  propose(browser, 'job_status', { which: 'last order' }, 'call_again')
+  await flush()
+  assert.equal(browser.state.rechecks, 1, 'the board was re-checked more than once in 20 s')
+  browser.clock.now += 21_000
+  propose(browser, 'job_status', { which: 'last order' }, 'call_later')
+  await flush()
+  assert.equal(browser.state.rechecks, 2)
+})
+
+test('a re-check that takes over 3.5 s is not waited for: the answer comes from the board as loaded, and says so', async () => {
+  const browser = await ordering({ recheck: () => new Promise(() => {}) })
+  propose(browser, 'job_status', { which: 'morning-intel' }, 'call_status')
+  await flush()
+  assert.ok(!browser.state.channel.sent.some((event) => event.item?.call_id === 'call_status'), 'it answered before the wait was over')
+  const wait = [...browser.timers.entries()].find(([, timer]) => timer.ms === 3500)
+  assert.ok(wait, 'nothing limits the wait')
+  wait[1].fn()
+  await flush()
+  const answer = outputOf(browser, 'call_status')
+  assert.equal(answer.checkedJustNow, false)
+  assert.equal(answer.state, 'has not run yet')
+})
+
+test('a batch without job_status is still answered at once, exactly as before', async () => {
+  const browser = await ordering({ recheck: () => new Promise(() => {}) })
+  propose(browser, 'team_status', {}, 'call_team')
+  assert.ok(outputOf(browser, 'call_team').agents, 'a read-only tool waited on a re-check')
+  assert.equal(browser.state.rechecks, 0)
+})
+
+test('the page\'s re-check for "is it done?" is the Readiness check: one small call to the board, true when it worked', async () => {
+  const { loadPage } = await import('./helpers/page-harness.mjs')
+  const { brandAnswer, VOICE_ON } = await import('./helpers/page-payload.mjs')
+  const reply = (status, body) => ({ ok: status < 300, status, redirected: false, headers: { get: () => null }, json: async () => body })
+  const recheck = async (answer) => {
+    const loaded = loadPage({
+      fetch: async (url) => url.startsWith('/api/brand') ? reply(200, brandAnswer({ voice: VOICE_ON }))
+        : url === '/api/state' ? reply(200, { ...basePayload(), commit: 'abc123' })
+          : url.startsWith('/api/state?since=') ? answer : reply(200, {}),
+      expose: ['voiceDeps']
+    })
+    await flush()
+    const checked = await loaded.exposed.voiceDeps().recheck()
+    return { checked, asked: loaded.requests.filter((request) => request.url.startsWith('/api/state?since=')).map((request) => request.url) }
+  }
+  assert.deepEqual(await recheck(reply(200, { unchanged: true, commit: 'abc123' })), { checked: true, asked: ['/api/state?since=abc123'] })
+  assert.equal((await recheck(reply(500, { error: 'no' }))).checked, false)
+})

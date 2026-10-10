@@ -949,6 +949,64 @@ export function voiceToolAnswer(name, args, view) {
   }
 }
 
+// --- "is it done?" (job_status) ---
+// Answered from the board, re-checked first by the page, and from this device's own log of the orders
+// it sent. A run order is matched to the newest run of that job that began no earlier than two minutes
+// before it was sent (a routine stamps its start from its own clock); a task order to the card with the
+// same title. Never a guess: an order nothing has answered yet says so, with when it was sent.
+const ORDER_RUN_SLACK_MS = 120_000
+const FINISHED_BADLY = ['failed', 'blocked', 'partial']
+const firstSentence = (value) => toolText(toolText(value).split(/(?<=[.!?])\s/)[0])
+
+function runSaid(run, running, zone) {
+  if (running) return { state: 'running', since: toolTime(run.started_at, zone) }
+  if (FINISHED_BADLY.includes(run.status)) {
+    return { state: 'did not finish', status: toolText(run.status), at: toolTime(run.finished_at ?? run.started_at, zone), summary: firstSentence(run.summary) }
+  }
+  return { state: 'finished', status: toolText(run.status) || 'ok', at: toolTime(run.finished_at ?? run.started_at, zone), summary: firstSentence(run.summary) }
+}
+
+export function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fresh = false } = {}) {
+  const zone = voiceZone(timeZone) ?? 'UTC'
+  const when = {
+    timeZone: zone,
+    localNow: toolClock(now, zone),
+    checkedJustNow: fresh === true,
+    ...(fresh === true ? {} : { note: 'The board could not be re-checked just now, so this is what it showed before.' })
+  }
+  const runs = toolList(data?.runs)
+  const running = toolList(data?.board?.running)
+  const isRunning = (run) => running.some((one) => one.name === run.workflow && one.started_at === run.started_at)
+  const which = typeof args?.which === 'string' ? args.which.trim().toLowerCase() : ''
+  if (which === 'last order' || which === 'last' || which === '') {
+    const order = Array.isArray(log) ? log[0] : null
+    if (!order) return { ...when, which: 'last order', state: 'unknown', said: 'No order has been sent from this device yet.' }
+    const sentAt = Date.parse(order.sentAt)
+    const sent = { sentAt: toolTime(order.sentAt, zone) }
+    if (order.kind === 'run') {
+      const mine = runs
+        .filter((run) => (run.workflow === order.slug || run.workflow === order.name) && Date.parse(run.started_at) >= sentAt - ORDER_RUN_SLACK_MS)
+        .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
+      const job = { which: 'last order', kind: 'run', job: toolText(order.name), ...sent }
+      return mine.length ? toolFits({ ...when, ...job, ...runSaid(mine[0], isRunning(mine[0]), zone) }) : { ...when, ...job, state: 'sent, nothing has reported yet' }
+    }
+    const task = { which: 'last order', kind: 'task', title: toolText(order.title), ...sent }
+    const open = toolList(data?.board?.todo).find((card) => card.title === order.title)
+    if (open) return { ...when, ...task, state: open.doing ? 'doing' : 'to do' }
+    const finished = [...toolList(data?.board?.done), ...toolList(data?.board?.finishedTasks)].find((card) => card.kind === 'task' && card.title === order.title)
+    if (finished) return { ...when, ...task, state: 'done' }
+    return { ...when, ...task, state: 'not filed yet' }
+  }
+  const workflow = toolList(data?.workflows).find((one) => one.slug === which || (typeof one.name === 'string' && one.name.trim().toLowerCase() === which))
+  if (!workflow) return { ...when, which: toolText(which), state: 'unknown', said: 'There is no job with that name on the board.' }
+  const job = { which: toolText(workflow.slug), job: toolText(workflow.name) || toolText(workflow.slug) }
+  const mine = runs
+    .filter((run) => run.workflow === workflow.slug || run.workflow === workflow.name)
+    .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
+  if (!mine.length) return { ...when, ...job, state: 'has not run yet' }
+  return toolFits({ ...when, ...job, ...runSaid(mine[0], isRunning(mine[0]), zone) })
+}
+
 // --- the owner's yes ---
 // One of the two ways an order card is answered yes (voice orders, Phase 11). Only the person's own
 // click on the card, or Enter or Space on it, says yes: a real Event that the browser itself marks
