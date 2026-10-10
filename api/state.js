@@ -51,12 +51,24 @@ const MAX_RUNS_RETURNED = 50
 const AGENT_RECENT_RUNS = 5
 const MAX_MEMORY_FILES = 2000
 
+// An error whose message is a sentence this board wrote, safe to send to the page. Anything else
+// that reaches the handler's catch - GitHub's own text, a parser's message, a bug - is not, and the
+// page gets our own sentence instead (audit finding #9, 2026-10-10).
+function ourError(sentence, status) {
+  const error = new Error(sentence)
+  error.ours = true
+  if (status !== undefined) error.status = status
+  return error
+}
+
+const READ_FAILED = 'Something went wrong reading your team repo, so try again in a minute.'
+
 function config() {
   const owner = process.env.GITHUB_OWNER
   const repo = process.env.GITHUB_REPO
   const branch = process.env.GITHUB_BRANCH || 'main'
   if (!owner || !repo) {
-    throw new Error('Set GITHUB_OWNER and GITHUB_REPO in your hosting environment, then redeploy.')
+    throw ourError('Set GITHUB_OWNER and GITHUB_REPO in your hosting environment, then redeploy.')
   }
   return { owner, repo, branch }
 }
@@ -86,9 +98,8 @@ function rateLimitWait(response) {
 async function gh(path) {
   const response = await fetch(`${GITHUB}${path}`, { headers: headers() })
   if (!response.ok) {
-    const detail = await response.text()
-    const error = new Error(`GitHub returned ${response.status}. ${detail.slice(0, 200)}`)
-    error.status = response.status
+    // GitHub's own words stay here: they are for a developer, and can say things about the token.
+    const error = ourError(`GitHub returned ${response.status} when the board read your team repo.`, response.status)
     const wait = rateLimitWait(response)
     if (wait !== null) error.retryAfter = wait
     throw error
@@ -2292,6 +2303,12 @@ export default async function handler(request, response) {
   // view key, and a shared cache keys on the address, not on the key: see ce0101e. So none is kept.
   // Set before the key is checked, so the refusal carries it too.
   response.setHeader('Cache-Control', 'private, no-store')
+  // The board only reads. A method that is not GET is answered before the key is even looked at.
+  if (String(request?.method ?? 'GET').toUpperCase() !== 'GET') {
+    response.setHeader('Allow', 'GET')
+    response.status(405).json({ error: 'GET only: this endpoint reads your team repo and never changes it.' })
+    return
+  }
   const denied = viewGate(request)
   if (denied) {
     response.status(denied.status).json({ error: denied.error })
@@ -2580,6 +2597,6 @@ export default async function handler(request, response) {
       response.status(429).json({ error: `GitHub's rate limit was reached. Try again in ${error.retryAfter} seconds.` })
       return
     }
-    response.status(error.status === 404 ? 404 : 500).json({ error: error.message })
+    response.status(error.status === 404 ? 404 : 500).json({ error: error.ours ? error.message : READ_FAILED })
   }
 }

@@ -115,3 +115,46 @@ test('a file is never kept by a shared cache, because it sits behind the view ke
   const response = await call({ path: 'wiki/INDEX.md' }, { 'wiki/INDEX.md': '# Index\n' })
   assert.equal(response.headers['Cache-Control'], 'private, no-store')
 })
+
+/* ---------- audit finding #9 (2026-10-10): only reads, and every answer kept private ---------- */
+
+async function callWith(request, env = {}) {
+  let fetched = 0
+  const original = globalThis.fetch
+  globalThis.fetch = async () => {
+    fetched += 1
+    return new Response('# Index\n', { status: 200 })
+  }
+  const previous = { ...process.env }
+  Object.assign(process.env, { GITHUB_OWNER: 'someone', GITHUB_REPO: 'my-agent-team', ...env })
+  const response = fakeResponse()
+  try {
+    await handler(request, response)
+  } finally {
+    globalThis.fetch = original
+    process.env = previous
+  }
+  return { response, fetched }
+}
+
+test('anything but GET is a 405 that says GET, and reads nothing', async () => {
+  for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
+    const { response, fetched } = await callWith({ method, query: { path: 'wiki/INDEX.md' } })
+    assert.equal(response.statusCode, 405, method)
+    assert.equal(response.headers.Allow, 'GET')
+    assert.equal(response.headers['Cache-Control'], 'private, no-store')
+    assert.equal(fetched, 0)
+  }
+  const { response } = await callWith({ method: 'GET', query: { path: 'wiki/INDEX.md' } })
+  assert.equal(response.statusCode, 200)
+})
+
+test('a refusal is never kept by a shared cache either', async () => {
+  // It used to be set only on the 200, so a 401 went out with no cache rule at all.
+  const { response } = await callWith({ headers: {}, query: { path: 'wiki/INDEX.md' } }, { PUBLIC_DASHBOARD: '', VIEW_KEY: 'a-long-enough-view-key' })
+  assert.equal(response.statusCode, 401)
+  assert.equal(response.headers['Cache-Control'], 'private, no-store')
+  const refused = await callWith({ query: { path: '../.env' } })
+  assert.equal(refused.response.statusCode, 400)
+  assert.equal(refused.response.headers['Cache-Control'], 'private, no-store')
+})

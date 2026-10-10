@@ -1835,3 +1835,36 @@ test('only a 403 or 429 is a rate limit: a Retry-After on any other failure is n
   assert.equal(unavailable.statusCode, 500)
   assert.equal(unavailable.headers['Retry-After'], undefined)
 })
+
+/* ---------- audit finding #9 (2026-10-10): our own words, and only reads ----------------------
+   A 500 passed on up to 200 characters of GitHub's own error text. Only key holders saw it, but it
+   is GitHub's sentence, not ours, and it can say things about the token. */
+
+test('a 500 never carries GitHub\'s own words', async () => {
+  const upstream = 'Bad credentials for token ghp_UPSTREAM_DETAIL see https://docs.github.com/UPSTREAM'
+  for (const status of [401, 403, 500, 502]) {
+    const response = await run({}, { treeFails: { status, body: upstream } })
+    assert.equal(response.statusCode, 500)
+    assert.ok(!JSON.stringify(response.body).includes('UPSTREAM'), `GitHub's text came back on a ${status}`)
+    assert.match(response.body.error, new RegExp(`GitHub returned ${status}`))
+  }
+})
+
+test('a reply that is not what GitHub promised is our sentence too, not the parser\'s', async () => {
+  const response = await run({}, { treeFails: { status: 200, body: '<html>UPSTREAM page</html>' } })
+  assert.equal(response.statusCode, 500)
+  assert.ok(!JSON.stringify(response.body).includes('UPSTREAM'), 'the reply\'s text came back')
+  assert.doesNotMatch(response.body.error, /Unexpected token|JSON/, 'the parser\'s message came back')
+  assert.match(response.body.error, /try again/i)
+})
+
+test('anything but GET is a 405 that says GET, reads nothing and is not kept', async () => {
+  for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) {
+    const calls = []
+    const response = await run({}, { calls, request: { method } })
+    assert.equal(response.statusCode, 405, method)
+    assert.equal(response.headers.Allow, 'GET')
+    assert.equal(response.headers['Cache-Control'], 'private, no-store')
+    assert.equal(calls.length, 0, `${method} read the repo`)
+  }
+})

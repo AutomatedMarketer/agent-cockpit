@@ -26,6 +26,14 @@ function headers() {
 }
 
 export default async function handler(request, response) {
+  // Never a shared cache, for every answer - the refusals included: a CDN keys on the URL, not the
+  // view key, so a copy made for the owner would be served to anyone without one.
+  response.setHeader('Cache-Control', 'private, no-store')
+  if (String(request?.method ?? 'GET').toUpperCase() !== 'GET') {
+    response.setHeader('Allow', 'GET')
+    response.status(405).json({ error: 'GET only: this endpoint reads one file and never changes it.' })
+    return
+  }
   const denied = viewGate(request)
   if (denied) {
     response.status(denied.status).json({ error: denied.error })
@@ -55,8 +63,5 @@ export default async function handler(request, response) {
   }
 
   const content = (await upstream.text()).slice(0, MAX_BYTES)
-  // Never a shared cache: a CDN keys on the URL, not the view key, so a copy made for the owner
-  // would be served to anyone without one.
-  response.setHeader('Cache-Control', 'private, no-store')
   response.status(200).json({ path, content })
 }
