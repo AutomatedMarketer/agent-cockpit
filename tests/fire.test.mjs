@@ -16,6 +16,9 @@ import handler, {
 } from '../api/fire.js'
 
 const FIRE_KEY = 'fk_correctHorseBatteryStaple'
+// Fire is held to the view gate first (finding #1 of the 2026-10-10 audit), so every request that
+// is meant to get past it carries the view key as well.
+const VIEW_KEY = 'vk_fakeViewKeyForTheFireSuite'
 const GITHUB_TOKEN = 'ghp_thisMustNeverLeaveTheServer'
 const TRIGGER_URL = 'https://triggers.example/hooks/abc123SuperSecretPath'
 const TASK_TRIGGER_URL = 'https://triggers.example/hooks/task456AlsoSecretPath'
@@ -86,6 +89,7 @@ const BASE_ENV = {
   GITHUB_OWNER: 'someone',
   GITHUB_REPO: 'my-agent-team',
   GITHUB_TOKEN,
+  VIEW_KEY,
   FIRE_KEY,
   FIRE_TRIGGERS: TRIGGERS
 }
@@ -108,12 +112,13 @@ async function fire(request, { env = {}, unset = [], trigger } = {}) {
   return { response, calls: stub.calls }
 }
 
-const withKey = (body, key = FIRE_KEY) => ({ headers: { 'x-fire-key': key }, body })
+const withKey = (body, key = FIRE_KEY) => ({ headers: { 'x-view-key': VIEW_KEY, 'x-fire-key': key }, body })
 
 // The one assertion that runs on everything: no secret ever leaves the server.
 function assertNoSecrets(response) {
   const text = JSON.stringify(response.body) + JSON.stringify(response.headers)
   assert.doesNotMatch(text, /fk_/, 'FIRE_KEY leaked')
+  assert.doesNotMatch(text, /vk_/, 'VIEW_KEY leaked')
   assert.doesNotMatch(text, /ghp_/, 'GITHUB_TOKEN leaked')
   assert.ok(!text.includes('triggers.example'), 'a trigger URL leaked')
   assert.ok(!text.includes('SuperSecretPath'), 'a trigger URL path leaked')
@@ -213,14 +218,80 @@ test('a request with the wrong key is 401', async () => {
   assertNoSecrets(response)
 })
 
-test('PUBLIC_FIRE=true allows same-origin dispatch without a key — even with no key set', async () => {
-  // The genuinely-open configuration: no FIRE_KEY anywhere, browser same-origin headers.
-  const { response } = await fire(
-    { headers: { 'sec-fetch-site': 'same-origin' }, body: { workflow: 'monday-brief' } },
-    { env: { PUBLIC_FIRE: 'true' }, unset: ['FIRE_KEY'], trigger: { status: 200, body: '{}' } }
-  )
-  assert.equal(response.statusCode, 200)
-  assert.equal(response.body.ok, true)
+/* ---------- the viewer first, always (audit finding #1, 2026-10-10) ----------
+   PUBLIC_FIRE used to skip every key: a header-less curl - which sends no Origin and no
+   Sec-Fetch-Site, so the "same site only" check let it through - could make an unattended cloud
+   session act on a stranger's 2,000 characters. Fire now asks "may this person see the board?"
+   before anything else, exactly as every other endpoint does. PUBLIC_FIRE only waives the SECOND
+   key, the fire key. */
+
+test('PUBLIC_FIRE=true with no view key is 401 - a header-less curl included', async () => {
+  for (const headers of [{}, { 'content-type': 'application/json' }, { 'x-fire-key': FIRE_KEY }]) {
+    const { response, calls } = await fire(
+      { headers, body: { action: 'task', title: 'A stranger instruction' } },
+      { env: { PUBLIC_FIRE: 'true' }, unset: ['FIRE_KEY'] }
+    )
+    assert.equal(response.statusCode, 401, `${JSON.stringify(headers)} got past the view check`)
+    assert.equal(calls.trigger.length, 0, 'a stranger dispatched a job')
+    assert.equal(calls.github.length, 0, 'a stranger made the board read the repo')
+    assert.match(response.body.error, /view key/i)
+    assertNoSecrets(response)
+  }
+})
+
+test('PUBLIC_FIRE=true with the view key dispatches without a fire key - from a browser or a script', async () => {
+  for (const extra of [{ 'sec-fetch-site': 'same-origin' }, {}]) {
+    const { response, calls } = await fire(
+      { headers: { 'x-view-key': VIEW_KEY, ...extra }, body: { workflow: 'monday-brief' } },
+      { env: { PUBLIC_FIRE: 'true' }, unset: ['FIRE_KEY'], trigger: { status: 200, body: '{}' } }
+    )
+    assert.equal(response.statusCode, 200)
+    assert.equal(response.body.ok, true)
+    assert.equal(calls.trigger.length, 1)
+  }
+})
+
+test('with FIRE_KEY set, the view key and the fire key are both needed', async () => {
+  const viewOnly = await fire({ headers: { 'x-view-key': VIEW_KEY }, body: { workflow: 'monday-brief' } })
+  assert.equal(viewOnly.response.statusCode, 401)
+  assert.equal(viewOnly.response.body.needs, 'fire-key', 'the page asks for the fire key only when this says so')
+  assert.equal(viewOnly.calls.trigger.length, 0)
+
+  const fireOnly = await fire({ headers: { 'x-fire-key': FIRE_KEY }, body: { workflow: 'monday-brief' } })
+  assert.equal(fireOnly.response.statusCode, 401)
+  assert.equal(fireOnly.response.body.needs, undefined, 'a missing view key is not a missing fire key')
+  assert.equal(fireOnly.calls.trigger.length, 0)
+
+  const both = await fire(withKey({ workflow: 'monday-brief' }), { trigger: { status: 200, body: '{}' } })
+  assert.equal(both.response.statusCode, 200)
+  assert.equal(both.calls.trigger.length, 1)
+  for (const { response } of [viewOnly, fireOnly, both]) assertNoSecrets(response)
+})
+
+test('the view check comes before the configuration: a stranger learns nothing about it', async () => {
+  for (const unset of [['FIRE_KEY'], ['FIRE_TRIGGERS'], ['FIRE_KEY', 'FIRE_TRIGGERS']]) {
+    const { response } = await fire({ body: { workflow: 'monday-brief' } }, { unset })
+    assert.equal(response.statusCode, 401, `with ${unset.join(' and ')} unset a stranger was told ${response.statusCode}`)
+  }
+})
+
+test('no VIEW_KEY at all means fire is closed too, whatever else is set', async () => {
+  const { response, calls } = await fire(withKey({ workflow: 'monday-brief' }), { env: { PUBLIC_FIRE: 'true' }, unset: ['VIEW_KEY'] })
+  assert.equal(response.statusCode, 503)
+  assert.equal(calls.trigger.length, 0)
+  assertNoSecrets(response)
+})
+
+test('on a board open to everyone, PUBLIC_FIRE does not open fire as well', async () => {
+  // PUBLIC_DASHBOARD=true has no first key at all, so "only the second key is waived" would leave
+  // no key: the same rule writeGate keeps for changes on an open board.
+  const open = { PUBLIC_DASHBOARD: 'true', PUBLIC_FIRE: 'true' }
+  const noKey = await fire({ headers: { 'sec-fetch-site': 'same-origin' }, body: { workflow: 'monday-brief' } }, { env: open, unset: ['VIEW_KEY', 'FIRE_KEY'] })
+  assert.notEqual(noKey.response.statusCode, 200)
+  assert.equal(noKey.calls.trigger.length, 0)
+  assert.match(noKey.response.body.error, /FIRE_KEY/)
+  const withFireKey = await fire({ headers: { 'x-fire-key': FIRE_KEY }, body: { workflow: 'monday-brief' } }, { env: open, unset: ['VIEW_KEY'], trigger: { status: 200, body: '{}' } })
+  assert.equal(withFireKey.response.statusCode, 200)
 })
 
 test('PUBLIC_FIRE=true refuses cross-site browser calls', async () => {
@@ -229,7 +300,7 @@ test('PUBLIC_FIRE=true refuses cross-site browser calls', async () => {
     { origin: 'https://evil.example', host: 'cockpit.example.vercel.app' }
   ]) {
     const { response, calls } = await fire(
-      { headers, body: { workflow: 'monday-brief' } },
+      { headers: { 'x-view-key': VIEW_KEY, ...headers }, body: { workflow: 'monday-brief' } },
       { env: { PUBLIC_FIRE: 'true' } }
     )
     assert.equal(response.statusCode, 403)
@@ -238,9 +309,23 @@ test('PUBLIC_FIRE=true refuses cross-site browser calls', async () => {
   }
 })
 
+test('a cross-site browser call is refused with the fire key too', async () => {
+  // Once a signed-in cookie can prove who you are by itself, "which site is asking" has to be
+  // checked whichever key is in use - not only under PUBLIC_FIRE.
+  for (const headers of [
+    { 'sec-fetch-site': 'cross-site' },
+    { 'sec-fetch-site': 'same-site' },
+    { origin: 'https://evil.example', host: 'cockpit.example.vercel.app' }
+  ]) {
+    const { response, calls } = await fire({ headers: { 'x-view-key': VIEW_KEY, 'x-fire-key': FIRE_KEY, ...headers }, body: { workflow: 'monday-brief' } })
+    assert.equal(response.statusCode, 403)
+    assert.equal(calls.trigger.length, 0)
+  }
+})
+
 test('a CORS-simple text/plain body is refused even with a valid key', async () => {
   const { response, calls } = await fire({
-    headers: { 'x-fire-key': FIRE_KEY, 'content-type': 'text/plain' },
+    headers: { 'x-view-key': VIEW_KEY, 'x-fire-key': FIRE_KEY, 'content-type': 'text/plain' },
     body: '{"workflow":"monday-brief","action":"pause"}'
   })
   assert.equal(response.statusCode, 400)
@@ -251,7 +336,7 @@ test('a CORS-simple text/plain body is refused even with a valid key', async () 
 test('a form-encoded body parsed into an object is refused too', async () => {
   // Vercel parses urlencoded bodies into objects; the content-type check must still apply.
   const { response, calls } = await fire({
-    headers: { 'x-fire-key': FIRE_KEY, 'content-type': 'application/x-www-form-urlencoded' },
+    headers: { 'x-view-key': VIEW_KEY, 'x-fire-key': FIRE_KEY, 'content-type': 'application/x-www-form-urlencoded' },
     body: { workflow: 'monday-brief', action: 'pause' }
   })
   assert.equal(response.statusCode, 400)
@@ -261,7 +346,7 @@ test('a form-encoded body parsed into an object is refused too', async () => {
 
 test('a content-type smuggling JSON in a parameter is refused (essence check)', async () => {
   const { response, calls } = await fire({
-    headers: { 'x-fire-key': FIRE_KEY, 'content-type': 'text/plain; charset=application/json' },
+    headers: { 'x-view-key': VIEW_KEY, 'x-fire-key': FIRE_KEY, 'content-type': 'text/plain; charset=application/json' },
     body: '{"workflow":"monday-brief"}'
   })
   assert.equal(response.statusCode, 400)
@@ -271,7 +356,7 @@ test('a content-type smuggling JSON in a parameter is refused (essence check)', 
 
 test('PUBLIC_FIRE fails closed when Origin arrives with no host to compare', async () => {
   const { response, calls } = await fire(
-    { headers: { origin: 'https://cockpit.example.vercel.app' }, body: { workflow: 'monday-brief' } },
+    { headers: { 'x-view-key': VIEW_KEY, origin: 'https://cockpit.example.vercel.app' }, body: { workflow: 'monday-brief' } },
     { env: { PUBLIC_FIRE: 'true' } }
   )
   assert.equal(response.statusCode, 403)
@@ -280,8 +365,9 @@ test('PUBLIC_FIRE fails closed when Origin arrives with no host to compare', asy
 })
 
 test('PUBLIC_FIRE set to anything but "true" still requires the key', async () => {
-  const { response } = await fire({ body: { workflow: 'monday-brief' } }, { env: { PUBLIC_FIRE: '1' } })
+  const { response } = await fire({ headers: { 'x-view-key': VIEW_KEY }, body: { workflow: 'monday-brief' } }, { env: { PUBLIC_FIRE: '1' } })
   assert.equal(response.statusCode, 401)
+  assert.equal(response.body.needs, 'fire-key')
   assertNoSecrets(response)
 })
 

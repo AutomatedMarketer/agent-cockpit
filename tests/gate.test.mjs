@@ -196,8 +196,11 @@ test('the README carries the PUBLIC_FIRE warning that the code says it carries',
     'nothing says PUBLIC_FIRE is not a security boundary, which is the whole point of the row')
   assert.match(readme, /forge/i,
     'nothing says the headers it trusts can be forged by anything that is not a browser')
-  assert.match(readme, /anyone who knows your dashboard's URL|anyone who knows the URL/i,
+  assert.match(readme, /anyone who can open your board/i,
     'nothing says who can fire your jobs once this is on')
+  // Fire checks the viewer first since the 2026-10-10 audit; the warning must not promise less.
+  assert.match(readme, /fire always checks who is asking first/i,
+    'nothing says PUBLIC_FIRE leaves the view check in place')
 })
 
 test('the README quotes the number of tests the suite actually reports', () => {

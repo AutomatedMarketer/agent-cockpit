@@ -507,13 +507,15 @@ has no evidence for.
 
 **Redeploy after changing any of these.** Vercel does not apply env vars to a running deployment.
 
-> **`PUBLIC_FIRE` is a convenience, not a security boundary.** It tells the fire endpoint to accept
-> requests that look like they came from your own page, using headers a browser sets. A browser
-> cannot lie about them; anything that is not a browser can **forge them freely**. So with
-> `PUBLIC_FIRE=true`, anyone who knows your dashboard's URL can start your jobs - spending runs on
-> your Claude account - without a key. The buttons still cannot make anything *send*, and the
-> dashboard still cannot write to your repo, but the runs are real and they are yours. Leave it
-> unset and use `FIRE_KEY` unless you have a reason not to.
+> **`PUBLIC_FIRE` is a convenience, not a security boundary.** It drops the fire key, and nothing
+> else: fire always checks who is asking first, exactly like the rest of the board. So with
+> `PUBLIC_FIRE=true`, anyone who can open your board - anyone signed in, or holding the view key -
+> can start your jobs, spending runs on your Claude account, without a second key. The check that a
+> request came from your own page uses headers a browser sets. A browser cannot lie about them;
+> anything that is not a browser can **forge them freely**. The buttons still cannot make anything
+> *send*, and the dashboard still cannot write to your repo, but the runs are real and they are
+> yours. On a board with `PUBLIC_DASHBOARD=true` it does nothing: the fire key is then required.
+> Leave it unset and use `FIRE_KEY` unless you have a reason not to.
 
 **4. Open it.** If you set `VIEW_KEY`, the page asks for it once and remembers.
 
@@ -537,7 +539,7 @@ Locally:
 npm test
 ```
 
-1567 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1576 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

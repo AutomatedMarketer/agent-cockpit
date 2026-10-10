@@ -36,7 +36,7 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 // Re-exported because this module's tests are the ones that cover it. The slug rule and the
 // same-origin check moved to lib.js for the same reason: the picture-store writes run them
 // too, and a second copy of either is a second place to get it wrong.
-import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest } from './lib.js'
+import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest, viewGate } from './lib.js'
 export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
 
 // FIRE_TRIGGERS must be a JSON object of slug → https URL. Anything else reads as
@@ -347,9 +347,8 @@ export function sessionUrlFrom(result) {
   return null
 }
 
-// The same-origin check PUBLIC_FIRE relies on lives in lib.js (imported above), with the note
-// on why it is best-effort - which is why the README says to keep PUBLIC_FIRE deployments
-// behind Vercel's own access control.
+// The same-origin check lives in lib.js (imported above), with the note on why it is
+// best-effort - which is why the README calls PUBLIC_FIRE a convenience, not a security boundary.
 
 // --- GitHub read (same shape as api/file.js — read-only, token stays server-side) --------
 
@@ -405,8 +404,21 @@ export default async function handler(request, response) {
     return
   }
 
-  // Auth first, before the request body gets a single glance.
-  const publicFire = process.env.PUBLIC_FIRE === 'true'
+  // Auth first, before the request body gets a single glance - and the viewer before anything
+  // else, the configuration included: whoever may not see the board learns nothing about how fire
+  // is set up. This used to be skipped under PUBLIC_FIRE, so a header-less curl (no Origin, no
+  // Sec-Fetch-Site, so "same site" let it through) could dispatch a job on a stranger's words
+  // (audit finding #1, 2026-10-10). PUBLIC_FIRE now waives only the second key, the fire key.
+  const denied = viewGate(request)
+  if (denied) {
+    response.status(denied.status).json({ error: denied.error })
+    return
+  }
+
+  // On a board open to everyone (PUBLIC_DASHBOARD=true) there is no first key, so waiving the
+  // second would leave none: the fire key is then required, as writeGate requires EDIT_KEY there.
+  const openBoard = process.env.PUBLIC_DASHBOARD === 'true'
+  const publicFire = process.env.PUBLIC_FIRE === 'true' && !openBoard
   const fireKey = process.env.FIRE_KEY
   const triggers = parseTriggers(process.env.FIRE_TRIGGERS)
 
@@ -416,18 +428,21 @@ export default async function handler(request, response) {
     response.status(503).json({
       error:
         'Fire is not configured. Set FIRE_KEY and FIRE_TRIGGERS (a JSON object of ' +
-        'workflow slug → trigger URL) in the hosting environment, then redeploy.'
+        'workflow slug → trigger URL) in the hosting environment, then redeploy.' +
+        (openBoard && process.env.PUBLIC_FIRE === 'true' ? ' PUBLIC_FIRE does nothing on a board with PUBLIC_DASHBOARD=true.' : '')
     })
     return
   }
 
-  if (publicFire) {
-    if (!isSameOriginRequest(request.headers)) {
-      response.status(403).json({ error: 'PUBLIC_FIRE only accepts same-origin requests.' })
-      return
-    }
-  } else if (!keysMatch(request.headers?.['x-fire-key'], fireKey)) {
-    response.status(401).json({ error: 'Missing or wrong fire key. Send it in the x-fire-key header.' })
+  // Another site's page riding the owner's browser is refused whichever key is in use: once the
+  // board signs people in with a cookie, the browser proves who they are by itself.
+  if (!isSameOriginRequest(request.headers)) {
+    response.status(403).json({ error: 'Fire only accepts requests from the board itself.' })
+    return
+  }
+  if (!publicFire && !keysMatch(request.headers?.['x-fire-key'], fireKey)) {
+    // `needs` is how the page knows to ask for the fire key - and the only time it should.
+    response.status(401).json({ needs: 'fire-key', error: 'Missing or wrong fire key. Send it in the x-fire-key header.' })
     return
   }
 

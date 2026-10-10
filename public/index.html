@@ -3393,6 +3393,9 @@ function fireNoteFor(button) {
 
 async function callFire(body, key) {
   const headers = { 'Content-Type': 'application/json' }
+  // Fire checks the viewer first, like every other endpoint, so it is sent the view key too.
+  const view = viewKey()
+  if (view) headers['x-view-key'] = view
   if (key) headers['x-fire-key'] = key
   const response = await fetch('/api/fire', {
     method: 'POST',
@@ -3405,11 +3408,15 @@ async function callFire(body, key) {
 }
 
 // One client path for every dispatch — Run, Pause, and Add task all go through here, so
-// the prompt-once key handling exists exactly once.
+// the prompt-once key handling exists exactly once. A 401 is a reason to ask for the fire key only
+// when the answer says that is what is missing: the viewer is checked first, and a signed-out
+// person asked for the fire key would be asked for the wrong thing.
+const needsFireKey = (result) => result.status === 401 && result.payload?.needs === 'fire-key'
+
 async function postFire(body) {
   let key = sessionStorage.getItem(FIRE_KEY_STORE) || ''
   let result = await callFire(body, key)
-  if (result.status === 401) {
+  if (needsFireKey(result)) {
     const entered = window.prompt(
       'This dashboard needs its fire key to dispatch jobs.\n\nPaste the FIRE_KEY you set in the hosting environment — it is kept in this tab only, never in the page.'
     )
@@ -3419,7 +3426,7 @@ async function postFire(body) {
       result = await callFire(body, key)
     }
   }
-  if (!result.ok && result.status === 401) sessionStorage.removeItem(FIRE_KEY_STORE)
+  if (needsFireKey(result)) sessionStorage.removeItem(FIRE_KEY_STORE)
   return result
 }
 
