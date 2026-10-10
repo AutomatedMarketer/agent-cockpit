@@ -45,3 +45,66 @@ test('every fixed dispatch slug is named in the deploy instructions', async () =
     )
   }
 })
+
+/* ---------- signing in (spec 2026-10-10, build task 13) ----------
+   A student sets this up alone, often on Hobby, and is not technical. Every step the board's safety
+   leans on has to be in the instructions they follow - the firewall rule above all: without it, the
+   only limit on guessing a memorable password is one server's memory. */
+
+const section = (readme, heading) => {
+  const from = readme.indexOf(`\n## ${heading}\n`)
+  assert.ok(from >= 0, `README.md has no "## ${heading}" section`)
+  const to = readme.indexOf('\n## ', from + 1)
+  return readme.slice(from, to < 0 ? undefined : to)
+}
+
+test('the README has a Signing in section with every step and every name a student needs', async () => {
+  const readme = await readFile(join(root, 'README.md'), 'utf8')
+  const signingIn = section(readme, 'Signing in')
+  for (const name of ['BOARD_USERNAME', 'BOARD_PASSWORD', 'VIEW_KEY', 'Sensitive']) {
+    assert.ok(signingIn.includes(name), `the Signing in section never names ${name}`)
+  }
+  assert.match(signingIn, /12 characters/, 'nothing says how long the password must be')
+  assert.match(signingIn, /All Deployments/, 'the Vercel Authentication step is missing')
+  assert.ok(signingIn.includes('https://vercel.com/changelog/protect-production-deployments-for-free-on-every-plan'),
+    'the step does not link the source that says it is free')
+  assert.match(signingIn, /\/api\/login/, 'the firewall rule does not name the path it limits')
+  assert.match(signingIn, /Rate Limit/, 'the firewall rule does not say what kind of rule')
+  assert.match(signingIn, /10 requests per 60 seconds/, 'the firewall rule has no numbers')
+  assert.match(signingIn, /Publish/, 'a firewall rule that is saved and not published does nothing')
+  assert.match(signingIn, /Use the spare key/, 'the spare key is not explained the way the screen says it')
+  assert.match(signingIn, /Sign out everywhere/)
+  assert.match(signingIn, /signs every device out/i, 'nothing says what changing a key does to signed-in devices')
+  assert.match(signingIn, /node -e/, 'no way to make a random key without openssl (Windows)')
+})
+
+test('the Signing in steps come in the order they have to be done', async () => {
+  const signingIn = section(await readFile(join(root, 'README.md'), 'utf8'), 'Signing in')
+  const order = ['VIEW_KEY', 'BOARD_PASSWORD', 'Redeploy', 'All Deployments', '/api/login', 'save']
+  let last = -1
+  for (const step of order) {
+    const at = signingIn.indexOf(step, last + 1)
+    assert.ok(at > last, `"${step}" is not where it belongs in the steps`)
+    last = at
+  }
+})
+
+test('nothing still says closing the production gap costs $150 a month - it is free on every plan', async () => {
+  // Audit finding #15: the claim was in api/lib.js and .env.example, and it talked students out of
+  // the strongest free protection there is.
+  const { readdirSync } = await import('node:fs')
+  const files = ['README.md', '.env.example', ...readdirSync(join(root, 'api')).map((name) => `api/${name}`)]
+  for (const file of files) {
+    const text = await readFile(join(root, file), 'utf8')
+    assert.doesNotMatch(text, /\$\s?150|150\s*(?:\/|a|per)\s*month/i, `${file} still says the protection costs $150 a month`)
+  }
+})
+
+test('.env.example names the sign-in variables, with no values', async () => {
+  const example = await readFile(join(root, '.env.example'), 'utf8')
+  for (const name of ['VIEW_KEY', 'BOARD_USERNAME', 'BOARD_PASSWORD']) {
+    const line = example.split(/\r?\n/).find((one) => one.startsWith(`${name}=`))
+    assert.ok(line, `.env.example does not name ${name}`)
+    assert.equal(line, `${name}=`, `.env.example gives ${name} a value; it must only name it`)
+  }
+})

@@ -1,7 +1,8 @@
-// The view gate. Vercel's "Standard Protection" exempts production domains, and closing
-// that gap on their side costs $150/month — so the two read endpoints close it themselves.
-// These tests are the contract: a private repo is never served to an unauthenticated
-// caller, and a missing key fails silent rather than open.
+// The view gate. Vercel's default "Standard Protection" leaves the production address open
+// (closing it - "All Deployments" - is now free on every plan, and the README says how), but one
+// dropdown can be switched off again, so the board closes itself as well. These tests are the
+// contract: a private repo is never served to an unauthenticated caller, and a missing key fails
+// silent rather than open. The signed-in cookie's side is tests/session-gate.test.mjs.
 
 import test from 'node:test'
 import assert from 'node:assert/strict'

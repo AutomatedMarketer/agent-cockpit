@@ -315,7 +315,7 @@ the rest of the 2,000 for retries and for you looking at the store in Vercel:
 
 ### Who can change things
 
-Anyone with the view key can personalise the board - the store holds only pictures and names, and the
+Anyone who can sign in (or holds the view key) can personalise the board - the store holds only pictures and names, and the
 caps limit what a key can spend. To let people **look but not change**, set `EDIT_KEY` as well: the
 board asks for it the first time somebody changes something, and keeps it on that device.
 
@@ -481,7 +481,9 @@ has no evidence for.
 | `GITHUB_REPO` | Your team repo's name — e.g. `my-agent-team` | **Yes** |
 | `GITHUB_BRANCH` | Usually `main`. Leave unset and it defaults to `main` | No |
 | `GITHUB_TOKEN` | A read-only token. **Required if your team repo is private** | If private |
-| `VIEW_KEY` | A password for the board. Send it as the `x-view-key` header | **Yes**, unless… |
+| `VIEW_KEY` | The **spare key**: long and random. Signs in when the password is lost, and scripts send it as the `x-view-key` header. See [Signing in](#signing-in) | **Yes**, unless… |
+| `BOARD_USERNAME` | The username you sign in with, e.g. your email. Capitals and spaces do not matter | Recommended |
+| `BOARD_PASSWORD` | The password you sign in with: **12 characters or more**. Tick **Sensitive** | Recommended |
 | `PUBLIC_DASHBOARD` | `true` to skip the key entirely — only if the repo is genuinely public | No |
 | `FIRE_TRIGGERS` | JSON mapping job slug → its trigger URL. Needed for the Run buttons. **Include `task-intake`** — a routine, not a job — or Add task, New workflow, Arm and Approve all fail | For buttons |
 | `FIRE_KEY` | A password for firing jobs, sent as `x-fire-key` | For buttons |
@@ -517,7 +519,76 @@ has no evidence for.
 > yours. On a board with `PUBLIC_DASHBOARD=true` it does nothing: the fire key is then required.
 > Leave it unset and use `FIRE_KEY` unless you have a reason not to.
 
-**4. Open it.** If you set `VIEW_KEY`, the page asks for it once and remembers.
+**4. Lock it and sign in.** Follow [Signing in](#signing-in) below: about five minutes, once.
+
+---
+
+## Signing in
+
+The board is locked. Nobody sees it until they sign in, and each phone or computer signs in **once**,
+then stays signed in for 30 days after you last used it. Your phone or browser saves the password for
+you, like any website's.
+
+### Set it up (about five minutes, once)
+
+1. **Make a spare key.** In Vercel: your project, **Settings → Environment Variables**, add `VIEW_KEY`
+   with a long random value, and tick **Sensitive**. Make the value with `openssl rand -hex 20`, or,
+   on a computer without openssl (Windows):
+
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(20).toString('hex'))"
+   ```
+
+   Keep it in your password manager, named "spare key". Never copy an example value.
+2. **Choose a username and password.** Add `BOARD_USERNAME` (your email is fine) and `BOARD_PASSWORD`:
+   **12 characters or more** - three or four unrelated words is easy to remember and hard to guess.
+   Tick **Sensitive** on the password. A password under 12 characters is never used, and the sign-in
+   screen says so.
+3. **Redeploy.** Vercel does not apply new variables to a running board.
+4. **Turn on Vercel Authentication for every address.** Your project, **Settings → Deployment
+   Protection → Vercel Authentication → All Deployments**, then **Save**. It is free on every plan,
+   Hobby included ([Vercel's changelog](https://vercel.com/changelog/protect-production-deployments-for-free-on-every-plan)).
+   Strangers then never reach the board at all; you log in to Vercel once on each device. The
+   default, "Standard Protection", leaves your main address open, which is the one you bookmark.
+5. **Add one firewall rule**, so nobody can try password after password. Your project, **Firewall →
+   New Rule**: if **Request Path** equals `/api/login`, then **Rate Limit**,
+   **10 requests per 60 seconds**, keyed by **IP**. **Save**, then **Publish** - a rule that is not
+   published does nothing.
+   Free on Hobby (one rule per project).
+6. **Open the board on your phone**, type the username and password once, and let the phone save them.
+
+### The spare key
+
+- It is your `VIEW_KEY`. On the sign-in screen, tap **Use the spare key instead** and paste it.
+- Use it when you have forgotten the password, or before you have set one.
+- Scripts still send it in the `x-view-key` header.
+- A phone that kept the old key from before there was a sign-in moves over by itself the first time
+  it opens the board. Nobody types anything.
+
+### Forgot the password, or think someone saw it
+
+- Sign in with the spare key, then change `BOARD_PASSWORD` in Vercel and redeploy.
+- Changing `BOARD_PASSWORD` or `VIEW_KEY` **signs every device out**, at once. Change `VIEW_KEY` if
+  the spare key itself got out.
+
+### Signing out
+
+- **Sign out**, under the screens: this phone or computer only.
+- **Sign out everywhere**: every device, this one included. It is kept in the picture store, so it
+  needs one ([Make it yours](#make-it-yours)) and uses one of the day's changes. Other devices are out
+  within about a minute and a half. No picture store? Change `VIEW_KEY` (or `BOARD_PASSWORD`) and
+  redeploy instead.
+
+### What stops someone guessing
+
+| Layer | What it does |
+|---|---|
+| Vercel Authentication (step 4) | Strangers never reach the board, so they cannot guess at all |
+| The firewall rule (step 5) | More than 10 tries a minute from one place are refused before the board sees them |
+| The board itself | Each wrong try takes about half a second, and 5 wrong tries from one place pause signing in there for 15 minutes. Every wrong try gets the same sentence, so nothing says whether the username or the password was wrong |
+
+The cookie that keeps a device signed in cannot be read by anything running on the page, is never
+sent to another website, and is refused once 30 days pass without the board being opened.
 
 ---
 
@@ -539,7 +610,7 @@ Locally:
 npm test
 ```
 
-1674 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1678 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.
@@ -551,6 +622,10 @@ used only when you connect a picture store.
 | What you saw | What to do |
 |---|---|
 | `This dashboard is not configured` | Set `VIEW_KEY`, or `PUBLIC_DASHBOARD=true` if the repo is public. Redeploy |
+| `BOARD_PASSWORD is shorter than 12 characters` | Set a longer one in Vercel and redeploy. Until then, use the spare key |
+| `Too many wrong tries from here` | Wait 15 minutes, then try again, or use the spare key from another network |
+| **Reload to sign in** | Your Vercel login on this device ran out. Tap **Reload** and sign in to Vercel again |
+| The username and password never work | Check both are set in Vercel and that you **redeployed**. The spare key always works |
 | `Set GITHUB_OWNER and GITHUB_REPO` | Add both in Vercel settings, then **redeploy** |
 | `404` from GitHub | The owner/repo names are wrong, or the repo is private and `GITHUB_TOKEN` is missing |
 | Every job says **UNKNOWN** | No routines snapshot in your repo. Run `/routines` in Claude Code, commit, push |
@@ -607,6 +682,9 @@ used only when you connect a picture store.
   [What goes where](#what-goes-where)
 - **Put a key on the page.** The OpenAI and Fish keys stay on the server. A voice call is started by
   the board's own function, which adds the key; not even a short-lived key reaches your browser
+- **Keep a key or password where the page can read it.** Signing in leaves a cookie that no script
+  on the page can read and the browser never sends to another site. The board keeps nothing else on
+  your device: your phone or browser's own password manager is what remembers the password
 - **Cap your voice spending for you.** It meters it, as an estimate. The hard spend limit on your OpenAI
   project is what stops it
 - **Show you somebody else's data.** It reads one repo, the one you named
