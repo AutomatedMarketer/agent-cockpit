@@ -40,6 +40,8 @@ function element(id = '', tag = 'div') {
     removeAttribute(name) { delete this.attributes[name] },
     addEventListener(type, handler) { (this.listeners[type] ??= []).push(handler) },
     appendChild(child) { this.children.push(child); return child },
+    // Drawing a screen out of elements: the new children replace the old, as in a browser.
+    replaceChildren(...children) { this.children = children },
     remove() { this.removed = true },
     focus() { this.focused += 1 },
     closest: () => null,
@@ -68,7 +70,7 @@ export const flush = async (times = 6) => {
 // `fetch(url, init)` answers the page's requests; left out, /api/state gets `payload` and everything
 // else an empty object. `given` is handed to `after`, a line of code run inside the page's own scope
 // once the script has loaded - the way a test sets a page variable the person would have set.
-export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after = '', given = {}, hash = '', media = {}, prompt, hostname = 'board.example' } = {}) {
+export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after = '', given = {}, hash = '', media = {}, prompt, hostname = 'board.example', scrollY = 0 } = {}) {
   for (const name of expose) assert.match(name, /^[A-Za-z_$][\w$]*$/, `${name} is not a name`)
   const nodes = new Map()
   const node = (id) => {
@@ -78,6 +80,8 @@ export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after
   const documentListeners = []
   const windowListeners = []
   const created = []
+  // Every scrollTo the page asked for, in order, and where the reader is scrolled to when it starts.
+  const scrolls = []
   const document = {
     getElementById: (id) => node(id),
     querySelector: () => null,
@@ -109,7 +113,8 @@ export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after
       addEventListener(type, handler) { windowListeners.push({ type, handler }) },
       matchMedia: (query) => ({ matches: Boolean(media[query]), addEventListener() {} }),
       location: { hash, hostname },
-      scrollTo() {},
+      scrollY,
+      scrollTo(...position) { scrolls.push(position) },
       requestAnimationFrame: (fn) => fn(),
       prompt
     },
@@ -129,7 +134,7 @@ export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after
      ; return { ${expose.join(', ')} };`
   )
   const exposed = run(...Object.values(context), given)
-  return { nodes, node, document, documentListeners, windowListeners, created, requests, storage: local, exposed }
+  return { nodes, node, document, documentListeners, windowListeners, created, requests, scrolls, storage: local, exposed }
 }
 
 // Every class a piece of markup uses.

@@ -154,3 +154,16 @@ test('the search box does not promise to search more than the filter reads', () 
   assert.match(page, /Search \$\{data\.memory\.files\.length\} page names/, 'the box promises to search pages')
   assert.match(page, /searches page names, not the words written inside\s+them/)
 })
+
+/* --- Flight readiness: every scheduled job, one light each ------------------------------------
+   Added after Workflows, and the floor above is unchanged. The screen's own behaviour is tested in
+   readiness-screen.test.mjs; this holds only what the router needs to know it. */
+
+test('the Readiness screen is registered, routed and in the nav, after Workflows', () => {
+  assert.match(page, /data-screen="readiness"/)
+  assert.match(page, /id="readiness"/)
+  assert.ok(titleMap().includes("readiness: 'Flight readiness'"))
+  assert.ok(page.indexOf('data-screen="workflows"') < page.indexOf('data-screen="readiness"'))
+  assert.ok(page.indexOf('data-screen="readiness"') < page.indexOf('data-screen="skills"'))
+  assert.match(page, /renderReadiness\(\)/, 'the screen is never drawn')
+})

@@ -205,16 +205,17 @@ const workflow = (over = {}) => ({
   ...over
 })
 
-const SCREENS = ['today', 'ledger', 'team', 'workflows', 'skills', 'memory', 'connections']
+const SCREENS = ['today', 'ledger', 'team', 'workflows', 'readiness', 'skills', 'memory', 'connections']
 
 /* ---------- every screen draws ---------------------------------------------------------------- */
 
-test('all seven screens render from an empty repo without throwing', () => {
+test('every screen renders from an empty repo without throwing', () => {
   const nodes = render(base)
   for (const screen of SCREENS) {
     const drawn = nodes.get(screen)
     assert.ok(drawn, `${screen} was never rendered`)
-    assert.ok(drawn.innerHTML.length > 0, `${screen} rendered nothing at all`)
+    // Readiness is drawn from elements and set as text, so it leaves innerHTML empty by design.
+    assert.ok(drawn.innerHTML.length > 0 || String(drawn.textContent).length > 0, `${screen} rendered nothing at all`)
   }
 })
 
@@ -1804,7 +1805,10 @@ test('no screen assumes the reader owns a business, empty or populated', () => {
     workflows: ['Morning Intel', 'Off until there is something to read'],
     skills: ['triage-inbox', 'capture-verdict', 'context7'],
     memory: ['about-me.md'],
-    connections: ['Read the subject lines', 'Studio box']
+    connections: ['Read the subject lines', 'Studio box'],
+    // Drawn from elements and set as text, so there is no markup here to look in. The Readiness
+    // screen is swept for the same things in readiness-screen.test.mjs, on the tree it builds.
+    readiness: []
   }
   for (const screen of SCREENS) {
     const drawn = fixtures.populated.get(screen).innerHTML
@@ -2819,7 +2823,7 @@ const exactRules = (selector) => cssRules().filter((rule) =>
   rule.selector.split(',').map((one) => one.trim()).includes(selector))
 
 const WIDE = /min-width:\s*48rem/
-const TAB_LABEL = { today: 'Today', ledger: 'Ledger', team: 'Team', workflows: 'Workflows', skills: 'Skills', memory: 'Memory', connections: 'Connections', hermes: 'Hermes' }
+const TAB_LABEL = { today: 'Today', ledger: 'Ledger', team: 'Team', workflows: 'Workflows', readiness: 'Readiness', skills: 'Skills', memory: 'Memory', connections: 'Connections', hermes: 'Hermes' }
 // A tab that is only there for somebody who has it: Hermes, shown when a Hermes reading found one.
 const OPTIONAL_TABS = ['hermes']
 
@@ -3008,11 +3012,11 @@ test('a phone tab is as tall as a thumb needs', () => {
   assert.ok(remOf(height) >= 2.75, `a phone tab is ${height} tall - a thumb needs 2.75rem, 44px`)
 })
 
-test('a phone fits four tabs to a row, and the space kept for the nav is as tall as the rows that makes', () => {
+test('a phone fits five tabs to a row, and the space kept for the nav is as tall as the rows that makes', () => {
   const basis = phoneValue(['nav .tabs > a'], 'flex-basis') ?? phoneValue(['nav .tabs > a'], 'flex')
   const share = Number(/(\d*\.?\d+)%/.exec(basis ?? '')?.[1])
-  assert.equal(share, 25, `a phone tab takes "${basis}" of its row, not a quarter`)
-  // Seven screens at four a row is two rows, and the page's top padding is built from --nav-h. If the
+  assert.equal(share, 20, `a phone tab takes "${basis}" of its row, not a fifth`)
+  // Nine tabs (eight, and Hermes for whoever has it) at five a row is two rows, and the page's top padding is built from --nav-h. If the
   // two disagree, a strip of every screen sits under the tabs - the bug this nav was rebuilt for.
   const rows = Math.ceil(tabsMarkup().match(/data-screen="/g).length / Math.floor(100 / share))
   assert.equal(phoneToken('--nav-h').replace(/\s+/g, ' '), `calc(var(--nav-row) * ${rows})`,
