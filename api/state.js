@@ -67,12 +67,30 @@ function headers(accept = 'application/vnd.github+json') {
   return base
 }
 
+// How long GitHub says to wait, in whole seconds from one to an hour, when it is refusing because of a
+// rate limit: a 403 or 429 carrying Retry-After, or an allowance of zero with the time it resets. A 429
+// that says nothing is a minute. null for every other refusal, including a 403 for no access.
+const RATE_LIMIT_MIN_SECONDS = 1
+const RATE_LIMIT_MAX_SECONDS = 3600
+function rateLimitWait(response) {
+  if (response.status !== 403 && response.status !== 429) return null
+  const header = (name) => response.headers?.get?.(name) ?? null
+  const clamp = (seconds) => Math.min(RATE_LIMIT_MAX_SECONDS, Math.max(RATE_LIMIT_MIN_SECONDS, Math.ceil(seconds)))
+  const retryAfter = header('retry-after')
+  if (retryAfter !== null && Number.isFinite(Number(retryAfter))) return clamp(Number(retryAfter))
+  const reset = Number(header('x-ratelimit-reset'))
+  if (header('x-ratelimit-remaining') === '0' && Number.isFinite(reset)) return clamp(reset - Date.now() / 1000)
+  return response.status === 429 ? 60 : null
+}
+
 async function gh(path) {
   const response = await fetch(`${GITHUB}${path}`, { headers: headers() })
   if (!response.ok) {
     const detail = await response.text()
     const error = new Error(`GitHub returned ${response.status}. ${detail.slice(0, 200)}`)
     error.status = response.status
+    const wait = rateLimitWait(response)
+    if (wait !== null) error.retryAfter = wait
     throw error
   }
   return response.json()
@@ -2556,6 +2574,12 @@ export default async function handler(request, response) {
       generatedAt: new Date(now).toISOString()
     })
   } catch (error) {
+    // GitHub's rate limit: the page is told how long to leave it alone, so it does not keep asking.
+    if (error.retryAfter !== undefined) {
+      response.setHeader('Retry-After', String(error.retryAfter))
+      response.status(429).json({ error: `GitHub's rate limit was reached. Try again in ${error.retryAfter} seconds.` })
+      return
+    }
     response.status(error.status === 404 ? 404 : 500).json({ error: error.message })
   }
 }

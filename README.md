@@ -55,6 +55,10 @@ if its last report covers its newest scheduled time (30 minutes of grace, and a 
 early counts), faded if it covers only the one before, silent if it covers neither. So a weekday job
 is not silent on a Saturday. The Workflows screen's *Gone quiet* uses the same count.
 
+Times are in your own time zone. A team workflow's schedule (a routine runs in UTC) is converted for
+you, and can move the day as well as the hour; a Mac job's schedule is on the Mac's own clock and
+says *(Mac time)*.
+
 The Mac and Hermes rows come from `.agent-team/status/jobs/`, which the collector on your always-on
 Mac writes with everything else (names, schedules, times, exit codes - never arguments, prompts,
 logs or error text). A Hermes job is shown as `Hermes job <id>` (its 12-character id), because
@@ -69,8 +73,11 @@ it is made.
 every 60 seconds whether your repo has a new commit. That check is **one call to GitHub**; if nothing
 changed, the page only re-checks how old each light has become. A full read is about sixty calls and
 nothing is cached, so reading everything every minute on two devices would pass GitHub's 5,000 calls
-an hour. The **Refresh** button is the same check, pressed. The Mac's own data still arrives every
-three hours with the collector, and the line above the lights says when.
+an hour. The **Refresh** button is the same check, pressed. A check that fails slows the watch down
+(2 minutes, then 4, then 8, never more than 15) and the line above the lights says so; if GitHub says
+it is rate limiting, the board passes on how long to wait and the page waits at least that long. A
+check that works puts it back to a minute. The Mac's own data still arrives every three hours with
+the collector, and the line above the lights says when.
 
 Not checked here: Windows Task Scheduler, n8n, Trigger.dev and Codex automations.
 
@@ -530,7 +537,7 @@ Locally:
 npm test
 ```
 
-1546 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1563 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store.

@@ -113,7 +113,7 @@ const FILES = {
 
 // `head` is what the branch's newest commit answers when asked for just its id: left out, GitHub is
 // asked and says Not Found, which is how every test above saw it. `calls` records every request.
-function stubGitHub({ dropPaths = [], overrideFiles = {}, extraTree = [], head, calls } = {}) {
+function stubGitHub({ dropPaths = [], overrideFiles = {}, extraTree = [], head, calls, treeFails } = {}) {
   const original = globalThis.fetch
   const tree = dropPaths.length || extraTree.length
     ? { ...TREE, tree: [...TREE.tree.filter((node) => !dropPaths.includes(node.path)), ...extraTree] }
@@ -128,6 +128,8 @@ function stubGitHub({ dropPaths = [], overrideFiles = {}, extraTree = [], head, 
       return new Response(head, { status: 200 })
     }
     if (target.includes('/git/trees/')) {
+      // `treeFails` is GitHub refusing the read: { status, headers, body }.
+      if (treeFails) return new Response(treeFails.body ?? 'refused', { status: treeFails.status, headers: treeFails.headers ?? {} })
       return new Response(JSON.stringify(tree), { status: 200 })
     }
     const match = /\/contents\/(.+?)\?ref=/.exec(target)
@@ -1770,4 +1772,66 @@ test('a jobs file whose lists were unavailable reaches the wall as SILENT cards,
   assert.match(byId['jobs-list:Mac Mini:hermes'].sentence.text, /could not be read\.$/)
   assert.ok(byId['collector:Mac Mini'])
   assert.ok(body.readiness.badge >= 2)
+})
+
+/* ---------- when GitHub says slow down ----------------------------------------------------------
+   The page checks every minute, so when GitHub's limit is reached it has to be told how long to wait,
+   or it would keep asking. A rate limit is a 403 or 429 from GitHub carrying Retry-After, or
+   x-ratelimit-remaining: 0 with the time it resets; the board answers 429 and a Retry-After of its
+   own. A 403 that is not a rate limit (a token with no access) is still the error it always was. */
+
+test('GitHub\'s Retry-After is passed on as a 429 with a Retry-After, and the refusal is not cached', async () => {
+  for (const status of [403, 429]) {
+    const response = await run({}, { treeFails: { status, headers: { 'retry-after': '120' } } })
+    assert.equal(response.statusCode, 429, `a ${status} from GitHub`)
+    assert.equal(response.headers['Retry-After'], '120')
+    assert.equal(response.headers['Cache-Control'], 'private, no-store')
+    assert.match(response.body.error, /rate limit/i)
+  }
+})
+
+test('an exhausted allowance is a 429 that waits until it resets', async () => {
+  const soon = Math.floor(Date.now() / 1000) + 300
+  const response = await run({}, { treeFails: { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(soon) } } })
+  assert.equal(response.statusCode, 429)
+  const wait = Number(response.headers['Retry-After'])
+  assert.ok(wait >= 299 && wait <= 301, `waits ${wait} s, not about 300`)
+})
+
+test('the wait is never zero and never more than an hour', async () => {
+  const past = await run({}, { treeFails: { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) - 50) } } })
+  assert.equal(past.headers['Retry-After'], '1')
+  const long = await run({}, { treeFails: { status: 429, headers: { 'retry-after': '999999' } } })
+  assert.equal(long.headers['Retry-After'], '3600')
+  const zero = await run({}, { treeFails: { status: 429, headers: { 'retry-after': '0' } } })
+  assert.equal(zero.headers['Retry-After'], '1')
+})
+
+test('a 429 from GitHub with no word on how long still tells the page to wait', async () => {
+  const response = await run({}, { treeFails: { status: 429 } })
+  assert.equal(response.statusCode, 429)
+  assert.equal(response.headers['Retry-After'], '60')
+})
+
+test('a 403 that is not a rate limit, and every other failure, are what they were', async () => {
+  const forbidden = await run({}, { treeFails: { status: 403, body: 'Resource not accessible by integration' } })
+  assert.equal(forbidden.statusCode, 500)
+  assert.equal(forbidden.headers['Retry-After'], undefined)
+  assert.match(forbidden.body.error, /GitHub returned 403/)
+  const missing = await run({}, { treeFails: { status: 404 } })
+  assert.equal(missing.statusCode, 404)
+  const broken = await run({}, { treeFails: { status: 502 } })
+  assert.equal(broken.statusCode, 500)
+  assert.equal(broken.headers['Retry-After'], undefined)
+})
+
+test('with allowance left, a 403 is not a rate limit whatever else it carries', async () => {
+  const response = await run({}, { treeFails: { status: 403, headers: { 'x-ratelimit-remaining': '4000', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 300) } } })
+  assert.equal(response.statusCode, 500)
+})
+
+test('only a 403 or 429 is a rate limit: a Retry-After on any other failure is not passed on', async () => {
+  const unavailable = await run({}, { treeFails: { status: 503, headers: { 'retry-after': '30' } } })
+  assert.equal(unavailable.statusCode, 500)
+  assert.equal(unavailable.headers['Retry-After'], undefined)
 })

@@ -89,7 +89,12 @@ function board({ answers, hash = '#readiness', storage = {}, after = '', scrollY
       if (!String(url).startsWith('/api/state')) return { ok: true, status: 200, json: async () => ({}) }
       const answer = queue.length > 1 ? queue.shift() : queue[0]
       if (answer instanceof Error) throw answer
-      return { ok: answer.status ? answer.status < 400 : true, status: answer.status ?? 200, json: async () => answer.body ?? answer }
+      return {
+        ok: answer.status ? answer.status < 400 : true,
+        status: answer.status ?? 200,
+        headers: { get: (name) => answer.headers?.[String(name).toLowerCase()] ?? null },
+        json: async () => answer.body ?? answer
+      }
     }
   })
   const stateRequests = () => page.requests.filter((request) => request.url.startsWith('/api/state'))
@@ -190,7 +195,7 @@ test('a check that fails says so, keeps the lights as they were, and tries again
     await timers.fire()
     assert.match(withClass(readiness(), 'rd-stamp')[0].textContent, /COULD NOT CHECK$/)
     assert.equal(withClass(readiness(), 'rd-card').length, 1)
-    assert.deepEqual(timers.delays(), [60_000], 'it gave up')
+    assert.deepEqual(timers.delays(), [120_000], 'it gave up, or did not slow down')
     await timers.fire()
     assert.doesNotMatch(withClass(readiness(), 'rd-stamp')[0].textContent, /COULD NOT CHECK/)
   }
@@ -302,4 +307,105 @@ test('the checking is its own code: it sits beside the Readiness screen and nowh
   const elsewhere = script.replace(block, '')
   assert.ok(!/READINESS_POLL_MS|checkReadiness|readinessSync/.test(elsewhere), 'the polling leaked out of its block')
   assert.match(block, /const READINESS_POLL_MS = 60_000/)
+})
+
+/* ---------- backing off ------------------------------------------------------------------------ */
+
+const FAIL = { status: 500, body: { error: 'no' } }
+
+test('failed checks back off 60, 120, 240, 480 seconds, then stop at fifteen minutes', async () => {
+  const { timers, readiness } = board({ answers: [ageing(), FAIL] })
+  await flush()
+  assert.deepEqual(timers.delays(), [60_000])
+  const waits = []
+  for (let attempt = 0; attempt < 7; attempt += 1) {
+    await timers.fire()
+    waits.push(timers.delays()[0])
+  }
+  assert.deepEqual(waits, [120_000, 240_000, 480_000, 900_000, 900_000, 900_000, 900_000])
+  assert.match(withClass(readiness(), 'rd-stamp')[0].textContent, /REFRESH 15 min auto · COULD NOT CHECK$/)
+})
+
+test('a check that works puts the pace back to a minute', async () => {
+  const { timers, readiness } = board({ answers: [ageing(), FAIL, FAIL, { unchanged: true, commit: SHA }] })
+  await flush()
+  await timers.fire()
+  await timers.fire()
+  assert.deepEqual(timers.delays(), [240_000])
+  assert.match(withClass(readiness(), 'rd-stamp')[0].textContent, /REFRESH 4 min auto · COULD NOT CHECK$/)
+  await timers.fire()
+  assert.deepEqual(timers.delays(), [60_000])
+  assert.match(flat(withClass(readiness(), 'rd-stamp')[0].textContent), /REFRESH 60 s auto$/)
+})
+
+test('a network failure backs off the same way as a refusal', async () => {
+  const { timers } = board({ answers: [ageing(), new TypeError('offline')] })
+  await flush()
+  await timers.fire()
+  await timers.fire()
+  assert.deepEqual(timers.delays(), [240_000])
+})
+
+test('Retry-After on a 429 or 403 is honoured, when it is longer than the back-off', async () => {
+  for (const status of [429, 403]) {
+    const { timers } = board({ answers: [ageing(), { status, body: { error: 'slow down' }, headers: { 'retry-after': '300' } }, { unchanged: true, commit: SHA }] })
+    await flush()
+    await timers.fire()
+    assert.deepEqual(timers.delays(), [300_000], `${status}: the page asked again before it was told it could`)
+    await timers.fire()
+    assert.deepEqual(timers.delays(), [60_000], 'a good answer did not clear the wait')
+  }
+})
+
+test('a short Retry-After never makes it faster than the back-off, and a huge one waits at most an hour', async () => {
+  const short = board({ answers: [ageing(), { status: 429, body: {}, headers: { 'retry-after': '5' } }] })
+  await flush()
+  await short.timers.fire()
+  assert.deepEqual(short.timers.delays(), [120_000])
+  const huge = board({ answers: [ageing(), { status: 429, body: {}, headers: { 'retry-after': '999999' } }] })
+  await flush()
+  await huge.timers.fire()
+  assert.deepEqual(huge.timers.delays(), [3_600_000])
+})
+
+test('Retry-After may be a date, and is counted from the moment of the answer', async () => {
+  const { timers } = board({ answers: [ageing(), { status: 429, body: {}, headers: { 'retry-after': 'Fri, 09 Oct 2026 15:10:00 GMT' } }] })
+  await flush()
+  await timers.fire()
+  assert.deepEqual(timers.delays(), [600_000])
+})
+
+test('a Retry-After that is no number and no date is ignored', async () => {
+  for (const value of ['soon', '', '-30', 'NaN']) {
+    const { timers } = board({ answers: [ageing(), { status: 429, body: {}, headers: { 'retry-after': value } }] })
+    await flush()
+    await timers.fire()
+    assert.deepEqual(timers.delays(), [120_000], JSON.stringify(value))
+  }
+})
+
+test('Refresh is a check like the others: a failure counts toward the back-off, a success clears it', async () => {
+  const { page, timers, readiness } = board({ answers: [ageing(), FAIL, { unchanged: true, commit: SHA }] })
+  await flush()
+  withClass(readiness(), 'rd-refresh')[0].listeners.click[0]()
+  await flush()
+  assert.deepEqual(timers.delays(), [120_000])
+  withClass(readiness(), 'rd-refresh')[0].listeners.click[0]()
+  await flush()
+  assert.deepEqual(timers.delays(), [60_000])
+  void page
+})
+
+test('a Retry-After on a failure that is not a rate limit is not an instruction', async () => {
+  const { timers } = board({ answers: [ageing(), { status: 500, body: {}, headers: { 'retry-after': '600' } }] })
+  await flush()
+  await timers.fire()
+  assert.deepEqual(timers.delays(), [120_000])
+})
+
+test('a Retry-After date that has already passed asks for no wait, so the back-off decides', async () => {
+  const { timers } = board({ answers: [ageing(), { status: 429, body: {}, headers: { 'retry-after': 'Fri, 09 Oct 2026 14:00:00 GMT' } }] })
+  await flush()
+  await timers.fire()
+  assert.deepEqual(timers.delays(), [120_000])
 })

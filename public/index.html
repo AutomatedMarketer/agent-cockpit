@@ -3362,7 +3362,18 @@ async function apiGet(path) {
   const response = await fetch(path, { headers: key ? { 'x-view-key': key } : {} })
   let payload = {}
   try { payload = await response.json() } catch (error) { /* non-JSON error page */ }
-  return { status: response.status, ok: response.ok, payload }
+  return { status: response.status, ok: response.ok, payload, retryAfter: retryAfterSeconds(response) }
+}
+
+// Retry-After as whole seconds: a number of seconds, or an HTTP date counted from now. null for
+// anything else - a missing header, words, a negative number - which is no instruction at all.
+function retryAfterSeconds(response) {
+  const raw = response.headers?.get?.('retry-after')
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  if (/^\d+$/.test(text)) return Number(text)
+  if (!/[A-Za-z]{3}/.test(text)) return null
+  const at = Date.parse(text)
+  return Number.isFinite(at) ? Math.max(0, Math.ceil((at - Date.now()) / 1000)) : null
 }
 
 // The fire key never ships in this page's source. First tap asks the endpoint; a 401 means
@@ -6867,6 +6878,15 @@ let readinessTimer = null
 let readinessBusy = false
 let readinessCheckedAt = null
 let readinessFailed = false
+// How the pace slows when checks fail: 60 s, then 120, 240, 480, and never more than fifteen minutes.
+// A Retry-After from GitHub's rate limit (through the board, as a 429) is honoured if it asks for
+// longer, to at most an hour. A check that works puts it all back.
+const READINESS_BACKOFF_CAP_MS = 15 * 60_000
+const READINESS_WAIT_CAP_MS = 60 * 60_000
+let readinessFailures = 0
+let readinessWaitMs = 0
+const readinessDelay = () => Math.min(Math.max(Math.min(READINESS_POLL_MS * 2 ** readinessFailures, READINESS_BACKOFF_CAP_MS), readinessWaitMs), READINESS_WAIT_CAP_MS)
+const readinessDelayWords = () => (readinessDelay() < 120_000 ? `${Math.round(readinessDelay() / 1000)} s` : `${Math.ceil(readinessDelay() / 60_000)} min`)
 // Set when the board is locked again: there is nobody left to watch for.
 let readinessLocked = false
 
@@ -6885,7 +6905,7 @@ function readinessSchedule(delay) {
   readinessTimer = setTimeout(async () => {
     readinessTimer = null
     if (readinessWatching()) await checkReadiness()
-    readinessSchedule(READINESS_POLL_MS)
+    readinessSchedule(readinessDelay())
   }, delay)
 }
 
@@ -6897,7 +6917,7 @@ function readinessSync(soon = false) {
     return
   }
   if (soon) readinessUnschedule()
-  readinessSchedule(soon ? 0 : READINESS_POLL_MS)
+  readinessSchedule(soon ? 0 : readinessDelay())
 }
 
 // A new board, drawn in place of the old. render() ends in showScreen, which goes to the top, so the
@@ -6921,7 +6941,15 @@ async function checkReadiness() {
       renderUnlock('This dashboard needs its view key.')
       return
     }
-    if (!result.ok) throw new Error(`The check answered ${result.status}`)
+    if (!result.ok) {
+      readinessWaitMs = (result.status === 429 || result.status === 403) && result.retryAfter !== null ? result.retryAfter * 1000 : 0
+      throw new Error(`The check answered ${result.status}`)
+    }
+    // It worked: the pace is back to a minute, and the next check is a minute from now, whatever was
+    // waiting before (the Refresh button can be pressed between two scheduled checks).
+    readinessFailures = 0
+    readinessWaitMs = 0
+    readinessUnschedule()
     if (result.payload?.unchanged === true) {
       readinessFailed = false
       readinessCheckedAt = Date.now()
@@ -6932,6 +6960,8 @@ async function checkReadiness() {
     }
   } catch (error) {
     readinessFailed = true
+    readinessFailures += 1
+    readinessUnschedule()
     renderReadiness()
   } finally {
     readinessBusy = false
@@ -6962,7 +6992,7 @@ function renderReadiness(nowMs = Date.now()) {
     `JOBS CHECKED ${macTime ? macTime : 'NEVER'}`,
     `BOARD READ ${data.generatedAt ? readinessWhen(data.generatedAt, 'time', nowMs) : 'NEVER'}`,
     readinessCheckedAt ? `CHECKED ${readinessWhen(new Date(readinessCheckedAt).toISOString(), 'time', nowMs)}` : null,
-    data.commit ? 'REFRESH 60 s auto' : 'REFRESH BY BUTTON',
+    data.commit ? `REFRESH ${readinessDelayWords()} auto` : 'REFRESH BY BUTTON',
     readinessFailed ? 'COULD NOT CHECK' : null
   ].filter(Boolean).join(' · ')
   // The counters are a live region: touched only when they change, so a screen reader hears a change
