@@ -31,6 +31,7 @@ import {
   isGoneQuiet
 } from './workflows.js'
 import { parseSimpleYaml } from './yaml-lite.js'
+import { shapeReadiness } from './readiness.js'
 
 const GITHUB = 'https://api.github.com'
 const AGENT_DIR = '.claude/agents'
@@ -2277,6 +2278,7 @@ export default async function handler(request, response) {
     const hasConnections = paths.includes(CONNECTION_REGISTER)
     const hasTiles = paths.includes('tiles.yml')
     const hasStack = paths.includes('stack.yml')
+    const hasJobsNames = paths.includes('jobs.yml')
     const hasLedger = paths.includes('ledger.yml')
     const hasProposals = paths.includes('proposals.yml')
     const ROUTINE_SNAPSHOT = '.agent-team/routines.json'
@@ -2297,7 +2299,7 @@ export default async function handler(request, response) {
     const jobsPaths = paths.filter((path) => isJobsFile(path)).sort()
     const jobsBody = async (path) => ((sizes[path] ?? 0) > JOBS_MAX_BYTES ? null : rawFile(settings, path))
 
-    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles, foundFiles, hermesFiles, jobsFiles] =
+    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles, foundFiles, hermesFiles, jobsFiles, jobsNamesSource] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
@@ -2317,7 +2319,8 @@ export default async function handler(request, response) {
         Promise.all(usagePaths.slice(0, USAGE_MAX_FILES).map(async (path) => [path, await usageBody(path)])),
         Promise.all(foundPaths.slice(0, FOUND_MAX_FILES).map(async (path) => [path, await foundBody(path)])),
         Promise.all(hermesPaths.slice(0, HERMES_MAX_FILES).map(async (path) => [path, await hermesBody(path)])),
-        Promise.all(jobsPaths.slice(0, JOBS_MAX_FILES).map(async (path) => [path, await jobsBody(path)]))
+        Promise.all(jobsPaths.slice(0, JOBS_MAX_FILES).map(async (path) => [path, await jobsBody(path)])),
+        hasJobsNames ? rawFile(settings, 'jobs.yml') : null
       ])
 
     const unparseable = []
@@ -2449,6 +2452,15 @@ export default async function handler(request, response) {
     const found = matchProved(shapeFound(foundFiles, now, foundPaths.length), connections)
     const hermes = shapeHermes(hermesFiles, now, hermesPaths.length)
     const jobs = shapeJobs(jobsFiles, now, jobsPaths.length)
+    // One light per job, from everything read above. The rules live in readiness.js.
+    const readiness = shapeReadiness({
+      workflows,
+      routines: { known: routinesKnown, orphans: orphanRoutines },
+      jobs,
+      hermes,
+      overrides: shapeJobOverrides(jobsNamesSource ? parseSimpleYaml(jobsNamesSource) : null),
+      now
+    })
     const hero = shapeHero(tiles, ledger)
     const setup = shapeSetup({ brain, skills: skillSlugs, workflows, runtimes, tiles, runs, connections, verdicts: verdictPaths.length, onboarding, now })
 
@@ -2482,6 +2494,7 @@ export default async function handler(request, response) {
       found,
       hermes,
       jobs,
+      readiness,
       routines: {
         takenAt: snapshot.takenAt,
         usable: snapshot.usable,

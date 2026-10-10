@@ -1548,3 +1548,79 @@ test('a Hermes job named after its own prompt never reaches the payload, and is 
   assert.deepEqual(body.jobs.computers[0].hermes.items.map((item) => item.name), ['Hermes job a1b2c3d4e5f6'])
   assert.equal(body.jobs.computers[0].hermes.hidden, 2)
 })
+
+/* ---------- the Readiness wall reaches the payload ---------------------------------------------
+   One light per job, built on the server from what the board has already read. Through the real
+   handler, with the same stubbed GitHub as everything above. */
+
+test('the payload carries a Readiness wall: one light per job in the repo, NO GO and SILENT counted for the tab', async () => {
+  const { body } = await run()
+  assert.ok(body.readiness, 'readiness is in the payload')
+  const ids = body.readiness.cards.map((card) => card.id)
+  assert.ok(ids.includes('workflow:monday-brief'))
+  assert.ok(ids.includes('workflow:hourly-sweep'))
+  const monday = body.readiness.cards.find((card) => card.id === 'workflow:monday-brief')
+  assert.equal(monday.light, 'go', 'armed, a routine rings it, and its last run was an hour ago')
+  const sweep = body.readiness.cards.find((card) => card.id === 'workflow:hourly-sweep')
+  assert.equal(sweep.light, 'silent', 'armed, but it has never written a run')
+  assert.equal(body.readiness.badge, body.readiness.counts.noGo + body.readiness.counts.silent)
+  assert.equal(body.readiness.jobs.status, 'none')
+  // A job that is not armed is listed as switched off, not lit.
+  assert.ok(body.readiness.switchedOff.some((entry) => entry.id === 'workflow:broken'))
+})
+
+test('jobs.yml in the repo renames and hides jobs on the wall, and a name that could be a secret is not used', async () => {
+  const token = ['sk', 'ant', 'oat01', 'Zm9vYmFyYmF6cXV4'.repeat(3)].join('-')
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: 'jobs.yml' }],
+    overrideFiles: {
+      'jobs.yml': `jobs:\n  - id: workflow:monday-brief\n    name: Morning brief\n  - id: workflow:hourly-sweep\n    hide: true\n  - id: workflow:broken\n    name: ${token}\n`
+    }
+  })
+  const monday = body.readiness.cards.find((card) => card.id === 'workflow:monday-brief')
+  assert.equal(monday.name, 'Morning brief')
+  assert.equal(monday.sentence.text, 'Morning brief ran clean at {time}.')
+  assert.ok(!body.readiness.cards.some((card) => card.id === 'workflow:hourly-sweep'))
+  assert.equal(body.readiness.switchedOff.find((entry) => entry.id === 'workflow:hourly-sweep').reason, 'Switched off: hidden in jobs.yml.')
+  assert.ok(!JSON.stringify(body).includes(token))
+})
+
+test('the Mac\'s jobs reach the wall: a card for each, the collector\'s own, and the count the safety rule kept off', async () => {
+  const reading = jobsReading()
+  reading.launchd.hidden = 2
+  reading.launchd.items.push({ label: 'local.donna.nightly', cadence: { kind: 'always' }, state: 'running' })
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: jobsPath }],
+    overrideFiles: { [jobsPath]: JSON.stringify(reading) }
+  })
+  const byId = Object.fromEntries(body.readiness.cards.map((card) => [card.id, card]))
+  assert.equal(byId['launchd:local.donna.nightly'].pill, 'RUNNING')
+  assert.ok(byId['launchd:local.donna.story-belt-daily'])
+  assert.ok(byId['hermes:default/a1b2c3d4e5f6'])
+  assert.equal(byId['collector:Mac Mini'].light, 'go')
+  assert.equal(body.readiness.counts.hiddenBySafety, 2)
+  assert.equal(body.readiness.jobs.status, 'ok')
+  assert.ok(body.readiness.macCheckedAt)
+})
+
+test('the Readiness wall never carries a token, address or path planted in a jobs file', async () => {
+  const planted = [
+    ['sk', 'ant', 'oat01', 'Zm9vYmFyYmF6cXV4'.repeat(3)].join('-'),
+    'fake.person' + '@' + 'example.com',
+    '/Users/' + 'fakeperson' + '/.hermes/SOUL.md'
+  ]
+  for (const value of planted) {
+    const { body } = await run({}, {
+      extraTree: [{ type: 'blob', path: jobsPath }],
+      overrideFiles: { [jobsPath]: JSON.stringify(jobsReading(value)) }
+    })
+    assert.ok(!JSON.stringify(body.readiness).includes(value), `"${value.slice(0, 12)}..." reached the wall`)
+    assert.equal(body.readiness.counts.hiddenBySafety, 2)
+  }
+})
+
+test('an answer that carries the Readiness wall is still never kept by a shared cache', async () => {
+  const response = await run()
+  assert.ok(response.body.readiness)
+  assert.equal(response.headers['Cache-Control'], 'private, no-store')
+})
