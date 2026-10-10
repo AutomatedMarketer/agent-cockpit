@@ -30,6 +30,23 @@ export const COLLECTOR_EVERY_MINUTES = 180
 export const READINESS_NAME_MAX = 80
 export const READINESS_SUMMARY_MAX = 160
 
+// The Mac programs that keep their own clock (decision D1): launchd starts each at login and its own
+// scheduler decides when to work, so launchd can only prove the program is up, not that today's report
+// was written - and the control center, not this board, checks that. By label, from the deploy scripts
+// in donna/control-center/data (deploy-managed-*-mac.py set `local.donna.<name>`); the software watch
+// is `local.donna.software-skills-watch` in GOAL-PROGRESS.md, which has no deploy script of its own
+// in that folder. Any other always-on service is only "was running".
+export const MANAGED_OWNER_LABELS = [
+  'local.donna.security-changelog',
+  'local.donna.model-watch-weekly',
+  'local.donna.substack-weekly-briefing',
+  'local.donna.team-maintenance-weekly',
+  'local.donna.facebook-ads-daily-digest',
+  'local.donna.facebook-ads-weekly-report',
+  'local.donna.facebook-ads-monitor-account-rules',
+  'local.donna.software-skills-watch'
+]
+
 export const READINESS_LIGHTS = {
   'no-go': { word: 'NO GO', rank: 0 },
   silent: { word: 'SILENT', rank: 1 },
@@ -354,7 +371,7 @@ function launchdCard(job, ctx, lookup) {
     if (job.state === 'running') {
       return card({
         light: 'go', pill: READINESS_WORDS.pill, lastReport: report,
-        sentence: sentence(`${fill(READINESS_WORDS.running, { name: safe, time: '{time}' })} ${READINESS_WORDS.managedOwner}`, ctx.takenAt),
+        sentence: sentence(`${fill(READINESS_WORDS.running, { name: safe, time: '{time}' })}${MANAGED_OWNER_LABELS.includes(job.label) ? ` ${READINESS_WORDS.managedOwner}` : ''}`, ctx.takenAt),
         silentAt: isoOf(ctx.takenMs + READINESS_STALE_HOURS * 3600_000),
         silentSentence: notChecked(ctx.takenAt)
       })

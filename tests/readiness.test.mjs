@@ -13,6 +13,7 @@ import {
   countCards,
   READINESS_STALE_HOURS,
   READINESS_WORDS,
+  MANAGED_OWNER_LABELS,
   COLLECTOR_EVERY_MINUTES,
   SWITCHED_OFF
 } from '../api/readiness.js'
@@ -299,6 +300,35 @@ test('launchd, always on with a process: GO with the RUNNING pill, and the sente
     at: TAKEN
   })
   assert.equal(card.schedule, 'Always on')
+})
+
+test('the eight Mac programs that keep their own clock are named by label, from the control center\'s deploy scripts', () => {
+  assert.deepEqual([...MANAGED_OWNER_LABELS].sort(), [
+    'local.donna.facebook-ads-daily-digest',
+    'local.donna.facebook-ads-monitor-account-rules',
+    'local.donna.facebook-ads-weekly-report',
+    'local.donna.model-watch-weekly',
+    'local.donna.security-changelog',
+    'local.donna.software-skills-watch',
+    'local.donna.substack-weekly-briefing',
+    'local.donna.team-maintenance-weekly'
+  ])
+})
+
+test('launchd, always on: only a managed owner gets the sentence about the control center; any other service is just "was running"', () => {
+  const running = (label) => ({ label, cadence: { kind: 'always' }, state: 'running', lastReportAt: '2026-10-09T14:50:02Z' })
+  for (const label of MANAGED_OWNER_LABELS) {
+    const card = cardOf(mac(reading({ launchd: [running(label)] })), `launchd:${label}`)
+    assert.ok(card.sentence.text.endsWith('Its scheduler is running. Whether its last report was written is checked on the Mac control center, not here.'), label)
+    assert.equal(card.pill, 'RUNNING')
+  }
+  for (const label of ['local.donna.nightly-sync', 'com.example.web-server', 'local.donna.security-changelog-extra', 'local.donna.Security-Changelog']) {
+    const card = cardOf(mac(reading({ launchd: [running(label)] })), `launchd:${label}`)
+    assert.equal(card.light, 'go')
+    assert.equal(card.pill, 'RUNNING')
+    assert.ok(!card.sentence.text.includes('control center'), `${label} was told about the control center`)
+    assert.deepEqual(card.sentence, { text: `${card.name} was running when the Mac checked at {time}.`, at: TAKEN })
+  }
 })
 
 test('launchd, always on without a process: NO GO, it was not running', () => {
