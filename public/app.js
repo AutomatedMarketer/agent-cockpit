@@ -95,6 +95,51 @@ const escapeHtml = (value) =>
 const whyHtml = (text) =>
   `<details class="why"><summary>Why?</summary><p>${escapeHtml(text)}</p></details>`
 
+/* Each screen's own line icon - the same drawing as its tab (tests/render.test.mjs holds the two
+   equal). Fixed markup, never data: it is put into the empty states below. */
+const SCREEN_ICONS = {
+  today: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  ledger: '<path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-6"/>',
+  team: '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17.5" cy="9" r="2.5"/><path d="M16 14.2c2.9.2 5 2.6 5 5.8"/>',
+  workflows: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
+  readiness: '<rect x="8" y="2.5" width="8" height="19" rx="4"/><circle cx="12" cy="8" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="16" r="1.4"/>',
+  skills: '<path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z"/>',
+  memory: '<path d="M9 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 0V4.5A2.5 2.5 0 0 0 9 4zM15 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 0"/>',
+  connections: '<path d="M9 7H6a4 4 0 0 0 0 8h3M15 7h3a4 4 0 0 1 0 8h-3M8 11h8"/>',
+  hermes: '<path d="M3 12h4l2.5-6 5 12 2.5-6h4"/>'
+}
+const screenIconHtml = (screen) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${SCREEN_ICONS[screen]}</svg>`
+
+/* An empty screen: centred, the screen's icon in a soft round tile, then the words it always had.
+   `inner` is the screen's own markup, already escaped where it carries anything read from the repo. */
+const emptyStateHtml = (screen, inner) =>
+  `<div class="panel empty empty-state"><span class="empty-ico" aria-hidden="true">${screenIconHtml(screen)}</span><div class="empty-words">${inner}</div></div>`
+
+// The same empty state built from elements, for a screen that is drawn from elements and set as text
+// (Readiness). The icon is made in the SVG namespace from the fixed shapes above, never from markup.
+function emptyStateNode(screen, ...children) {
+  const svgNs = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(svgNs, 'svg')
+  for (const [name, value] of [['class', 'ico'], ['viewBox', '0 0 24 24'], ['aria-hidden', 'true']]) svg.setAttribute(name, value)
+  for (const [, tag, attributes] of SCREEN_ICONS[screen].matchAll(/<(\w+)([^>]*)\/>/g)) {
+    const shape = document.createElementNS(svgNs, tag)
+    for (const [, name, value] of attributes.matchAll(/([\w-]+)="([^"]*)"/g)) shape.setAttribute(name, value)
+    svg.appendChild(shape)
+  }
+  const tile = document.createElement('span')
+  tile.className = 'empty-ico'
+  tile.setAttribute('aria-hidden', 'true')
+  tile.appendChild(svg)
+  const words = document.createElement('div')
+  words.className = 'empty-words'
+  for (const child of children) words.appendChild(child)
+  const box = document.createElement('div')
+  box.className = 'panel empty empty-state'
+  box.appendChild(tile)
+  box.appendChild(words)
+  return box
+}
+
 // A section's heading with a small line over it, the mock-up's pattern. The heading is handed in
 // whole because several are found by their exact opening tag, `<h2>Board` and `<h2 id="run-jobs">`
 // among them, and an attribute added here would lose them.
@@ -947,9 +992,9 @@ function renderLedger() {
   if (!ledger) {
     el('ledger').innerHTML =
       heroHtml(data.hero) +
-      `<div class="panel empty"><b>No ledger yet.</b> <span class="small">Run <code>/ledger</code> in your
+      emptyStateHtml('ledger', `<b>No ledger yet.</b> <span class="small">Run <code>/ledger</code> in your
         team repo. It measures where your week actually goes, and everything on this screen is
-        derived from it.</span></div>`
+        derived from it.</span>`)
     return
   }
 
@@ -1167,8 +1212,8 @@ function renderTeam() {
     // owner_type: business | job | both, and the walkthrough's employee persona is a bid
     // coordinator who does not price work, choose what to bid, or spend anything. It is the empty
     // state, so it is the FIRST sentence a brand-new student reads on this screen.
-    el('team').innerHTML = `${createFormHtml('agent')}<div class="panel empty"><b>You have no agents yet.</b>
-      <span class="small">Run <code>/onboard</code> in your team repo.</span>${whyHtml('It asks about your work and writes the first agents into .claude/agents/, and they appear here.')}</div>`
+    el('team').innerHTML = `${createFormHtml('agent')}${emptyStateHtml('team', `<b>You have no agents yet.</b>
+      <span class="small">Run <code>/onboard</code> in your team repo.</span>${whyHtml('It asks about your work and writes the first agents into .claude/agents/, and they appear here.')}`)}`
     bindCreateForm('agent', el('team'))
     return
   }
@@ -1637,7 +1682,7 @@ function renderWorkflows() {
   if (!data.workflows.length) {
     el('workflows').innerHTML =
       snapshotBannerHtml(data.routines) +
-      `<div class="panel empty">No workflow files in <code>workflows/</code> yet. Ask for one — <code>/new-workflow</code> — and it appears here.</div>` +
+      emptyStateHtml('workflows', 'No workflow files in <code>workflows/</code> yet. Ask for one — <code>/new-workflow</code> — and it appears here.') +
       routineProblemsHtml(data.routines) +
       orphanRoutinesHtml(data.routines)
     return
@@ -1800,7 +1845,7 @@ function memoryTreeHtml() {
     // screen nobody can reach - and the test I wrote for it could only get there by handing the
     // render a folder no chip would have offered. Review caught that; the invariant is pinned in
     // tests/render.test.mjs instead, where it is a fact about the page rather than a dead sentence.
-    return `<div class="panel empty">No pages match.</div>`
+    return emptyStateHtml('memory', 'No pages match.')
   }
   const folders = new Map()
   for (const file of files) {
@@ -2614,7 +2659,7 @@ function renderConnections() {
   const hermesTop = hermesSectionHtml()
 
   if (!connections.length && !runtimes.length && !foundAny && !hermesTop) {
-    el('connections').innerHTML = `<div class="panel empty">Nothing connected yet. Run <code>/connect</code> in your team repo and it will wire one tool, prove it by reading your own data back to you, and register it here.</div>`
+    el('connections').innerHTML = emptyStateHtml('connections', 'Nothing connected yet. Run <code>/connect</code> in your team repo and it will wire one tool, prove it by reading your own data back to you, and register it here.')
     return
   }
 
@@ -2809,9 +2854,9 @@ function renderSkills() {
         'Listed as a step in a job',
         'Whether that job actually runs is a separate question - the Workflows screen is the one that says which jobs ring.',
         onSchedule
-      ) : `<div class="panel empty"><b>No skills yet.</b>
+      ) : emptyStateHtml('skills', `<b>No skills yet.</b>
       <span class="small">Run <code>/onboard</code> to get the starter set, or ask your team for one in
-      plain words &mdash; you never write the file yourself.</span>${whyHtml('Skills are the single tasks your jobs are built from.')}</div>`}`
+      plain words &mdash; you never write the file yourself.</span>${whyHtml('Skills are the single tasks your jobs are built from.')}`)}`
   bindCreateForm('skill', el('skills'))
   el('skills').querySelectorAll('[data-open]').forEach((link) =>
     link.addEventListener('click', (event) => { event.preventDefault(); openFile(link.dataset.open) }))
@@ -5642,7 +5687,7 @@ function renderReadiness(nowMs = Date.now()) {
       readinessNode('ul', { cls: 'rd-grid' }, ...cards.map((card) => readinessCardNode(card, nowMs)))))
   }
   if (!aged.cards.length) {
-    sections.push(readinessNode('div', { cls: 'panel empty' }, readinessNode('p', { text: 'No jobs to show yet. Workflows in your team repo, and the jobs on your Mac, appear here as soon as they are found.' })))
+    sections.push(emptyStateNode('readiness', readinessNode('p', { text: 'No jobs to show yet. Workflows in your team repo, and the jobs on your Mac, appear here as soon as they are found.' })))
   }
   if (readiness.switchedOff?.length) {
     sections.push(readinessNode('section', { cls: 'rd-group', attrs: { 'aria-labelledby': 'rd-heading-off' } },
@@ -5760,7 +5805,11 @@ function renderShell() {
   el('tab-hermes').hidden = !hermesShown()
 }
 
+// Today stops saying it is busy once there is something to show in its place: the board, or why not.
+const doneLoading = () => el('today').removeAttribute('aria-busy')
+
 function render() {
+  doneLoading()
   repoBase = data.repo.url
   repoBranch = data.repo.branch || 'main'
   el('repo-link').innerHTML = `<a href="${escapeHtml(data.repo.url)}" rel="noreferrer noopener">${escapeHtml(data.repo.owner)}/${escapeHtml(data.repo.repo)}</a>`
@@ -5791,6 +5840,7 @@ function footWords() {
 }
 
 function renderError(message) {
+  doneLoading()
   el('strap').textContent = ''
   el('today').innerHTML = `<div class="panel error">
     <h3>This cockpit cannot read your repo yet</h3>

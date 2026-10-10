@@ -185,6 +185,31 @@ test('what the wall could not see is said under the lights', async () => {
   assert.ok(withClass(one.node('readiness'), 'rd-foot').some((node) => node.textContent.startsWith('1 job was kept off the wall')))
 })
 
+// Look and feel T6: the empty wall is the board's shared empty state, built from elements like
+// everything else on this screen - the icon too, made in the SVG namespace, never from markup.
+test('the empty wall is the shared empty state: the Readiness tab icon in a round tile, built from elements', async () => {
+  const empty = await boot(wallPayload([]))
+  const [state] = withClass(empty.node('readiness'), 'empty-state')
+  assert.ok(state, 'the empty wall is not an empty state')
+  assert.deepEqual(state.className.split(/\s+/), ['panel', 'empty', 'empty-state'])
+  const [tile, words] = state.children
+  assert.equal(tile.className, 'empty-ico')
+  assert.equal(tile.attributes['aria-hidden'], 'true')
+  const [svg] = tile.children
+  assert.equal(svg.namespace, 'http://www.w3.org/2000/svg', 'the icon is not an SVG element')
+  assert.equal(svg.attributes.class, 'ico')
+  assert.equal(svg.attributes.viewBox, '0 0 24 24')
+  const tab = /<a href="#readiness"[^>]*>(<svg[\s\S]*?<\/svg>)/.exec(html)[1]
+  const shapes = [...tab.matchAll(/<(rect|circle|path)([^>]*)\/>/g)]
+  assert.ok(shapes.length >= 2)
+  assert.equal(svg.children.length, shapes.length, 'the icon is not the tab icon')
+  shapes.forEach(([, tag, attributes], index) => {
+    assert.equal(svg.children[index].tagName.toLowerCase(), tag)
+    for (const [, name, value] of attributes.matchAll(/([\w-]+)="([^"]*)"/g)) assert.equal(svg.children[index].attributes[name], value)
+  })
+  assert.match(textOf(words), /No jobs to show yet/)
+})
+
 test('an empty wall says so, and a server without the wall says that instead of showing nothing', async () => {
   const empty = await boot(wallPayload([]))
   assert.match(textOf(empty.node('readiness')), /No jobs to show yet/)

@@ -1245,6 +1245,35 @@
   .hermes-profile-more { font-size: .75rem; color: var(--muted); }
   .hermes-note { font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
 
+  /* An empty screen: centred, the screen's own line icon in a soft round tile, then the words it
+     always had. Written .panel.empty-state, below the desktop rules, so it outranks .panel.empty's
+     reading measure there. */
+  .panel.empty-state {
+    display: grid; justify-items: center; gap: .7rem; max-width: 34rem; margin: 0 auto;
+    padding: 1.6rem 1.25rem 1.4rem; text-align: center;
+  }
+  .empty-ico {
+    display: grid; place-items: center; width: 3rem; height: 3rem; border-radius: 50%; flex: none;
+    color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
+  }
+  .empty-ico .ico { width: 1.35rem; height: 1.35rem; }
+  .empty-words { min-width: 0; overflow-wrap: anywhere; }
+  .empty-words > p { margin: 0; }
+
+  /* First paint: grey blocks shaped like Today - a banner, three number cards, two panels - so the
+     page does not jump when the board arrives. A soft band sweeps across them only when motion is
+     allowed (the motion block). */
+  .skeleton { display: grid; gap: .75rem; }
+  .skel { position: relative; overflow: hidden; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); }
+  .skel-banner { min-height: 13rem; }
+  .skel-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
+  .skel-card { min-height: 8.5rem; }
+  .skel-panel { min-height: 6rem; }
+  @media (min-width: 64rem) {
+    .skel-banner { min-height: 15rem; border-radius: var(--radius-lg); }
+    .skel-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+
   /* Flight readiness: a card per job, NO GO first. On a phone it is one column, full width, and the
      first thing under the counters is whatever is wrong. On a desktop it is a grid that fills the
      row. The light is decoration (aria-hidden) and differs in SHAPE as well as colour - a filled dot,
@@ -1520,6 +1549,17 @@
     }
     .spark { animation: spark-draw var(--dur-draw) var(--ease-out) both; }
 
+    /* The skeleton's band sweeps across each block while the board loads. */
+    @keyframes skel-sweep {
+      from { transform: translateX(-100%); }
+      to { transform: translateX(100%); }
+    }
+    .skel::after {
+      content: ""; position: absolute; inset: 0;
+      background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ink) 6%, transparent), transparent);
+      animation: skel-sweep var(--dur-shimmer) linear infinite;
+    }
+
     /* The banner pictures drift, slowly enough that nobody notices it happening. */
     @keyframes banner-drift {
       from { transform: scale(1.06) translate(0, 0); }
@@ -1585,7 +1625,16 @@
   </header>
   <p class="sub" id="strap">Reading your repo…</p>
 
-  <div id="today" class="screen active"><div class="panel empty">Loading.</div></div>
+  <!-- First paint: a skeleton shaped like Today, until the repo has been read. The script takes
+       aria-busy away when the board, or the reason there is none, is drawn in its place. -->
+  <div id="today" class="screen active" aria-busy="true"><p class="visually-hidden" role="status">Loading your board</p>
+    <div class="skeleton" aria-hidden="true">
+      <div class="skel skel-banner"></div>
+      <div class="skel-row"><div class="skel skel-card"></div><div class="skel skel-card"></div><div class="skel skel-card"></div></div>
+      <div class="skel skel-panel"></div>
+      <div class="skel skel-panel"></div>
+    </div>
+  </div>
   <div id="ledger" class="screen"></div>
   <div id="team" class="screen"></div>
   <div id="workflows" class="screen"></div>

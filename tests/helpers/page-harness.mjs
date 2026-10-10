@@ -93,6 +93,13 @@ export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after
       created.push(made)
       return made
     },
+    // An SVG drawn from elements (the empty states' icons) is made in its own namespace, recorded.
+    createElementNS(namespace, tag) {
+      const made = element('', tag)
+      made.namespace = namespace
+      created.push(made)
+      return made
+    },
     body: node('body'),
     documentElement: node('html'),
     visibilityState: 'visible'

@@ -31,7 +31,8 @@ function render(payload, options = {}) {
         classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
         // Attributes and listeners are RECORDED, never acted on: a test can read what the page set
         // (aria-checked on the theme switch) and call a handler itself, and nothing fires on its own.
-        attributes: {},
+        // `options.attributes[id]` is what the markup gave an element before the script ran.
+        attributes: { ...(options.attributes?.[id] ?? {}) },
         setAttribute(name, value) { this.attributes[name] = String(value) },
         removeAttribute(name) { delete this.attributes[name] },
         // `options.select(id, selector)` hands back stand-in elements for one query, so a test can
@@ -5910,4 +5911,73 @@ test('a runtime whose stale_after_minutes was not understood says so, and that 3
   for (const fine of [true, undefined]) {
     assert.ok(!/not understood/.test(connectionsScreen({ connections: [], runtimes: [aRuntime({ staleAfterMinutes: 30, staleAfterUnderstood: fine })] })))
   }
+})
+
+/* ---------- first paint and empty states (look and feel, T6) ----------------------------------
+   Before the repo is read, Today is a skeleton shaped like the screen that is coming - a banner,
+   three number cards, two panels - instead of the word "Loading." A screen reader hears one line,
+   and the screen says it is busy until the board is drawn. Empty screens are centred, start with
+   the screen's own icon in a round tile, and keep their words exactly. */
+
+const todayMarkup = () => {
+  const start = html.indexOf('<div id="today"')
+  return html.slice(start, html.indexOf('<div id="ledger"', start))
+}
+
+test('first paint: Today is busy, says "Loading your board" once, and shows a skeleton shaped like Today', () => {
+  const today = todayMarkup()
+  assert.match(today, /^<div id="today" class="screen active" aria-busy="true">/, 'Today does not say it is busy before the board arrives')
+  assert.match(today, /<p class="visually-hidden" role="status">Loading your board<\/p>/, 'a screen reader is not told the board is loading')
+  const skeleton = /<div class="skeleton" aria-hidden="true">([\s\S]*)<\/div>\s*<\/div>\s*$/.exec(today.trim())?.[1] ?? ''
+  assert.equal((skeleton.match(/class="skel skel-banner"/g) ?? []).length, 1, 'no banner block')
+  assert.equal((skeleton.match(/class="skel skel-card"/g) ?? []).length, 3, 'not three number-card blocks')
+  assert.equal((skeleton.match(/class="skel skel-panel"/g) ?? []).length, 2, 'not two panel blocks')
+  assert.ok(!/Loading\.</.test(today), 'the old one-word loading line is still there')
+})
+
+test('once the board is drawn, or the read fails, Today is no longer busy', async () => {
+  const drawn = render(base, { attributes: { today: { 'aria-busy': 'true' } } })
+  assert.equal(drawn.get('today').attributes['aria-busy'], undefined, 'Today still says it is busy after the board was drawn')
+  const failed = render(base, { attributes: { today: { 'aria-busy': 'true' } }, expose: ['renderError'] })
+  failed.get('today').attributes['aria-busy'] = 'true'
+  failed.exposed.renderError('GitHub said no.')
+  assert.equal(failed.get('today').attributes['aria-busy'], undefined, 'Today still says it is busy after the read failed')
+})
+
+test('the skeleton shimmers only when motion is allowed, and is drawn from the theme', () => {
+  const skel = cssRules().filter((rule) => /\.skel\b/.test(rule.selector))
+  assert.ok(skel.length >= 3, 'the skeleton has no rules')
+  for (const rule of skel) {
+    if (/animation/.test(rule.body)) assert.match(rule.condition, /^@media \(prefers-reduced-motion: no-preference\)/, `${rule.selector} shimmers for someone who asked for less motion`)
+  }
+  assert.ok(skel.some((rule) => /animation/.test(rule.body)), 'the skeleton never shimmers')
+  assert.ok(skel.some((rule) => !rule.inMedia && /var\(--panel-2\)/.test(rule.body)), 'the skeleton blocks are not the panel colour')
+})
+
+const SCREEN_EMPTY = {
+  ledger: 'No ledger yet.',
+  team: 'You have no agents yet.',
+  workflows: 'No workflow files in <code>workflows/</code> yet.',
+  skills: 'No skills yet.',
+  memory: 'No pages match.',
+  connections: 'Nothing connected yet.'
+}
+const tabIcon = (screen) => new RegExp(`<a href="#${screen}" data-screen="${screen}"[^>]*>(<svg class="ico"[\\s\\S]*?</svg>)`).exec(html)?.[1]
+
+test("each screen's empty state is centred, starts with that screen's own icon in a round tile, and keeps its words", () => {
+  const nodes = render(base)
+  for (const [screen, words] of Object.entries(SCREEN_EMPTY)) {
+    const drawn = nodes.get(screen).innerHTML
+    const at = drawn.indexOf('<div class="panel empty empty-state">')
+    assert.ok(at >= 0, `the empty ${screen} screen is not an empty state`)
+    const block = drawn.slice(at)
+    assert.match(block, /^<div class="panel empty empty-state"><span class="empty-ico" aria-hidden="true"><svg class="ico"/, `the ${screen} empty state does not start with its icon`)
+    const icon = /<span class="empty-ico" aria-hidden="true">(<svg[\s\S]*?<\/svg>)/.exec(block)[1]
+    assert.equal(icon, tabIcon(screen), `the ${screen} empty state's icon is not the ${screen} tab's icon`)
+    assert.ok(block.includes(words), `the ${screen} empty state lost its words`)
+  }
+  const rule = (selector) => Object.assign({}, ...exactRules(selector).filter((one) => !one.inMedia).map(valuesIn))
+  assert.equal(rule('.panel.empty-state')['text-align'], 'center')
+  assert.equal(rule('.panel.empty-state')['max-width'], '34rem')
+  assert.equal(rule('.empty-ico')['border-radius'], '50%')
 })
