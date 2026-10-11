@@ -217,8 +217,9 @@ A vault file older than seven days is shown as not updated since its time, never
 
 **Search inside pages.** Once the graph has been read, the search box on **Memory → List** looks in each
 team page's name, headings, description, tags and opening words, best match first, and each hit says where
-it found the words. It does not read every word of every page; until the graph is there, it searches
-names, and says so.
+it found the words. Only a page the board can open gives search its words; any other (an agent's file in
+`.claude/`, a name with accents or brackets) is found by its name alone. It does not read every word of
+every page; until the graph is there, it searches names, and says so.
 
 ## The look
 
@@ -787,7 +788,7 @@ Locally:
 npm test
 ```
 
-1936 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1937 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -

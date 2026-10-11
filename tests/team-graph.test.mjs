@@ -324,3 +324,23 @@ test('search text is cut to size and cleaned of control characters', () => {
   assert.ok(texts.every((text) => !/[\x00-\x1f\x7f]/.test(text)), 'a control character reached the search text')
   assert.match(entry.opening, /Text with a tab\./)
 })
+
+test('search gets text only from notes /api/file would open; the rest are dots with nothing to search', () => {
+  const page = '---\ndescription: Secret routing notes.\ntags: [ops]\n---\n# Private heading\n\nOpening words nobody may read here.\n'
+  const graph = graphOf({
+    '.claude/agents/sales.md': page,
+    '.claude/commands/deploy.md': page,
+    'notes/Résumé (draft).md': page,
+    'shared/business-brain.md': page
+  })
+  const entryFor = (path) => graph.search[graph.notes.findIndex((note) => note.path === path)]
+  for (const path of ['.claude/agents/sales.md', '.claude/commands/deploy.md', 'notes/Résumé (draft).md']) {
+    assert.ok(graph.notes.some((note) => note.path === path && note.opens === false), `${path} is not a dot`)
+    assert.deepEqual(entryFor(path), { headings: [], description: '', tags: [], opening: '' }, `${path} gave search its words`)
+  }
+  const allowed = entryFor('shared/business-brain.md')
+  assert.deepEqual(allowed.headings, ['Private heading'])
+  assert.equal(allowed.description, 'Secret routing notes.')
+  assert.match(allowed.opening, /^Opening words/)
+  assert.equal(graph.search.length, graph.notes.length)
+})

@@ -429,7 +429,11 @@ export function buildTeamGraph(notes, caps = {}) {
       if (typeof owner === 'string') join(from, agentFile(owner), 'agent')
     }
     const tags = tagsOf(properties)
-    return { day: dayOf(path, properties), tags, search: searchEntry(body, raw, tags) }
+    // Search may use only what the board could show anyway: the words of a note /api/file would open.
+    // Any other note (an agent's or a command's file in .claude/, a name /api/file refuses) is a dot
+    // with lines and nothing to search.
+    const search = safePath(path) !== null ? searchEntry(body, raw, tags) : { headings: [], description: '', tags: [], opening: '' }
+    return { day: dayOf(path, properties), tags, search }
   })
 
   const count = paths.length
