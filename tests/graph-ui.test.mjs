@@ -84,7 +84,7 @@ function fakeLibraries() {
 const COLOURS = { note: '#eef1f7', lonely: '#f5b14c', picked: '#f0596a', stage: '#121826', link: '#9db8ff', mention: '#a48bf5', agent: '#5fd3a6', day: '#f472b6', tag: '#22d3ee' }
 
 // Boots the board on `hash` with the graph answering `graph`, and hands the page the stand-in library.
-async function boot({ hash = '#memory', graph = graphPayload(), graphAnswer, motion = {}, webgl = true, storage = {}, media = {}, view } = {}) {
+async function boot({ hash = '#memory', graph = graphPayload(), graphAnswer, motion = {}, webgl = true, storage = {}, media = {}, view, frames } = {}) {
   const libraries = fakeLibraries()
   const answer = async (url) => {
     if (url.startsWith('/api/graph')) {
@@ -100,9 +100,11 @@ async function boot({ hash = '#memory', graph = graphPayload(), graphAnswer, mot
     storage,
     media,
     expose: ['graphState', 'graphDeps', 'graphModel', 'graphSources', 'graphCap', 'graphModeFor', 'graphSelect', 'memorySetView', 'showScreen',
-      'GRAPH_NODE_CAP', 'GRAPH_LIBRARIES', 'graphRender', 'graphSetMode', 'graphToggleKind', 'graphToggleLonely', 'graphSetSource', 'graphSetFind'],
-    after: 'Object.assign(graphDeps, given.deps)',
+      'GRAPH_NODE_CAP', 'GRAPH_LIBRARIES', 'GRAPH_SETTLE_TICKS', 'GRAPH_DOT_SIZE', 'graphRender', 'graphSetMode', 'graphToggleKind', 'graphToggleLonely', 'graphSetSource', 'graphSetFind'],
+    // `frames` holds back animation frames for the test to run, as a browser runs them after drawing.
+    after: 'Object.assign(graphDeps, given.deps); if (given.frames) window.requestAnimationFrame = (fn) => { given.frames.push(fn); return 1 }',
     given: {
+      frames,
       deps: {
         load: libraries.load,
         webgl: () => webgl,
@@ -297,7 +299,9 @@ test('when motion is allowed the 3D view turns slowly and settles as it lays out
   await flush()
   const graph = latest(libraries)
   assert.equal(graph.controls.autoRotate, true)
-  assert.equal(graph.values.cooldownTicks, undefined, 'the layout was frozen for someone who did not ask')
+  // It lays out on screen: not worked out in advance, not frozen at once (it settles by its own steps).
+  assert.ok(graph.values.cooldownTicks > 0, 'the layout was frozen for someone who did not ask')
+  assert.equal(graph.values.warmupTicks, undefined, 'the layout was worked out before it was drawn')
   // It stops turning the moment somebody takes hold of it.
   graph.controls.listeners.start()
   assert.equal(graph.controls.autoRotate, false)
@@ -316,18 +320,80 @@ test('for someone who asked for less motion: no turning, and the layout is worke
   }
 })
 
-test('once the layout settles the whole graph is framed, once, and with no glide for someone who asked for less motion', async () => {
-  for (const [motion, time] of [[{}, 600], [{ reducedMotion: true }, 0]]) {
-    const { exposed, libraries } = await boot({ motion })
+test('once the layout settles the whole graph is framed, once, with room round it, and with no glide for someone who asked for less motion', async () => {
+  for (const [mode, motion, time] of [['3d', {}, 400], ['flat', {}, 400], ['3d', { reducedMotion: true }, 0], ['flat', { reducedMotion: true }, 0]]) {
+    const { exposed, libraries } = await boot({ motion, storage: { 'agent-cockpit-graph-mode': mode } })
     exposed.memorySetView('graph')
     await flush()
     const graph = latest(libraries)
     graph.values.onEngineStop()
     graph.values.onEngineStop()
     const fits = graph.calls.filter((entry) => entry[0] === 'zoomToFit')
-    assert.equal(fits.length, 1, 'it framed the graph more than once, taking the view from the person')
-    assert.equal(fits[0][1], time)
+    assert.equal(fits.length, 1, `${mode}: it framed the graph more than once, taking the view from the person`)
+    assert.deepEqual(fits[0].slice(1, 3), [time, 40], `${mode}: framed with the wrong glide or padding`)
   }
+})
+
+test('the layout settles by its own progress, not by the clock, so a slow or background tab never freezes it half-spread', async () => {
+  // Found on prod: the drawing stopped after five seconds by the clock. A tab that gets few animation
+  // frames - in the background, or driven by a script - had laid out only a few steps by then, so the
+  // graph froze bunched up and was framed that way: a handful of giant spheres filling the stage.
+  for (const mode of ['3d', 'flat']) {
+    const { exposed, libraries } = await boot({ storage: { 'agent-cockpit-graph-mode': mode } })
+    exposed.memorySetView('graph')
+    await flush()
+    const graph = latest(libraries)
+    assert.equal(graph.values.cooldownTime, Infinity, `${mode}: the layout is still stopped by the clock`)
+    assert.equal(graph.values.cooldownTicks, exposed.GRAPH_SETTLE_TICKS, `${mode}: the layout does not stop after a set number of steps`)
+    assert.ok(exposed.GRAPH_SETTLE_TICKS >= 200)
+  }
+})
+
+test('a gentle pull to the middle keeps notes nothing links to near the rest, so the framed graph is not mostly empty space', async () => {
+  const { exposed, libraries } = await boot()
+  exposed.memorySetView('graph')
+  await flush()
+  const gather = latest(libraries).calls.find((entry) => entry[0] === 'd3Force' && entry[1] === 'gather')?.[2]
+  assert.equal(typeof gather, 'function', 'there is no pull to the middle')
+  const far = { x: 400, y: -300, z: 200, vx: 0, vy: 0, vz: 0 }
+  const flatNode = { x: 400, y: -300, vx: 0, vy: 0 }
+  gather.initialize([far, flatNode])
+  gather(1)
+  assert.ok(far.vx < 0 && far.vy > 0 && far.vz < 0, 'a far dot is not pulled back toward the middle')
+  assert.ok(flatNode.vx < 0 && flatNode.vy > 0, 'a flat dot is not pulled back toward the middle')
+  assert.equal(flatNode.vz, undefined, 'a flat dot was given a depth')
+})
+
+test('the 3D dots are sized to read as dots in a graph of a hundred or so notes', async () => {
+  const { exposed, libraries } = await boot()
+  exposed.memorySetView('graph')
+  await flush()
+  assert.equal(latest(libraries).values.nodeRelSize, exposed.GRAPH_DOT_SIZE['3d'])
+  assert.ok(exposed.GRAPH_DOT_SIZE['3d'] >= 6)
+})
+
+test('framing waits for nobody who has already taken hold of the 3D view', async () => {
+  const { exposed, libraries } = await boot()
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  graph.controls.listeners.start()
+  graph.values.onEngineStop()
+  assert.equal(graph.calls.filter((entry) => entry[0] === 'zoomToFit').length, 0, 'the camera was taken from the person mid-turn')
+})
+
+test('switching Flat to 3D starts a fresh camera that is framed when its layout settles; a hidden tab is framed too', async () => {
+  const { page, exposed, libraries } = await boot({ storage: { 'agent-cockpit-graph-mode': 'flat' } })
+  page.document.visibilityState = 'hidden'
+  exposed.memorySetView('graph')
+  await flush()
+  exposed.graphSetMode('3d')
+  await flush()
+  const graph = latest(libraries)
+  assert.equal(graph.mode, '3d')
+  assert.equal(libraries.made.length, 2, 'the 3D view reused the flat one')
+  graph.values.onEngineStop()
+  assert.equal(graph.calls.filter((entry) => entry[0] === 'zoomToFit').length, 1, 'the hidden tab skipped the fit')
 })
 
 test('dragging dots is for a mouse only: on a touch screen a finger moves the view, not the notes', async () => {
@@ -693,4 +759,38 @@ test('a graph drawn in a tab the browser calls hidden is not paused by the board
   visibility.forEach((handler) => handler())
   assert.equal(graph.resumed, 1)
   assert.equal(exposed.graphState.paused, false)
+})
+
+test('the 3D view is framed on the frame after the layout stops, once the dots have been placed, never before', async () => {
+  // Found in Chromium: for someone who asked for less motion the layout stops on its first frame, before
+  // the 3D library has put the dots where the layout says. Framed there, every dot was still at the middle,
+  // and the camera went inside the cloud: one dot 267 px across, four in five out of view.
+  const frames = []
+  const { exposed, libraries } = await boot({ motion: { reducedMotion: true }, frames })
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  graph.values.onEngineStop()
+  assert.equal(graph.calls.filter((entry) => entry[0] === 'zoomToFit').length, 0, 'it framed the graph before the dots were placed')
+  for (const frame of frames.splice(0)) frame()
+  assert.equal(graph.calls.filter((entry) => entry[0] === 'zoomToFit').length, 1, 'it never framed the graph')
+})
+
+test('the fit waits, a frame at a time, until the drawn dots span what the layout says', async () => {
+  const frames = []
+  const { exposed, libraries } = await boot({ frames })
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  const nodes = graph.values.graphData.nodes
+  nodes.forEach((node, index) => { node.x = index * 10 - 40 })
+  // The library still has every dot at the middle.
+  graph.values.getGraphBbox = { x: [-1, 1], y: [-1, 1], z: [-1, 1] }
+  graph.values.onEngineStop()
+  frames.shift()()
+  const fits = () => graph.calls.filter((entry) => entry[0] === 'zoomToFit').length
+  assert.equal(fits(), 0, 'it framed dots that were not yet placed')
+  graph.values.getGraphBbox = { x: [-40, 10 * nodes.length - 50], y: [-30, 30], z: [-30, 30] }
+  frames.shift()()
+  assert.equal(fits(), 1)
 })

@@ -20,8 +20,17 @@ const GRAPH_STILL_TICKS = 220
 // How far one dot's push reaches, in the layout's own units.
 const GRAPH_PUSH_REACH = 140
 
-// The layout moves for at most this long before it is frozen and framed (the library's own is 15 s).
-const GRAPH_SETTLE_MS = 5000
+// The layout stops after this many of its own steps, then is framed. Steps, not seconds: by the clock, a
+// tab that gets few animation frames (in the background, or driven by a script) froze half-spread.
+const GRAPH_SETTLE_TICKS = 300
+
+// How strongly every dot is drawn toward the middle at each step, so notes nothing links to stay near
+// the rest and the framed graph is not mostly empty space.
+const GRAPH_GATHER = 0.04
+
+// A dot's size in each drawing, and the room left round the graph when it is framed (px) and the glide.
+const GRAPH_DOT_SIZE = { '3d': 6, flat: 4 }
+const GRAPH_FIT = { ms: 400, padding: 40, waitFrames: 10 }
 
 // The order the server numbers line kinds in (TEAM_EDGE_KINDS), and the order they are shown in.
 const GRAPH_EDGE_KINDS = ['link', 'mention', 'day', 'tag', 'agent']
@@ -463,6 +472,32 @@ function graphRestyle(instance = graphState.instance, mode = graphState.drawn?.m
   instance.linkVisibility((link) => graphShowsLink(link))
 }
 
+// Whether the drawing has put its dots where the layout says: what the library would frame (its box of
+// what it drew) spans at least half of what the layout spans, side to side. A library that frames from
+// the layout itself (the flat one) or says nothing is taken at its word.
+function graphDotsPlaced(instance) {
+  const box = instance.getGraphBbox?.()
+  const xs = (instance.graphData?.()?.nodes ?? []).map((node) => node.x).filter(Number.isFinite)
+  if (!box || !Array.isArray(box.x) || xs.length < 2) return true
+  const laidOut = Math.max(...xs) - Math.min(...xs)
+  return laidOut === 0 || box.x[1] - box.x[0] >= laidOut / 2
+}
+
+// A d3 force that draws every dot a little toward the middle, in depth too for 3D.
+function graphGatherForce(withDepth) {
+  let nodes = []
+  const force = (alpha) => {
+    const pull = GRAPH_GATHER * alpha
+    for (const node of nodes) {
+      node.vx -= (node.x || 0) * pull
+      node.vy -= (node.y || 0) * pull
+      if (withDepth && node.z !== undefined) node.vz -= (node.z || 0) * pull
+    }
+  }
+  force.initialize = (given) => { nodes = given }
+  return force
+}
+
 function graphConfigure(instance, mode, capped) {
   const motion = graphDeps.motion()
   const still = motion.reducedMotion
@@ -478,28 +513,49 @@ function graphConfigure(instance, mode, capped) {
   instance.onNodeClick((node) => graphSelect(node.id))
   instance.onBackgroundClick(() => graphSelect(null))
   if (still) instance.warmupTicks(GRAPH_STILL_TICKS).cooldownTicks(0)
-  // Dots push each other apart only nearby, so a lonely note settles close to the rest instead of
-  // drifting off the edge; once the layout settles, the whole graph is framed in view, once.
+  else instance.cooldownTicks(GRAPH_SETTLE_TICKS)
+  instance.cooldownTime(Infinity)
+  // Dots push each other apart only nearby, and every dot is drawn gently to the middle, so a lonely note
+  // settles close to the rest instead of drifting off the edge.
   instance.d3Force?.('charge')?.distanceMax?.(GRAPH_PUSH_REACH)
-  instance.cooldownTime(GRAPH_SETTLE_MS)
+  instance.d3Force?.('gather', graphGatherForce(mode === '3d'))
+  // Once the layout settles, the whole graph is framed in view, once - unless the person has already
+  // taken hold of it, and then the view stays theirs. A new drawing (Flat to 3D) starts a new camera.
   let framed = false
+  let held = false
   instance.onEngineStop(() => {
-    if (framed) return
+    if (framed || held) return
     framed = true
-    instance.zoomToFit(still ? 0 : 600, 24)
+    // On the next frame, not now: the library places the dots after the layout stops, and the 3D fit
+    // measures where they were drawn. Framed now, a layout that stopped on its first frame (less motion)
+    // still had every dot at the middle, and the camera went inside the cloud.
+    // A drawing just made from a library already in memory can take a few frames more to place its dots,
+    // so the fit waits until what is drawn spans what the layout says (ten frames at most).
+    const fit = (tries) => window.requestAnimationFrame(() => {
+      if (held) return
+      if (tries < GRAPH_FIT.waitFrames && !graphDotsPlaced(instance)) {
+        fit(tries + 1)
+        return
+      }
+      instance.zoomToFit(still ? 0 : GRAPH_FIT.ms, GRAPH_FIT.padding)
+    })
+    fit(0)
   })
   if (mode === '3d') {
-    instance.showNavInfo(false).nodeRelSize(5).nodeOpacity(0.92).linkOpacity(0.45).nodeResolution(10)
+    instance.showNavInfo(false).nodeRelSize(GRAPH_DOT_SIZE['3d']).nodeOpacity(0.92).linkOpacity(0.45).nodeResolution(10)
     instance.renderer()?.setPixelRatio?.(graphDeps.pixelRatio())
     const controls = instance.controls?.()
     if (controls) {
       // A slow turn, only for someone who has not asked for less motion, and only until they take hold.
       controls.autoRotate = !still
       controls.autoRotateSpeed = 0.6
-      controls.addEventListener?.('start', () => { controls.autoRotate = false })
+      controls.addEventListener?.('start', () => {
+        controls.autoRotate = false
+        held = true
+      })
     }
   } else {
-    instance.nodeRelSize(4)
+    instance.nodeRelSize(GRAPH_DOT_SIZE.flat)
   }
   graphRestyle(instance, mode)
   instance.graphData({ nodes: capped.nodes.map((node) => ({ ...node })), links: capped.links.map((link) => ({ ...link })) })
