@@ -569,7 +569,9 @@ async function graphDraw(model) {
   graphState.drawn = { refs, mode, data: graphState.data, key: current.source.key }
   graphState.paused = false
   refs.stageNote.textContent = graphStageNote(capped, mode)
-  if (memoryView !== 'graph' || location.hash.slice(1) !== 'memory' || document.visibilityState === 'hidden') graphPause()
+  // Not paused for a tab that says hidden: the browser already holds back frames nobody sees, and a tab
+  // that reports hidden while it is drawn (one a script drives) would otherwise show an empty stage.
+  if (memoryView !== 'graph' || location.hash.slice(1) !== 'memory') graphPause()
 }
 
 function graphFocusOn(id) {

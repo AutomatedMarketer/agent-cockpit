@@ -669,3 +669,28 @@ test('somebody who leaves Graph while its drawing code is on the way gets no dra
   assert.equal(exposed.graphState.refs, null, 'the graph was built after the person had gone back to the list')
   assert.deepEqual(libraries.loads, [])
 })
+
+test('a graph drawn in a tab the browser calls hidden is not paused by the board, and nothing stale is left when it is seen', async () => {
+  // A background tab, or one a script drives, can report hidden while it is still drawn. The browser
+  // already holds back animation frames for a tab nobody sees, so the board does not add a pause of its
+  // own when it first draws: the graph shows the moment the tab is looked at.
+  const { page, exposed, libraries } = await boot()
+  page.document.visibilityState = 'hidden'
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  assert.equal(graph.paused, 0, 'the first drawing was paused because the tab said hidden')
+  assert.equal(exposed.graphState.paused, false)
+  const visibility = page.documentListeners.filter((entry) => entry.type === 'visibilitychange').map((entry) => entry.handler)
+  page.document.visibilityState = 'visible'
+  visibility.forEach((handler) => handler())
+  assert.equal(exposed.graphState.paused, false, 'coming into view left the drawing paused')
+  // Hidden after it was drawn: paused, and seen again: resumed.
+  page.document.visibilityState = 'hidden'
+  visibility.forEach((handler) => handler())
+  assert.equal(graph.paused, 1)
+  page.document.visibilityState = 'visible'
+  visibility.forEach((handler) => handler())
+  assert.equal(graph.resumed, 1)
+  assert.equal(exposed.graphState.paused, false)
+})
