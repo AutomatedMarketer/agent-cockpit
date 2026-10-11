@@ -9,9 +9,9 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { html, script } from './page-source.mjs'
+import { html, script, app, graphView } from './page-source.mjs'
 
-export { html, script }
+export { html, script, app, graphView }
 
 function element(id = '', tag = 'div') {
   const classes = new Set()
@@ -71,7 +71,8 @@ export const flush = async (times = 6) => {
 // `fetch(url, init)` answers the page's requests; left out, /api/state gets `payload` and everything
 // else an empty object. `given` is handed to `after`, a line of code run inside the page's own scope
 // once the script has loaded - the way a test sets a page variable the person would have set.
-export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after = '', given = {}, hash = '', media = {}, prompt, confirm, hostname = 'board.example', scrollY = 0, timers, date } = {}) {
+// `source` is the page's code to run: all of it by default, or `app` for the page before Graph is opened.
+export function loadPage({ source = script, payload = {}, fetch, storage = {}, expose = [], after = '', given = {}, hash = '', media = {}, prompt, confirm, hostname = 'board.example', scrollY = 0, timers, date } = {}) {
   for (const name of expose) assert.match(name, /^[A-Za-z_$][\w$]*$/, `${name} is not a name`)
   const nodes = new Map()
   const node = (id) => {
@@ -141,7 +142,7 @@ export function loadPage({ payload = {}, fetch, storage = {}, expose = [], after
   }
   const run = new Function(
     ...Object.keys(context),
-    `${script}
+    `${source}
      ; const given = arguments[arguments.length - 1]
      ; ${after}
      ; return { ${expose.join(', ')} };`

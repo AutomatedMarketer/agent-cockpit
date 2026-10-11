@@ -197,9 +197,8 @@ not point at each other is a field of lonely dots - and that is worth seeing.
 - **3D or flat.** On a computer with a mouse or trackpad, WebGL, and no "reduce motion" setting, it is 3D
   and turns slowly until you take hold of it. On a phone, a slow device, or with reduce motion on, it is
   flat and still. **3D | Flat** switches, and this device remembers your choice.
-- **What it costs.** Nothing with the board: the graph is read only when you open Memory, and a drawing
-  library only the first time you open **Graph** - the 3D one (about 345 KB) on a computer, the flat one
-  (about 57 KB) on a phone. Reading the graph is one GitHub call per note, up to 400 notes (a note over
+- **What it costs.** Nothing with the board: the graph is read only when you open Memory, and its own
+  drawing code (`/memory-graph.js`, about 10 KB) and a drawing library load only the first time you open **Graph** - the 3D library (about 345 KB) on a computer, the flat one (about 57 KB) on a phone. Reading the graph is one GitHub call per note, up to 400 notes (a note over
   64 KB is counted, not read); opening Memory again within a minute asks nothing, and after that one call
   checks whether anything changed.
 
@@ -788,7 +787,7 @@ Locally:
 npm test
 ```
 
-1933 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1936 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -

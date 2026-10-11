@@ -12,7 +12,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { loadPage, flush, script } from './helpers/page-harness.mjs'
+import { loadPage, flush, script, app, graphView } from './helpers/page-harness.mjs'
 import { basePayload } from './helpers/page-payload.mjs'
 import { cssRules, sheetText } from './helpers/css-rules.mjs'
 import { buildTeamGraph } from '../api/_team-graph.js'
@@ -84,7 +84,7 @@ function fakeLibraries() {
 const COLOURS = { note: '#eef1f7', lonely: '#f5b14c', picked: '#f0596a', stage: '#121826', link: '#9db8ff', mention: '#a48bf5', agent: '#5fd3a6', day: '#f472b6', tag: '#22d3ee' }
 
 // Boots the board on `hash` with the graph answering `graph`, and hands the page the stand-in library.
-async function boot({ hash = '#memory', graph = graphPayload(), graphAnswer, motion = {}, webgl = true, storage = {}, media = {} } = {}) {
+async function boot({ hash = '#memory', graph = graphPayload(), graphAnswer, motion = {}, webgl = true, storage = {}, media = {}, view } = {}) {
   const libraries = fakeLibraries()
   const answer = async (url) => {
     if (url.startsWith('/api/graph')) {
@@ -108,7 +108,8 @@ async function boot({ hash = '#memory', graph = graphPayload(), graphAnswer, mot
         webgl: () => webgl,
         motion: () => ({ finePointer: true, reducedMotion: false, deviceMemory: 8, ...motion }),
         colours: () => COLOURS,
-        pixelRatio: () => 1.5
+        pixelRatio: () => 1.5,
+        ...(view ? { view } : {})
       }
     }
   })
@@ -163,11 +164,11 @@ test('the real loader adds one script tag, for this site\'s own copy, and never 
   const { page, exposed } = await boot({ hash: '' })
   assert.equal(exposed.GRAPH_LIBRARIES['3d'].src, '/vendor/3d-force-graph-1.80.0.min.js')
   assert.equal(exposed.GRAPH_LIBRARIES.flat.src, '/vendor/force-graph-1.51.4.min.js')
-  assert.match(script, /function graphLoadLibrary\(mode\)/)
+  assert.match(app, /function graphLoadLibrary\(mode\)/)
   // The loader is the page's own: a script element with a site-relative src, added once per library.
-  const loader = script.slice(script.indexOf('function graphLoadLibrary(mode)'), script.indexOf('function graphHasWebgl'))
+  const loader = app.slice(app.indexOf('const graphLoading'), app.indexOf('async function graphFetch'))
   assert.match(loader, /createElement\('script'\)/)
-  assert.match(loader, /graphLoading\[mode\]/)
+  assert.match(loader, /graphLoading\[src\] \?\?=/, 'a second ask does not wait for the first')
   assert.doesNotMatch(loader, /https?:/, 'the loader names another site')
   assert.deepEqual(scriptsMade(page), [])
 })
@@ -195,6 +196,27 @@ test('the drawing\'s pixel ratio is the screen\'s, up to 1.5', async () => {
     await flush()
     assert.equal(page.exposed.graphDeps.pixelRatio(), used)
   }
+})
+
+test('the drawing code is a file of its own, asked for the first time Graph opens and never before', async () => {
+  // /app.js alone: the page as it is until somebody opens Graph.
+  const page = loadPage({ source: app, payload: { ...basePayload(), commit: COMMIT }, hash: '#memory', expose: ['memorySetView'] })
+  await flush()
+  assert.deepEqual(scriptsMade(page), [], 'the view or a library was asked for before Graph was opened')
+  page.exposed.memorySetView('graph')
+  page.exposed.memorySetView('list')
+  page.exposed.memorySetView('graph')
+  await flush()
+  const tags = scriptsMade(page)
+  assert.deepEqual(tags.map((tag) => tag.src), ['/memory-graph.js'], 'the view file was not asked for once, and only it')
+  assert.ok(!app.includes('function graphShell'), 'the drawing code is still in /app.js, paid for by every visit')
+  assert.ok(graphView.includes('function graphShell'))
+})
+
+test('the view file is the page\'s own plain script: no markup written, no storage touched directly', () => {
+  assert.doesNotMatch(graphView, /innerHTML|insertAdjacentHTML/)
+  assert.doesNotMatch(graphView, /\blocalStorage\b/)
+  assert.ok(graphView.startsWith("'use strict'"))
 })
 
 /* ---------- 3D or flat ------------------------------------------------------------------------- */
@@ -261,7 +283,9 @@ test('a hover label is never set from a title\'s text: it is an element with the
 })
 
 test('the page never sets a node label or link label that is a string, anywhere in its source', () => {
-  const block = script.slice(script.indexOf('/* ---------- Memory graph: begin'), script.indexOf('/* ---------- Memory graph: end'))
+  // The graph's code in /app.js, and the view it loads when Graph opens.
+  const block = app.slice(app.indexOf('/* ---------- Memory graph: begin'), app.indexOf('/* ---------- Memory graph: end')) +
+    graphView.slice(graphView.indexOf('/* ---------- Memory graph view: begin'), graphView.indexOf('/* ---------- Memory graph view: end'))
   assert.ok(block.length > 2000, 'the Memory graph block was not found')
   assert.doesNotMatch(block, /\.innerHTML\s*=/, 'the graph writes markup')
   assert.doesNotMatch(block, /insertAdjacentHTML/)
@@ -588,7 +612,9 @@ const rules = cssRules()
 const sheet = sheetText()
 
 test('every class the Memory graph writes has a rule, and none of its rules sets a colour but from a token', () => {
-  const block = script.slice(script.indexOf('/* ---------- Memory graph: begin'), script.indexOf('/* ---------- Memory graph: end'))
+  // The graph's code in /app.js, and the view it loads when Graph opens.
+  const block = app.slice(app.indexOf('/* ---------- Memory graph: begin'), app.indexOf('/* ---------- Memory graph: end')) +
+    graphView.slice(graphView.indexOf('/* ---------- Memory graph view: begin'), graphView.indexOf('/* ---------- Memory graph view: end'))
   const used = new Set([...block.matchAll(/\b(mg-[a-z][a-z-]*|mem-[a-z][a-z-]*)/g)].map((match) => match[1]).filter((name) => !name.endsWith('-')))
   for (const kind of ['link', 'mention', 'agent', 'day', 'tag']) used.add(`mg-k-${kind}`)
   for (const dot of ['note', 'hub', 'lonely', 'picked']) used.add(`mg-d-${dot}`)
@@ -630,4 +656,16 @@ test('nothing in the graph can push a phone sideways: the stage and the panels m
   // box was full width plus its margin, and opening the list widened the page by 17px.
   assert.match(body('input[type=search].mg-find'), /width:\s*calc\(100% - 2\.1rem\)/, 'the find box can be pushed to full width by the page-wide search rule')
   assert.equal(rules.filter((rule) => rule.selector === '.mg-find').length, 0, 'a bare .mg-find rule loses to input[type=search]')
+})
+
+test('somebody who leaves Graph while its drawing code is on the way gets no drawing behind the list', async () => {
+  let arrive
+  const view = () => new Promise((resolve) => { arrive = resolve })
+  const { exposed, libraries } = await boot({ view })
+  exposed.memorySetView('graph')
+  exposed.memorySetView('list')
+  arrive(true)
+  await flush()
+  assert.equal(exposed.graphState.refs, null, 'the graph was built after the person had gone back to the list')
+  assert.deepEqual(libraries.loads, [])
 })
