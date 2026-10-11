@@ -99,12 +99,17 @@ test('Jev must answer within 1.5 s, or the card goes as if it were off', async (
   assert.deepEqual((await ask(ON)).body, NOBODY('no answer'))
 })
 
-test('each choice stands alone: only an option it was sent, at 60% or surer, with odds clamped to a whole 0-100', async (t) => {
+test('each choice stands alone: only an option it was sent, at 60% or surer, as a whole 0-100', async (t) => {
   const cases = [
     [picked('content', 0.84, 'sonnet', 0.59), { agent: { pick: 'content', odds: 84 }, model: { pick: null, why: 'unsure' } }],
     [picked('sales', 0.99, 'opus', 0.9), { agent: { pick: null, why: 'unsure' }, model: { pick: 'opus', odds: 90 } }],
     [picked('content', 0.6, 'gpt-5', 0.99), { agent: { pick: 'content', odds: 60 }, model: { pick: null, why: 'unsure' } }],
-    [picked('content', 1.7, 'sonnet', -3), { agent: { pick: 'content', odds: 100 }, model: { pick: null, why: 'unsure' } }],
+    [picked('content', 1, 'sonnet', 0), { agent: { pick: 'content', odds: 100 }, model: { pick: null, why: 'unsure' } }],
+    // A confidence no honest answer gives is refused, not shown as 100%: a compromised reply must not
+    // earn the card's strongest endorsement (review 2026-10-11: 7 and 1e9 came back as 100%).
+    [picked('content', 1.7, 'sonnet', -3), NOBODY('unsure')],
+    [picked('content', 7, 'haiku', 1e9), NOBODY('unsure')],
+    [() => new Response('{"answers":{"owner":{"type":"choice","choice":"content","confidence":1e999}}}', { status: 200, headers: { 'content-type': 'application/json' } }), NOBODY('unsure')],
     [picked('content', '0.9', 'sonnet', Number.NaN), { agent: { pick: null, why: 'unsure' }, model: { pick: null, why: 'unsure' } }],
     [answered({ owner: { choice: 'content', confidence: 0.9 } }), { agent: { pick: 'content', odds: 90 }, model: { pick: null, why: 'unsure' } }],
     [picked('constructor', 0.99, 'toString', 0.99), NOBODY('unsure')]

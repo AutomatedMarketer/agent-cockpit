@@ -73,8 +73,11 @@ function readAsk(body) {
 function choiceFrom(answer, offered) {
   const choice = answer?.choice
   if (typeof choice !== 'string' || !offered.includes(choice)) return none('unsure')
-  if (typeof answer.confidence !== 'number' || !Number.isFinite(answer.confidence)) return none('unsure')
-  const odds = Math.min(100, Math.max(0, Math.round(answer.confidence * 100)))
+  // Refused, not clamped: a confidence outside 0-1 is no honest answer, and showing it as 100% would
+  // give a compromised reply the card's strongest endorsement.
+  const sure = answer.confidence
+  if (typeof sure !== 'number' || !Number.isFinite(sure) || sure < 0 || sure > 1) return none('unsure')
+  const odds = Math.round(sure * 100)
   return odds >= ODDS_FLOOR ? { pick: choice, odds } : none('unsure')
 }
 
