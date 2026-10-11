@@ -329,6 +329,14 @@ function titleOf(path) {
   return GENERIC_NAMES.has(name.toLowerCase()) && segments.length > 1 ? `${segments.at(-2)}/${name}` : name
 }
 
+// What the meaning index (api/_memory-index.js) says a note is, the same way the graph says it: its title,
+// its top folder (null at the root) and its day, when it has one.
+export function noteFacts(path, text) {
+  const { lines } = splitFrontmatter(typeof text === 'string' ? text : '')
+  const { properties } = readProperties(lines)
+  return { title: titleOf(path), folder: path.includes('/') ? path.slice(0, path.indexOf('/')) : null, day: dayOf(path, properties) }
+}
+
 const AGENT_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 // --- from notes to dots and lines ------------------------------------------------------------------------
