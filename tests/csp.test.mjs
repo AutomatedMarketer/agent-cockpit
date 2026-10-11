@@ -66,7 +66,9 @@ test('no inline event handler anywhere: not in the page, not in markup the scrip
   const script = readFileSync(new URL('public/app.js', ROOT), 'utf8')
   // Memory's graph view, the second file the page loads (only when Graph opens), is held to the same.
   const graphView = readFileSync(new URL('public/memory-graph.js', ROOT), 'utf8')
-  for (const [name, text] of [['index.html', page], ['app.js', script], ['memory-graph.js', graphView]]) {
+  // And Memory's search, the third (loaded when Memory opens).
+  const findView = readFileSync(new URL('public/memory-find.js', ROOT), 'utf8')
+  for (const [name, text] of [['index.html', page], ['app.js', script], ['memory-graph.js', graphView], ['memory-find.js', findView]]) {
     const found = text.match(/<[a-z][^>]*\son[a-z]+\s*=/i)
     assert.equal(found, null, `${name} has an inline handler: ${found?.[0]}`)
     assert.doesNotMatch(text, /javascript:/i, `${name} has a javascript: address`)
@@ -106,7 +108,7 @@ test('talking to the board needed no change to the policy, and the page still re
     for (const source of sources) assert.doesNotMatch(source, /openai|fish\.audio|wss:/i, `${source} was let into the policy`)
   }
   const page = readFileSync(new URL('public/index.html', ROOT), 'utf8') + readFileSync(new URL('public/app.js', ROOT), 'utf8') +
-    readFileSync(new URL('public/memory-graph.js', ROOT), 'utf8')
+    readFileSync(new URL('public/memory-graph.js', ROOT), 'utf8') + readFileSync(new URL('public/memory-find.js', ROOT), 'utf8')
   assert.doesNotMatch(page, /api\.openai\.com|api\.fish\.audio|wss:\/\//, 'the page addresses OpenAI or Fish itself')
   assert.doesNotMatch(page, /\bek_|client_secrets/, 'the page asks for an ephemeral key')
   for (const path of ['/api/voice-session', '/api/speak', '/api/voice-meter']) {

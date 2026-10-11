@@ -207,13 +207,14 @@ test('the drawing code is a file of its own, asked for the first time Graph open
   // /app.js alone: the page as it is until somebody opens Graph.
   const page = loadPage({ source: app, payload: { ...basePayload(), commit: COMMIT }, hash: '#memory', expose: ['memorySetView'] })
   await flush()
-  assert.deepEqual(scriptsMade(page), [], 'the view or a library was asked for before Graph was opened')
+  // Memory's search file comes with Memory (memory-find.js); nothing of the graph's does.
+  assert.deepEqual(scriptsMade(page).map((tag) => tag.src), ['/memory-find.js'], 'the view or a library was asked for before Graph was opened')
   page.exposed.memorySetView('graph')
   page.exposed.memorySetView('list')
   page.exposed.memorySetView('graph')
   await flush()
   const tags = scriptsMade(page)
-  assert.deepEqual(tags.map((tag) => tag.src), ['/memory-graph.js'], 'the view file was not asked for once, and only it')
+  assert.deepEqual(tags.map((tag) => tag.src), ['/memory-find.js', '/memory-graph.js'], 'the view file was not asked for once, and only it')
   assert.ok(!app.includes('function graphShell'), 'the drawing code is still in /app.js, paid for by every visit')
   assert.ok(graphView.includes('function graphShell'))
 })

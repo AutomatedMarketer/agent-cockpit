@@ -98,6 +98,7 @@ test('neither library is on the board\'s first page: the markup never names the 
   assert.ok(!/<link[^>]+(preload|prefetch)[^>]+vendor/i.test(html))
   // Nor the graph's own drawing code, which comes with them.
   assert.ok(!html.includes('memory-graph.js'), 'index.html loads the graph view with the board')
+  assert.ok(!html.includes('memory-find.js'), 'index.html loads Memory\'s search with the board')
 })
 
 test('the flat library never builds code from text; the 3D one only in the layout engine the board never picks', () => {
