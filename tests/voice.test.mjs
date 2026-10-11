@@ -384,6 +384,18 @@ test('the README says what orders by voice do, the yes rule word for word, and h
   assert.match(section, /JEV_ROUTING=on/)
   assert.match(section, /OpenRouter/)
   assert.match(section, /off by default/i)
+  // Jev picks who and which model, with its odds (Nuno, 2026-10-11): what the card shows, what a name
+  // said does, the fallback, what goes to OpenRouter and what it costs, and how far the model goes.
+  assert.match(section, /"Agent: research · 82%"/)
+  assert.match(section, /"Model: sonnet · 74%"/)
+  assert.match(section, /you chose/)
+  assert.match(section, /within 1\.5 seconds/)
+  assert.match(section, /the orchestrator decides, on the agent's own model/i)
+  assert.match(section, /title and details, each agent's slug and description, and the board's own one-line note on each model tier/i)
+  assert.match(section, /about \$0\.00002 a decision/)
+  assert.match(section, /model: <tier>/)
+  assert.match(section, /a recommendation until/i)
+  assert.match(section, /work-the-tasks/)
   // Every new setting is in the settings table.
   for (const name of ['VOICE_SPOKEN_YES', 'JEV_ROUTING', 'OPENROUTER_API_KEY']) {
     assert.ok(lines.some((line) => line.startsWith(`| \`${name}\``)), `${name} is not in the settings table`)

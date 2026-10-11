@@ -498,12 +498,26 @@ assistant says so, plainly:
    Preview, marked sensitive
 4. Redeploy. The Run, Add task, Arm and Approve buttons start working too
 
-**Who does a task:** your orchestrator decides on its next sweep, as with the **Add task** button, unless
-you pick an agent on the card. Optionally, **Jev** (TypeSafe's decision model, on OpenRouter) can
-suggest one: set `JEV_ROUTING=on` and `OPENROUTER_API_KEY`. It is off by default because, when it is
-on, the words of each task you order, and your agents' names and descriptions, go to OpenRouter. The
-card then says *"Picked by Jev (84% sure)"* - it only shows a pick Jev is at least 60% sure of - and
-you can still change it.
+**Who does a task, and on which model:** your orchestrator decides on its next sweep, on the agent's
+own model, as with the **Add task** button - unless you say otherwise. Name them as you ask (*"have
+research draft it on opus"*) and the card says *"you chose"*. Or pick on the card: **Who does it** and
+**Model** (the tiers your agents' own `model:` lines use - opus, sonnet or haiku).
+
+**Jev** (TypeSafe's decision model, on OpenRouter) can pick both for you, with its odds: the card
+says *"Agent: research · 82%"* and *"Model: sonnet · 74%"*, and you can still change either. A name
+you said wins; Jev is asked only about the rest. Jev must answer within 1.5 seconds and be at least 60%
+sure; otherwise the orchestrator decides, on the agent's own model, and the card says why (*"Jev was
+not sure"*, *"Jev did not answer in time"*). Switch it on with `JEV_ROUTING=on` and
+`OPENROUTER_API_KEY`. It is off by default because, when it is on, each task's
+title and details, each agent's slug and description, and the board's own one-line note on each model tier
+go to OpenRouter, a new vendor that offers zero data retention only on enterprise accounts. It costs
+about $0.00002 a decision ($0.042 per million tokens it reads; its answers are free).
+
+**How far the model goes, today:** the task card is written with `model: <tier>` in its frontmatter,
+beside `for:`. Your team's daily task sweep (the `work-the-tasks` skill) does not read that field yet,
+so the model is a recommendation until it does: the sweep still works each card as the agent it
+routes to. Making it count is one line in your team repo's `work-the-tasks` skill, saying to use the
+card's model when it names one - the board never edits your repo.
 
 ### Speakers or headphones
 
@@ -599,7 +613,7 @@ Fish Audio can speak the answers in a voice you pick from its library.
 | The words of each answer, with Fish on | **Fish** | So it can speak them. Its free model may train on them |
 | Each conversation's token counts | **The board's picture store** | The meter |
 | The words of an order you say yes to | **Your `task-intake` routine** (a task) or **that job's routine** (a run), through the board's own `/api/fire` | So your team does it. The trigger URLs stay in Vercel; none reaches your browser |
-| With `JEV_ROUTING=on`: a task's words, and your agents' names and descriptions | **OpenRouter** (Jev) | So it can suggest who does the task. Off by default |
+| With `JEV_ROUTING=on`: a task's title and details, your agents' slugs and descriptions, and the board's note on each model tier | **OpenRouter** (Jev) | So it can pick who does the task and on which model. Off by default |
 
 Everything else stays where it was. The page's security policy did not change: the call itself is
 browser-to-OpenAI audio, and the page only ever talks to its own site.
@@ -667,7 +681,7 @@ has no evidence for.
 | `VOICE_REPLY_TOKENS` | How long one spoken reply may run, 300 to 800. Its sound counts at about 20 a second, so the default `700` is about 30 seconds of speech; `800` is the most, about 40. With Fish it is always 300, which is already longer than that | No |
 | `VOICE_ECHO_GUARD` | On a computer, a turn of one or two words in the first 1.5 seconds of a reply is treated as the assistant's own voice coming back through the speakers: it is ignored and the reply resumes (once per question). So to stop it right at the start, use **Stop** or Esc rather than saying "stop". The guard reads a transcript of what it hears, so on a computer that is on with it, captions or not: about $0.002 a minute of your talking (gpt-4o-mini-transcribe: 600 audio tokens a minute at $1.25 a million, plus the words at $5 a million). Phones never use the guard. Phones do not pay it unless captions are on. `off` to switch it off. On unless set | No |
 | `VOICE_SPOKEN_YES` | `off` to make a tap on the card's **Yes** the only way to send a voice order. On unless set: your own plain spoken yes counts too, under the rules in [Orders by voice](#orders-by-voice) | No |
-| `JEV_ROUTING` | `on` to let Jev suggest which agent does a task you order by voice. **Sends the task's words, and your agents' names and descriptions, to OpenRouter.** Needs `OPENROUTER_API_KEY`. Off unless set | No |
+| `JEV_ROUTING` | `on` to let Jev pick which agent does a task you order by voice, and on which model tier, with its odds on the card. **Sends the task's title and details, and your agents' slugs and descriptions, to OpenRouter**, about $0.00002 a decision. Needs `OPENROUTER_API_KEY`. Off unless set | No |
 | `OPENROUTER_API_KEY` | Your OpenRouter key, for Jev. Mark it sensitive. Does nothing unless `JEV_ROUTING=on` | For Jev |
 | `VOICE_VAD_THRESHOLD` | How loud a sound must be to count as you talking, `0.1` to `0.95`. Default `0.6` - a little above OpenAI's example, because a computer on speakers heard its own voice as you talking. Raise it if it keeps cutting itself off; lower it if it misses you | No |
 | `FISH_API_KEY` | Your Fish Audio key, for a voice you choose. Mark it sensitive | For Fish |
