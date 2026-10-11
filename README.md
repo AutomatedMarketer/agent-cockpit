@@ -221,6 +221,48 @@ it found the words. Only a page the board can open gives search its words; any o
 `.claude/`, a name with accents or brackets) is found by its name alone. It does not read every word of
 every page; until the graph is there, it searches names, and says so.
 
+The box also reads **a day** ("what did I save today", "last Tuesday", "on 3 October") and **a folder**
+("in shared", "in my inbox") from what you type, in your device's own time zone, and narrows the list to
+them. A folder that is not there is said, with the folders there are. A name heard wrong ("orkestrator")
+is tried as a known one that sounds like it, and the hit says "heard as orchestrator".
+
+#### Search by meaning
+
+**Off unless you switch it on.** With it on, the same box also finds pages that *mean* what you asked
+when they share none of its words: "when does a task count as finished" finds *definition-of-done*.
+Each hit says why it is there ("in its name", "close in meaning to what you asked", "dated today").
+
+- **How it works.** The board's server sends the text of each team page it can open (its first 8,000
+  characters) to OpenAI's `text-embedding-3-small`, once, and again only when the page changes. What comes
+  back is a list of numbers per page, kept in your **private picture store** - never in your repo, never
+  in your browser. A search sends its words to OpenAI and gets back page names; typing never asks, only
+  **Enter** or a short pause does
+- **What it never covers.** A computer's Obsidian vaults: their contents never leave that computer
+  (titles at most, as above). And the board's own `.claude/` files, which it does not open either
+- **What it costs.** Under 1 cent a month for about 100 pages; about 2 cents in the first month for
+  1,000 (OpenAI's price page, read 11 October 2026: $0.02 per million tokens). It saves what it learned
+  at most **twice a day**, inside [the store's free limit](#the-picture-stores-free-limit-and-why-the-caps-are-where-they-are)
+- **Limits that stop a runaway, not you.** At most 200 pages learned a step, 30 searches a minute and
+  1,000 a day per running copy of the board. Your OpenAI project's [hard spend limit](#set-a-hard-spend-limit-on-your-openai-project---do-this-first)
+  is the real ceiling
+- **Who can use it.** Anyone who can change the board: it spends a little of your OpenAI credit, so a
+  board shared read-only (`EDIT_KEY` set) gives word search to anyone without the key, and says so
+- **By voice.** "Find my note about pricing" shows the same numbered list on **Memory**, and "open
+  number two" opens it. The assistant says titles and why each was found; it never reads a note out
+- **What it cannot stop.** Someone who can push to your team repo could write a page made to come
+  first in every search. It is still only a result with its name on it: nothing is ever done because
+  of one
+
+**To switch it on:**
+
+1. Have `OPENAI_API_KEY` set (the voice key) and a **Private Blob store** connected (the picture store).
+   No store, and the board says: "Search by meaning needs the picture store, so the board can keep what it learned: in Vercel, create a Private Blob store for this project, then redeploy."
+2. [Set a hard spend limit](#set-a-hard-spend-limit-on-your-openai-project---do-this-first) on that
+   OpenAI project first.
+3. In Vercel, add `MEMORY_MEANING` = `on` (Production and Preview), and redeploy.
+4. Open **Memory**. The board says "Learning your notes by meaning: 200 of 1,000…" and carries on while
+   Memory is open. Close it and the next visit picks up where it stopped.
+
 ## The look
 
 The board opens **dark**, and there is a **light theme** too. The switch is in the top bar. It
@@ -437,7 +479,7 @@ out loud from what the board already shows, and you can talk over it to stop it.
 
 | | |
 |---|---|
-| **What it can do** | Read the board to you: who is working, what is due and gone quiet, the task board, plan limits and voice spend, your connections and Hermes. Open a screen. And, once the board's Run buttons are set up, send a task card to your team, run a job, and tell you "is it done?" - each only after you say yes on a card ([Orders by voice](#orders-by-voice)) |
+| **What it can do** | Read the board to you: who is working, what is due and gone quiet, the task board, plan limits and voice spend, your connections and Hermes. Open a screen. And, once the board's Run buttons are set up, send a task card to your team, run a job, and tell you "is it done?" - each only after you say yes on a card ([Orders by voice](#orders-by-voice)). Find a note and open it on your screen ("open number two") |
 | **Saying yes** | Only you can: a tap on the card's **Yes**, or - for a job run or a short task - your own plain spoken yes after the card appears. Its own words, or anything it read, can never say yes for you |
 | **Its name** | The assistant's name from **Make it yours**, or "your assistant" |
 | **Its voice** | OpenAI's own voice by default. Fish, for a voice you choose, is an optional upgrade (below) |
@@ -616,6 +658,8 @@ Fish Audio can speak the answers in a voice you pick from its library.
 | Each conversation's token counts | **The board's picture store** | The meter |
 | The words of an order you say yes to | **Your `task-intake` routine** (a task) or **that job's routine** (a run), through the board's own `/api/fire` | So your team does it. The trigger URLs stay in Vercel; none reaches your browser |
 | With `JEV_ROUTING=on`: a task's title and details, your agents' slugs and descriptions, and the board's note on each model tier | **OpenRouter** (Jev) | So it can pick who does the task and on which model. Off by default |
+| With `MEMORY_MEANING=on`: the text of each note the board can open (its first 8,000 characters), and the words of each search | **OpenAI** | So notes can be found by meaning. Kept up to 30 days in OpenAI's abuse logs, never trained on. The lists of numbers made from them stay in your private picture store |
+| The titles, folders, days and first words of the notes a search found, when you ask by voice | **OpenAI** | So the assistant can say what it found. Never a whole note |
 
 Everything else stays where it was. The page's security policy did not change: the call itself is
 browser-to-OpenAI audio, and the page only ever talks to its own site.
@@ -685,6 +729,7 @@ has no evidence for.
 | `VOICE_SPOKEN_YES` | `off` to make a tap on the card's **Yes** the only way to send a voice order. On unless set: your own plain spoken yes counts too, under the rules in [Orders by voice](#orders-by-voice) | No |
 | `JEV_ROUTING` | `on` to let Jev pick which agent does a task you order by voice, and on which model tier, with its odds on the card. **Sends the task's title and details, and your agents' slugs and descriptions, to OpenRouter**, about $0.00002 a decision. Needs `OPENROUTER_API_KEY`. Off unless set | No |
 | `OPENROUTER_API_KEY` | Your OpenRouter key, for Jev. Mark it sensitive. Does nothing unless `JEV_ROUTING=on` | For Jev |
+| `MEMORY_MEANING` | `on` to let Memory find your team notes [by meaning](#search-by-meaning). **Sends the text of each note the board can open to OpenAI**, once and when it changes; under 1 cent a month for about 100 notes. Needs `OPENAI_API_KEY` and the picture store. Off unless set | No |
 | `VOICE_VAD_THRESHOLD` | How loud a sound must be to count as you talking, `0.1` to `0.95`. Default `0.6` - a little above OpenAI's example, because a computer on speakers heard its own voice as you talking. Raise it if it keeps cutting itself off; lower it if it misses you | No |
 | `FISH_API_KEY` | Your Fish Audio key, for a voice you choose. Mark it sensitive | For Fish |
 | `FISH_VOICE_ID` | The 32 letters and numbers in the voice's address on fish.audio | For Fish |
@@ -804,7 +849,7 @@ Locally:
 npm test
 ```
 
-2047 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2050 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -
@@ -884,8 +929,9 @@ hash - loaded only when someone opens **Graph** on Memory. Every notice they car
 - **Send anything you did not ask it to.** It has no email and no publishing. What does leave is yours
   to switch on, with `OPENAI_API_KEY`: **Make it** sends the description you typed to OpenAI, and
   **talking to the board** sends your voice, and the board's answers to its questions, to OpenAI -
-  plus, with Fish on, the words of each answer to Fish, whose free model may train on them, and with
-  `JEV_ROUTING=on`, the words of a task you order to OpenRouter. See [What goes where](#what-goes-where)
+  plus, with Fish on, the words of each answer to Fish, whose free model may train on them, with
+  `JEV_ROUTING=on`, the words of a task you order to OpenRouter, and with `MEMORY_MEANING=on`, the
+  text of the notes it can open, to OpenAI. See [What goes where](#what-goes-where)
 - **Start work on its own.** Nothing is sent without your tap on **Yes**, or your own spoken yes,
   after you saw its card. Its own words, or anything it read, can never say yes for you
 - **Put a key on the page.** The OpenAI and Fish keys stay on the server. A voice call is started by

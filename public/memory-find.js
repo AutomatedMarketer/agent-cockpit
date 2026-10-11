@@ -308,6 +308,13 @@ function memoryMeaningOff(why) {
   memoryMeaning.why = why
 }
 
+// The board said at load (/api/brand) that search by meaning is off: then nothing is ever asked, and the
+// sentence it gave is the one shown.
+function memoryMeaningKnown() {
+  if (memoryMeaning.on === null && meaningSaid?.on === false) memoryMeaningOff(meaningSaid.why)
+  return memoryMeaning.on !== false
+}
+
 // The page's own knowledge for a search: the pages, what search may use of each, each team note's title
 // and day, the top folders, and the names it knows (for a name heard wrong).
 function memoryFindContext() {
@@ -361,7 +368,7 @@ function memoryFind(question, { now = memoryFindDeps.now(), timeZone = memoryFin
   }
   if (parts.meaningText) {
     const answer = memoryMeaning.answers.get(parts.meaningText)
-    if (memoryMeaning.on === false) {
+    if (!memoryMeaningKnown()) {
       result.meaning = 'off'
       result.meaningSaid = memoryMeaning.why
     } else if (!answer) {
@@ -458,7 +465,7 @@ function memoryFindTyped(atOnce = false) {
   if (!atOnce) memoryMeaning.voice = null
   memoryFindDeps.stop(memoryMeaning.timer)
   memoryMeaning.timer = null
-  if (memoryMeaning.on === false) return
+  if (!memoryMeaningKnown()) return
   const { meaningText } = memoryQueryParts(memoryQuery, { now: memoryFindDeps.now(), timeZone: memoryFindDeps.zone(), folders: memoryFindContext().folders })
   if (!meaningText) return
   if (atOnce) memoryAskMeaning(meaningText)
@@ -479,7 +486,7 @@ function memoryFindShowStatus() {
 // it until its wait is over; off stops it for the visit.
 async function memoryFindLearn() {
   const learning = memoryMeaning.learning
-  if (learning.running || memoryMeaning.on === false || location.hash.slice(1) !== 'memory') return
+  if (learning.running || !memoryMeaningKnown() || location.hash.slice(1) !== 'memory') return
   if (memoryFindDeps.now() < learning.retryAt) return
   const boardCommit = data?.commit ?? null
   if (boardCommit && learning.commit === boardCommit) return
@@ -590,7 +597,7 @@ async function memoryFindForVoice(question) {
   if (!graphState.data) await graphFetch()
   const parts = memoryQueryParts(words, { now: memoryFindDeps.now(), timeZone: memoryFindDeps.zone(), folders: memoryFindContext().folders })
   let late = false
-  if (parts.meaningText && memoryMeaning.on !== false) {
+  if (parts.meaningText && memoryMeaningKnown()) {
     let timer = null
     late = await Promise.race([
       memoryAskMeaning(parts.meaningText).then(() => false),

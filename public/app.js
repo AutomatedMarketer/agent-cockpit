@@ -3266,6 +3266,7 @@ const isArtPicture = (picture) => Boolean(picture) && typeof picture.v === 'stri
 const isRecord = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
 let brand = null
+let meaningSaid = null
 let brandFault = ''
 // slot -> { v, url } once a picture is in hand, or { v, failed: true } once fetching it failed.
 // A slot the brand lists with no entry here, or an entry for another version, is on its way.
@@ -3317,6 +3318,10 @@ function useBrand(answer) {
   brand = parseBrand(answer)
   // Voice rides on the same answer, and does not need personalising on.
   voiceInfo = parseVoice(answer)
+  // So does search by meaning: { on, why }, or null when the board did not say (memory-find.js asks then).
+  meaningSaid = isRecord(answer) && isRecord(answer.meaning) && typeof answer.meaning.on === 'boolean'
+    ? { on: answer.meaning.on, why: typeof answer.meaning.why === 'string' ? answer.meaning.why : '' }
+    : null
   // Off because the store is connected but failing - a damaged settings file, a public store - the
   // server's sentence is the one to show: "connect a store" would send the owner round in circles.
   brandFault = !brand && isRecord(answer) && answer.fault === true && typeof answer.why === 'string' ? answer.why : ''

@@ -14,7 +14,8 @@
 // (README, "Set a hard spend limit") is the real ceiling.
 
 import { config, gh, headCommit } from './state.js'
-import { storeConnected, spendIndexSave, usageDay, failureAnswer, PictureStoreError } from './_picture-store.js'
+import { spendIndexSave, usageDay, failureAnswer, PictureStoreError } from './_picture-store.js'
+import { meaningConfig, MEANING_SAY } from './_meaning-switch.js'
 import {
   emptyIndex,
   readIndexFile,
@@ -28,6 +29,8 @@ import {
 } from './_memory-index.js'
 import { embedTexts, estimateTokens, EmbedError } from './_embed.js'
 import { hiddenText } from './_voice.js'
+
+export { meaningConfig, MEANING_SAY }
 
 export const MEANING_LIMITS = {
   notesPerStep: 200,
@@ -45,27 +48,6 @@ export const MEANING_LIMITS = {
   // than twice a UTC day (api/_picture-store.js, INDEX_SAVES_PER_DAY).
   saveEveryMs: 6 * 3600_000,
   saveAfterChanged: 50
-}
-
-export const MEANING_SAY = {
-  off: 'Search by meaning is off on this board. To switch it on, set MEMORY_MEANING to on in Vercel and redeploy: ' +
-    'the text of each note the board can open then goes to OpenAI, once, so it can be found by meaning.',
-  noKey: 'Search by meaning needs OPENAI_API_KEY: set it in Vercel (the same key the voice assistant uses) and redeploy.',
-  noStore: 'Search by meaning needs the picture store, so the board can keep what it learned: in Vercel, create a ' +
-    'Private Blob store for this project, then redeploy.',
-  openBoard: 'Search by meaning is off because this board is open to everyone: set EDIT_KEY in Vercel and redeploy to switch it on.',
-  storeDown: 'The picture store could not be read, so search by meaning is paused: try again in a minute.',
-  github: 'Something went wrong reading your team repo, so search by meaning is paused: try again in a minute.'
-}
-
-// On only when switched on, with a key and a store to keep what it learns - and never on a board open to
-// everyone without an edit key, where nobody may spend the owner's money (the write gate says the same).
-export function meaningConfig(env = process.env) {
-  if (String(env.MEMORY_MEANING ?? '').trim().toLowerCase() !== 'on') return { on: false, why: MEANING_SAY.off }
-  if (env.PUBLIC_DASHBOARD === 'true' && !env.EDIT_KEY) return { on: false, why: MEANING_SAY.openBoard }
-  if (!env.OPENAI_API_KEY) return { on: false, why: MEANING_SAY.noKey }
-  if (!storeConnected(env)) return { on: false, why: MEANING_SAY.noStore }
-  return { on: true }
 }
 
 /* ---------- this instance's copy ---------- */

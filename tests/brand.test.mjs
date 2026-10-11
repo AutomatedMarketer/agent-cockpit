@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { makeHandler } from '../api/brand.js'
 import { NOT_CONNECTED, SETTINGS_PATH, pictureStore } from '../api/_picture-store.js'
 import { DEFAULT_ART_STYLE } from '../api/_lib.js'
+import { MEANING_SAY } from '../api/_meaning-switch.js'
 import { BlobServiceNotAvailable, fakeBlob } from './helpers/fake-blob.mjs'
 import {
   STORE_ENV,
@@ -89,7 +90,9 @@ test('a connected, empty store reads as the defaults, with the full day\'s allow
     pictures: {},
     left: { writes: 19, generated: 10 },
     // Voice rides along; with no OPENAI_API_KEY it is off and says why.
-    voice: { on: false, why: response.body.voice.why, mouth: 'openai' }
+    voice: { on: false, why: response.body.voice.why, mouth: 'openai' },
+    // Search by meaning rides along too: off unless switched on, and it says why.
+    meaning: { on: false, why: MEANING_SAY.off }
   })
   assert.match(response.body.voice.why, /OPENAI_API_KEY/)
   assert.equal(fake.calls.get.length, 1, 'a page load is one read of settings.json')
@@ -508,4 +511,16 @@ test('a change is answered with voice too, and no key or voice id is ever in the
     const sent = JSON.stringify(response.body)
     for (const secret of [OPENAI_KEY, FISH_KEY, FISH_VOICE]) assert.ok(!sent.includes(secret), 'a key or voice id reached the page')
   }
+})
+
+test('the board says whether search by meaning is on, and why not - never with a key', async () => {
+  const KEY = 'sk-test-brandMustNeverCarryThis'
+  const on = await board({ env: { ...STORE_ENV, OPENAI_API_KEY: KEY, MEMORY_MEANING: 'on' } }).get()
+  assert.deepEqual(on.body.meaning, { on: true })
+  const noKey = await board({ env: { ...STORE_ENV, MEMORY_MEANING: 'on' } }).get()
+  assert.deepEqual(noKey.body.meaning, { on: false, why: MEANING_SAY.noKey })
+  const { BLOB_STORE_ID, ...noStore } = STORE_ENV
+  const off = await board({ env: { ...noStore, OPENAI_API_KEY: KEY, MEMORY_MEANING: 'on' } }).get()
+  assert.deepEqual(off.body.meaning, { on: false, why: MEANING_SAY.noStore })
+  for (const response of [on, noKey, off]) assert.ok(!JSON.stringify(response.body).includes(KEY))
 })

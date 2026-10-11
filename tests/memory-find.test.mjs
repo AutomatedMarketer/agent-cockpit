@@ -28,11 +28,12 @@ const NOON = Date.parse('2026-10-11T11:00:00Z')
 
 const reply = (status, body) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => body })
 
-async function boot({ search = () => reply(200, { on: true, ready: true, commit: COMMIT, indexed: 7, hits: [] }), index = () => reply(200, { on: true, commit: COMMIT, indexed: 7, left: 0, embeddedNow: 0, cut: 0, tooBig: 0, past: 0, savedAt: null }), editKey = '', holder = null, prompt = () => null } = {}) {
+async function boot({ search = () => reply(200, { on: true, ready: true, commit: COMMIT, indexed: 7, hits: [] }), index = () => reply(200, { on: true, commit: COMMIT, indexed: 7, left: 0, embeddedNow: 0, cut: 0, tooBig: 0, past: 0, savedAt: null }), editKey = '', holder = null, prompt = () => null, brand = null } = {}) {
   const asked = { search: [], index: [] }
   const answer = async (url, init = {}) => {
     if (url.startsWith('/api/graph')) return reply(200, graphPayload)
     if (url.startsWith('/api/state')) return reply(200, { ...basePayload(), commit: COMMIT, memory: { files, indexes: [], truncated: false } })
+    if (url.startsWith('/api/brand') && brand) return reply(200, brand)
     if (url === '/api/memory-search') {
       asked.search.push({ body: JSON.parse(init.body), headers: init.headers })
       return search(JSON.parse(init.body), asked.search.length)
@@ -300,4 +301,16 @@ test('the search file is the page\'s own plain script, asked for when Memory ope
   assert.ok(findView.startsWith("'use strict'"))
   const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8')
   assert.ok(!app.includes('function memoryRank'), 'the ranking is still in /app.js, paid for by every visit')
+})
+
+test('when the board says search by meaning is off, the box never asks, and says why under the words', async () => {
+  const why = 'Search by meaning is off on this board. To switch it on, set MEMORY_MEANING to on in Vercel and redeploy.'
+  const { page, asked, timers } = await boot({ brand: { meaning: { on: false, why } } })
+  type(page, 'writing')
+  enter(page)
+  await runTimers(timers)
+  assert.equal(asked.search.length, 0)
+  assert.equal(asked.index.length, 0, 'learning was asked of a board that said it is off')
+  assert.match(textOf(page.node('memory-tree')), /Search by meaning is off on this board/)
+  assert.deepEqual(pathsOf(page), ['shared/writing-rules.md'])
 })

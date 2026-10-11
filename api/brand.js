@@ -35,6 +35,7 @@ import {
   refuseIfSpent
 } from './_picture-store.js'
 import { voiceView } from './_voice.js'
+import { meaningConfig } from './_meaning-switch.js'
 
 export const NO_OPENAI =
   'Making pictures from words is off: set OPENAI_API_KEY in Vercel (the same key the voice ' +
@@ -45,6 +46,7 @@ const CHANGES = 'change must be "name", "assistant", "style" or "reset-picture".
 // What the page is told. Pictures carry only what it needs to fetch one - never a store path
 // or URL, which stay on the server. Voice rides along so the page needs no request of its own to
 // know whether to show the orb; it does not need the store, so it is the same with personalising off.
+// Search by meaning rides along the same way, so Memory knows before it asks: { on } or { on: false, why }.
 function brandView(settings, { env, caps, day, moment }) {
   const canGenerate = Boolean(env.OPENAI_API_KEY)
   const pictures = {}
@@ -61,7 +63,8 @@ function brandView(settings, { env, caps, day, moment }) {
     names: { ...settings.names },
     pictures,
     left: allowanceLeft(settings, caps, day, moment),
-    voice: voiceView(env)
+    voice: voiceView(env),
+    meaning: meaningConfig(env)
   }
 }
 
