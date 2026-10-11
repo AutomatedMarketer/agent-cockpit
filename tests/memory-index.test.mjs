@@ -7,6 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   MEANING,
+  MEANING_FLOOR,
   INDEX_CAPS,
   eligibleNotes,
   noteText,
@@ -245,4 +246,11 @@ test('a hostile or broken index file is an empty index, never a crash', () => {
   assert.deepEqual(readIndexFile(huge).entries, [])
   assert.deepEqual(readIndexFile(null).entries, [])
   assert.deepEqual(readIndexFile(undefined).entries, [])
+})
+
+test('the meaning floor is the one tuned on the owner’s own notes, between noise and the weakest right answer', () => {
+  // Tuned 2026-10-11 on the live board (101 notes, text-embedding-3-small at 512): unrelated questions
+  // (sourdough, pizza in Naples, Tokyo weather) scored at most 0.252; the weakest right first answer
+  // ("orkestrator" -> orchestrator) scored 0.337. 0.30 sits between them.
+  assert.equal(MEANING_FLOOR, 0.3)
 })

@@ -29,9 +29,10 @@ export const INDEX_CAPS = {
   fileBytes: 8 * 1024 * 1024
 }
 
-// How close in meaning a note must be to be shown, and how many are. The floor is a first guess for
-// -small at 512 numbers, to be set from Nuno's own notes in the one tuning run (plan T9).
-export const MEANING_FLOOR = 0.25
+// How close in meaning a note must be to be shown, and how many are. Tuned 2026-10-11 on Nuno's live
+// board (101 notes, -small at 512 numbers, plan T9): unrelated questions scored at most 0.252, the
+// weakest right first answer 0.337 ("orkestrator" -> the orchestrator), so 0.30 sits between them.
+export const MEANING_FLOOR = 0.3
 export const MEANING_HITS_MAX = 50
 
 const SHA = /^[0-9a-f]{40}$/
