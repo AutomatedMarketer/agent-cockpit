@@ -7,23 +7,8 @@
 // unless the owner switched it on. Every answer, refusals included, is kept by nobody.
 
 import { writeGate } from './_gate.js'
-import { pictureStore, failureAnswer, PictureStoreError } from './_picture-store.js'
-import { meaningConfig, learnStep, meaningIndexed, MEANING_SAY } from './_memory-meaning.js'
-import { EmbedError } from './_embed.js'
-
-export function failure(error) {
-  if (error instanceof EmbedError) {
-    return { status: error.status, retryAfter: error.retryAfter, body: { on: true, error: error.message, ...(error.retryAfter ? { retryAfter: error.retryAfter } : {}) } }
-  }
-  if (error instanceof PictureStoreError) {
-    const { status, error: sentence } = failureAnswer(error)
-    return { status, body: { on: true, error: sentence } }
-  }
-  if (error?.retryAfter !== undefined) {
-    return { status: 429, retryAfter: error.retryAfter, body: { on: true, error: `GitHub's rate limit was reached. Try again in ${error.retryAfter} seconds.`, retryAfter: error.retryAfter } }
-  }
-  return { status: error?.ours && error.status !== 404 ? 500 : 502, body: { on: true, error: error?.ours ? error.message : MEANING_SAY.github } }
-}
+import { pictureStore } from './_picture-store.js'
+import { meaningConfig, learnStep, meaningIndexed, meaningFailure, MEANING_SAY } from './_memory-meaning.js'
 
 export function makeHandler({ store, env, now = () => Date.now(), loadSdk } = {}) {
   return async function handler(request, response) {
@@ -49,7 +34,7 @@ export function makeHandler({ store, env, now = () => Date.now(), loadSdk } = {}
     try {
       response.status(200).json(await learnStep({ store: pictures, env: environment, now: now() }))
     } catch (error) {
-      const { status, retryAfter, body } = failure(error)
+      const { status, retryAfter, body } = meaningFailure(error)
       if (retryAfter) response.setHeader('Retry-After', String(retryAfter))
       response.status(status).json({ ...body, indexed: meaningIndexed() })
     }

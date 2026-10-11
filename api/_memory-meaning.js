@@ -14,7 +14,7 @@
 // (README, "Set a hard spend limit") is the real ceiling.
 
 import { config, gh, headCommit } from './state.js'
-import { storeConnected, spendIndexSave, usageDay, PictureStoreError } from './_picture-store.js'
+import { storeConnected, spendIndexSave, usageDay, failureAnswer, PictureStoreError } from './_picture-store.js'
 import {
   emptyIndex,
   readIndexFile,
@@ -23,9 +23,11 @@ import {
   diffIndex,
   withEmbedded,
   noteText,
+  scoreIndex,
   INDEX_CAPS
 } from './_memory-index.js'
-import { embedTexts, estimateTokens } from './_embed.js'
+import { embedTexts, estimateTokens, EmbedError } from './_embed.js'
+import { hiddenText } from './_voice.js'
 
 export const MEANING_LIMITS = {
   notesPerStep: 200,
@@ -75,6 +77,10 @@ let readAt = -Infinity
 let readFailedAt = -Infinity
 let changedSinceSave = 0
 let stepping = null
+// This instance's OpenAI calls for searches: their times in the last minute, and today's count.
+const searches = { minute: [], day: '', today: 0 }
+// The last MEANING_LIMITS.cachedQueries searches' vectors, by their words, oldest first.
+const queryCache = new Map()
 
 // A new instance, as far as this module knows. For the tests.
 export function forgetMeaning() {
@@ -83,6 +89,10 @@ export function forgetMeaning() {
   readFailedAt = -Infinity
   changedSinceSave = 0
   stepping = null
+  searches.minute = []
+  searches.day = ''
+  searches.today = 0
+  queryCache.clear()
 }
 
 async function currentIndex(store, now) {
@@ -227,3 +237,76 @@ export function learnStep({ store, env = process.env, now = Date.now() }) {
 
 // How many notes this instance has learned, for an answer that failed part way.
 export const meaningIndexed = () => held?.entries.length ?? 0
+
+/* ---------- one search ---------- */
+
+export const SEARCH_SAY = {
+  badQuery: 'Search by meaning takes 1 to 300 characters of plain text.',
+  tooManyMinute: 'That is more than 30 searches by meaning in a minute, so this one waits: try again in a moment. Word search still works.',
+  tooManyDay: 'This board has made 1,000 searches by meaning today, so they wait until midnight UTC. Word search still works.'
+}
+
+// The words of a search as the board takes them: 1-300 characters once trimmed, nothing hidden
+// (api/_voice.js's one rule for text a person cannot see). null for anything else.
+export function cleanQuery(value) {
+  if (typeof value !== 'string') return null
+  const words = value.replace(/\s+/g, ' ').trim()
+  if (!words || words.length > MEANING_LIMITS.queryChars || hiddenText(value) || /[\x00-\x1f\x7f]/.test(words)) return null
+  return words
+}
+
+const cacheKey = (words) => words.toLowerCase()
+
+// Counted only when OpenAI is asked - a repeat answered from memory costs nothing, so it is never refused.
+function spendSearch(now) {
+  const day = usageDay(new Date(now))
+  if (searches.day !== day) {
+    searches.day = day
+    searches.today = 0
+  }
+  searches.minute = searches.minute.filter((at) => now - at < 60_000)
+  if (searches.today >= MEANING_LIMITS.searchesPerDay) {
+    const midnight = Date.parse(`${day}T00:00:00Z`) + 24 * 3600_000
+    throw new EmbedError(429, SEARCH_SAY.tooManyDay, { retryAfter: Math.max(1, Math.ceil((midnight - now) / 1000)) })
+  }
+  if (searches.minute.length >= MEANING_LIMITS.searchesPerMinute) {
+    throw new EmbedError(429, SEARCH_SAY.tooManyMinute, { retryAfter: Math.max(1, Math.ceil((searches.minute[0] + 60_000 - now) / 1000)) })
+  }
+  searches.minute.push(now)
+  searches.today += 1
+}
+
+// { on, ready, commit, indexed, hits: [[path, similarity]] }, or { on, ready: false, indexed: 0 } before
+// anything is learned - when OpenAI is not asked at all. Never a vector.
+export async function searchByMeaning({ store, env = process.env, words, now = Date.now() }) {
+  const index = await currentIndex(store, now)
+  if (!index.entries.length) return { on: true, ready: false, indexed: 0 }
+  const key = cacheKey(words)
+  let vector = queryCache.get(key)
+  if (vector) {
+    queryCache.delete(key)
+  } else {
+    spendSearch(now)
+    vector = (await embedTexts([words], { apiKey: env.OPENAI_API_KEY })).vectors[0]
+  }
+  queryCache.set(key, vector)
+  while (queryCache.size > MEANING_LIMITS.cachedQueries) queryCache.delete(queryCache.keys().next().value)
+  return { on: true, ready: true, commit: index.commit, indexed: index.entries.length, hits: scoreIndex(index, vector) }
+}
+
+// Any failure of a step or a search as the board says it: { status, retryAfter?, body }. OpenAI's and the
+// store's are already our sentences; GitHub's rate limit gives its wait; anything else is one sentence.
+export function meaningFailure(error) {
+  if (error instanceof EmbedError) {
+    return { status: error.status, retryAfter: error.retryAfter, body: { on: true, error: error.message, ...(error.retryAfter ? { retryAfter: error.retryAfter } : {}) } }
+  }
+  if (error instanceof PictureStoreError) {
+    const { status, error: sentence } = failureAnswer(error)
+    return { status, body: { on: true, error: sentence } }
+  }
+  if (error?.retryAfter !== undefined) {
+    return { status: 429, retryAfter: error.retryAfter, body: { on: true, error: `GitHub's rate limit was reached. Try again in ${error.retryAfter} seconds.`, retryAfter: error.retryAfter } }
+  }
+  return { status: error?.ours && error.status !== 404 ? 500 : 502, body: { on: true, error: error?.ours ? error.message : MEANING_SAY.github } }
+}
+
