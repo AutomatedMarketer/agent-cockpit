@@ -159,7 +159,7 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     // Jev's suggestion of who should do a task: answered by `routeTask`, or nobody.
     routeTask: async (body) => {
       state.routed.push(body)
-      return routeTask ? routeTask(body) : { for: null }
+      return routeTask ? routeTask(body) : { agent: { pick: null, why: 'off' }, model: { pick: null, why: 'off' } }
     },
     saveOrder: (entry) => state.orders.push(entry),
     ordersLog: () => [...state.orders].reverse(),
@@ -172,7 +172,7 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     cancelAnimationFrame: (id) => { frames.delete(id) }
   }
   const ui = {
-    shown: [], heard: [], spoken: [], costs: [], names: [], levels: [], notes: [], cards: [], orderTimes: [], orderNotes: [], busy: [], picks: [], ownerNow: '',
+    shown: [], heard: [], spoken: [], costs: [], names: [], levels: [], notes: [], cards: [], orderTimes: [], orderNotes: [], busy: [], picks: [], ownerNow: '', modelNow: '',
     show(stateName, { words, live } = {}) { this.shown.push({ state: stateName, words, live }) },
     you(text) { this.heard.push(text) },
     said(text) { this.spoken.push(text) },
@@ -180,9 +180,10 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     who(name) { this.names.push(name) },
     level(value) { this.levels.push(value) },
     note(text) { this.notes.push(text) },
-    order(card) { this.cards.push(card); this.ownerNow = card?.owner ?? '' },
-    orderPick(owner, words) { this.picks.push({ owner, words }); this.ownerNow = owner },
+    order(card) { this.cards.push(card); this.ownerNow = card?.owner ?? ''; this.modelNow = card?.model ?? '' },
+    orderPick(choice) { this.picks.push(choice); this.ownerNow = choice.owner; this.modelNow = choice.model },
     orderOwner() { return this.ownerNow },
+    orderModel() { return this.modelNow },
     orderTime(seconds) { this.orderTimes.push(seconds) },
     orderNote(words) { this.orderNotes.push(words) },
     orderBusy(busy) { this.busy.push(busy) }

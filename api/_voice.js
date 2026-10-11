@@ -266,7 +266,7 @@ const JOB_STATUS_TOOL = {
 
 // The two orders (Phase 11). Each only shows the owner a card; the card's Yes - a tap, or the owner's
 // own spoken yes - is the only thing that sends. Offered only as far as fire is set up (api/_orders.js).
-const ADD_TASK_TOOL = {
+const addTaskTool = () => ({
   type: 'function',
   name: 'add_task',
   description: 'Propose a task card for the team. This only shows the person a card to say yes to; nothing is sent until they do.',
@@ -274,12 +274,14 @@ const ADD_TASK_TOOL = {
     type: 'object',
     properties: {
       title: { type: 'string', description: 'What should be done, as one plain line of 3 to 200 characters.' },
-      details: { type: 'string', description: 'Anything more the team needs, up to 500 characters. Leave it out when the title says it all.' }
+      details: { type: 'string', description: 'Anything more the team needs, up to 500 characters. Leave it out when the title says it all.' },
+      agent: { type: 'string', description: 'The agent\'s slug - only if the person named who should do it. Otherwise leave it out.' },
+      model: { type: 'string', enum: [...VOICE_MODEL_TIERS], description: 'The model tier - only if the person named one. Otherwise leave it out.' }
     },
     required: ['title'],
     additionalProperties: false
   }
-}
+})
 const runJobTool = (jobs) => ({
   type: 'function',
   name: 'run_job',
@@ -297,7 +299,7 @@ export function toolsFor(orders) {
   return [
     ...VOICE_TOOLS,
     JOB_STATUS_TOOL,
-    ...(orders?.on && orders.tasks ? [ADD_TASK_TOOL] : []),
+    ...(orders?.on && orders.tasks ? [addTaskTool()] : []),
     ...(orders?.on && orders.jobs?.length ? [runJobTool(orders.jobs)] : [])
   ]
 }
@@ -1026,6 +1028,13 @@ export function confirmsYes(event) {
 // pick, or the owner's), and /api/fire takes only these, exactly. The page offers only the ones the
 // team's agent files actually use.
 export const VOICE_MODEL_TIERS = ['opus', 'sonnet', 'haiku']
+const inUse = (data) => (Array.isArray(data?.agents) ? data.agents : [])
+  .filter((agent) => agent && typeof agent.slug === 'string' && agent.state !== 'not-in-use')
+// The tiers a card offers: the ones the team's agents in use name, in tier order.
+export function boardModels(data) {
+  const named = new Set(inUse(data).map((agent) => agent.model))
+  return VOICE_MODEL_TIERS.filter((tier) => named.has(tier))
+}
 
 // --- text a person cannot see ---
 // THE one rule for every title and details an order or a task card carries - this check, the spoken-
@@ -1081,7 +1090,11 @@ export function orderFrom(name, args, { orders, data } = {}) {
     if (hiddenText(args?.title) || hiddenText(raw)) {
       return { error: 'That task has characters in it nobody can see, so it cannot be sent. Ask for it again in plain words.' }
     }
-    return { order: { kind: 'task', title, ...(details ? { details } : {}) } }
+    // Who, and on which tier, when the person named them: kept only if the card offers them - an agent
+    // in use, a tier one of them names. Anything else is as if nothing was said.
+    const agent = typeof args?.agent === 'string' && inUse(data).some((one) => one.slug === args.agent) ? args.agent : ''
+    const model = typeof args?.model === 'string' && boardModels(data).includes(args.model) ? args.model : ''
+    return { order: { kind: 'task', title, ...(details ? { details } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}) } }
   }
   if (name === 'run_job') {
     const slug = args?.workflow

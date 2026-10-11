@@ -4625,6 +4625,13 @@ function confirmsYes(event) {
 // pick, or the owner's), and /api/fire takes only these, exactly. The page offers only the ones the
 // team's agent files actually use.
 const VOICE_MODEL_TIERS = ['opus', 'sonnet', 'haiku']
+const inUse = (data) => (Array.isArray(data?.agents) ? data.agents : [])
+  .filter((agent) => agent && typeof agent.slug === 'string' && agent.state !== 'not-in-use')
+// The tiers a card offers: the ones the team's agents in use name, in tier order.
+function boardModels(data) {
+  const named = new Set(inUse(data).map((agent) => agent.model))
+  return VOICE_MODEL_TIERS.filter((tier) => named.has(tier))
+}
 
 // --- text a person cannot see ---
 // THE one rule for every title and details an order or a task card carries - this check, the spoken-
@@ -4680,7 +4687,11 @@ function orderFrom(name, args, { orders, data } = {}) {
     if (hiddenText(args?.title) || hiddenText(raw)) {
       return { error: 'That task has characters in it nobody can see, so it cannot be sent. Ask for it again in plain words.' }
     }
-    return { order: { kind: 'task', title, ...(details ? { details } : {}) } }
+    // Who, and on which tier, when the person named them: kept only if the card offers them - an agent
+    // in use, a tier one of them names. Anything else is as if nothing was said.
+    const agent = typeof args?.agent === 'string' && inUse(data).some((one) => one.slug === args.agent) ? args.agent : ''
+    const model = typeof args?.model === 'string' && boardModels(data).includes(args.model) ? args.model : ''
+    return { order: { kind: 'task', title, ...(details ? { details } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}) } }
   }
   if (name === 'run_job') {
     const slug = args?.workflow
@@ -4948,6 +4959,8 @@ function voiceDockHtml() {
         <p class="voice-order-details" id="voice-order-details" hidden></p>
         <label class="voice-order-for" id="voice-order-for-label" for="voice-order-for" hidden>Who does it</label>
         <select class="voice-order-owner" id="voice-order-for"></select>
+        <label class="voice-order-for" id="voice-order-model-label" for="voice-order-model" hidden>Model</label>
+        <select class="voice-order-owner" id="voice-order-model"></select>
         <p class="voice-order-pick" id="voice-order-pick" hidden></p>
         <div class="voice-order-actions">
           <button class="fire voice-order-yes" type="button" id="voice-order-yes">Yes, send it</button>
@@ -5020,16 +5033,20 @@ const voiceUi = {
     set('voice-order-text', card?.text)
     set('voice-order-details', card?.details)
     set('voice-order-pick', card?.pick)
-    const select = el('voice-order-for')
-    select.replaceChildren(...owners.map((owner) => {
-      const option = document.createElement('option')
-      option.value = owner.value
-      option.textContent = owner.label
-      return option
-    }))
-    select.value = card?.owner ?? ''
-    select.hidden = owners.length === 0
-    el('voice-order-for-label').hidden = owners.length === 0
+    const picker = (id, label, choices, value) => {
+      const select = el(id)
+      select.replaceChildren(...choices.map((choice) => {
+        const option = document.createElement('option')
+        option.value = choice.value
+        option.textContent = choice.label
+        return option
+      }))
+      select.value = value ?? ''
+      select.hidden = choices.length === 0
+      el(label).hidden = choices.length === 0
+    }
+    picker('voice-order-for', 'voice-order-for-label', owners, card?.owner)
+    picker('voice-order-model', 'voice-order-model-label', card && Array.isArray(card.models) ? card.models : [], card?.model)
     // What the person may say: "Or say yes", why this one needs a tap, or nothing.
     el('voice-order-say').textContent = card?.say ?? ''
     el('voice-order-say').hidden = !card?.say
@@ -5044,14 +5061,16 @@ const voiceUi = {
     if (card) el('voice-sheet').scrollTop = 0
   },
   orderTime(seconds) { el('voice-order-time').textContent = `${seconds} s to answer` },
-  // Jev's pick: the picker set to it, and a line saying who picked it and how sure it was.
-  orderPick(owner, words) {
+  // Jev's picks: both pickers set, and a line each saying who and which model, and how sure it was.
+  orderPick({ owner, model, words }) {
     el('voice-order-for').value = owner
+    el('voice-order-model').value = model
     el('voice-order-pick').textContent = words
     el('voice-order-pick').hidden = !words
   },
-  // Who the card says does it, right now: the owner may have changed it since it appeared.
+  // Who does it, and on which tier, as the card says right now: the owner may have changed either.
   orderOwner() { return el('voice-order-for')?.value ?? '' },
+  orderModel() { return el('voice-order-model')?.value ?? '' },
   orderNote(words) { el('voice-order-note').textContent = words },
   orderBusy(busy) {
     el('voice-order-yes').disabled = busy === true
@@ -5100,7 +5119,7 @@ document.addEventListener('click', (event) => {
   else if (target?.closest?.('#voice-headphones')) toggleHeadphones()
   // The card's Yes: the event itself goes along, so the call can check it was the person's own tap.
   else if (target?.closest?.('#voice-order-yes')) {
-    voiceSession?.confirm?.(event, el('voice-order-for')?.value ?? '', target.closest('#voice-order-yes').dataset?.card ?? '')
+    voiceSession?.confirm?.(event, el('voice-order-for')?.value ?? '', target.closest('#voice-order-yes').dataset?.card ?? '', el('voice-order-model')?.value ?? '')
   }
   else if (target?.closest?.('#voice-order-no')) voiceSession?.decline?.()
 })
@@ -5204,7 +5223,21 @@ const VOICE_ORDER = {
   unreachable: 'the board could not be reached.',
   sayYes: 'Or say "yes".',
   tapDetails: 'This one has details, so tap Yes to send it.',
-  tapLong: 'This one is long, so tap Yes to send it.'
+  tapLong: 'This one is long, so tap Yes to send it.',
+  ownModel: "The agent's own model",
+  askingJev: 'Asking Jev who should do it…'
+}
+// The page waits this long for Jev's picks (the board's own wait for Jev is 1.5 s), then sends the
+// card as if Jev were off and says so.
+const JEV_WAIT_MS = 2000
+// One line each for who and which tier: a name the card offers and Jev's odds, "you chose", or the
+// fallback and why. Only allow-listed names, a number and our own words: nothing Jev wrote.
+function voicePickWords(agent, model) {
+  const reason = (side) => (side.why === 'unsure' ? ' · Jev was not sure' : side.why ? ' · Jev did not answer in time' : '')
+  const line = (label, side, fallback) => (side.pick
+    ? `${label}: ${side.pick} · ${side.chose ? 'you chose' : `${side.odds}%`}`
+    : `${label}: ${fallback}${reason(side)}`)
+  return `${line('Agent', agent, 'the orchestrator decides')}\n${line('Model', model, "the agent's own")}`
 }
 const VOICE_NOTE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 // Why an order was not sent, for the model: fixed words chosen by the answer's status. The person sees
@@ -5678,14 +5711,25 @@ function openVoice(deps, ui) {
         .filter((agent) => typeof agent?.slug === 'string' && agent.state !== 'not-in-use')
         .map((agent) => ({ value: agent.slug, label: Object.hasOwn(names, agent.slug) && names[agent.slug] ? `${names[agent.slug]} (${agent.slug})` : agent.slug }))
     ]
+    const models = order.kind !== 'task' ? [] : [
+      { value: '', label: VOICE_ORDER.ownModel },
+      ...boardModels(view?.data).map((tier) => ({ value: tier, label: tier }))
+    ]
+    // A name the person said is on the card from the start; Jev is asked only about the rest.
+    const named = order.agent || order.model
+    const asking = order.kind === 'task' && session.orders.jev === true && !(order.agent && order.model)
     return {
       heading: order.kind === 'task' ? VOICE_ORDER.taskHeading : `Run ${order.name}?`,
       what: order.kind === 'task' ? VOICE_ORDER.taskWhat : VOICE_ORDER.runWhat,
       text: order.kind === 'task' ? order.title : '',
       details: order.details ?? '',
       owners,
-      owner: '',
-      pick: '',
+      owner: order.agent ?? '',
+      models,
+      model: order.model ?? '',
+      pick: asking ? VOICE_ORDER.askingJev
+        : named ? voicePickWords(order.agent ? { pick: order.agent, chose: true } : {}, order.model ? { pick: order.model, chose: true } : {})
+          : '',
       // "Or say yes" only where a spoken yes can count: allowed on this board, no key to type, and an
       // order it may approve (spokenYesFits); otherwise, plainly, why this one needs a tap.
       say: session.orders.spokenYes !== true || !keyReady() ? ''
@@ -5727,24 +5771,40 @@ function openVoice(deps, ui) {
       session.replyRetries = 1
       askForReply()
     }, CONFIRM_WINDOW_MS)
-    if (order.kind === 'task' && session.orders.jev === true) suggestOwner(card)
+    if (order.kind === 'task' && session.orders.jev === true && !(order.agent && order.model)) suggestPicks(card)
   }
 
-  // Jev's pick for who does a task (the board has it switched on): only an agent the card offers, and
-  // only while the card is still up. The picker shows it; the owner can still change it.
-  async function suggestOwner(card) {
+  // Jev's picks for who does a task and on which tier (the board has it switched on), asked only about
+  // what the person did not name. Jev's answer is untrusted: a pick counts only if the card offers it,
+  // with whole odds from 60 to 100; anything else - unsure, silent, slower than JEV_WAIT_MS - leaves the
+  // orchestrator to decide, on the agent's own model, and the card says which and why. Only while the
+  // card is still up; it changes the card, so Yes waits again (settle).
+  async function suggestPicks(card) {
     const described = new Map((Array.isArray(deps.view()?.data?.agents) ? deps.view().data.agents : [])
       .map((agent) => [agent?.slug, typeof agent?.description === 'string' ? agent.description : '']))
-    const agents = card.words.owners.filter((one) => one.value).slice(0, 16).map((one) => ({ slug: one.value, description: described.get(one.value) ?? '' }))
-    if (!agents.length) return
-    const answer = await deps.routeTask?.({ title: card.order.title, ...(card.order.details ? { details: card.order.details } : {}), agents })
+    const offered = (choices) => choices.map((one) => one.value).filter(Boolean)
+    const agents = card.order.agent ? [] : offered(card.words.owners).slice(0, 16).map((slug) => ({ slug, description: described.get(slug) ?? '' }))
+    const models = card.order.model ? [] : offered(card.words.models)
+    let timer = null
+    const late = new Promise((resolve) => { timer = deps.setTimeout(() => resolve(null), JEV_WAIT_MS) })
+    // Asked at once (an async function runs up to its first wait), and a throw is no answer.
+    const asked = (async () => deps.routeTask?.({ title: card.order.title, ...(card.order.details ? { details: card.order.details } : {}), agents, models }))()
+      .catch(() => null)
+    const answer = await Promise.race([asked, late])
+    deps.clearTimeout(timer)
     if (session.stopped || session.card !== card || card.busy) return
-    const pick = typeof answer?.for === 'string' ? answer.for : ''
-    if (!pick || !agents.some((agent) => agent.slug === pick)) return
-    const sure = typeof answer.confidence === 'number' && answer.confidence > 0 && answer.confidence <= 1 ? Math.round(answer.confidence * 100) : null
-    card.words.owner = pick
-    card.words.pick = `Picked by Jev${sure ? ` (${sure}% sure)` : ''}. Change it if you like.`
-    ui.orderPick?.(pick, card.words.pick)
+    const side = (named, said, allowed) => {
+      if (named) return { pick: named, chose: true }
+      const odds = said?.odds
+      if (typeof said?.pick === 'string' && allowed.includes(said.pick) && Number.isInteger(odds) && odds >= 60 && odds <= 100) return { pick: said.pick, odds }
+      return { pick: null, why: said?.why === 'unsure' || typeof said?.pick === 'string' ? 'unsure' : 'no answer' }
+    }
+    const agent = side(card.order.agent, answer?.agent, offered(card.words.owners))
+    const model = side(card.order.model, answer?.model, offered(card.words.models))
+    card.words.owner = agent.pick ?? ''
+    card.words.model = model.pick ?? ''
+    card.words.pick = voicePickWords(agent, model)
+    ui.orderPick?.({ owner: card.words.owner, model: card.words.model, words: card.words.pick })
     settle(card)
   }
 
@@ -5760,14 +5820,14 @@ function openVoice(deps, ui) {
 
   // One send per card, whoever asks - a tap, a second tap, a spoken yes during a tap's send: the guard
   // is here, and busy is set before anything waits. True when this call started the send.
-  function sendOrder(card, owner, how) {
+  function sendOrder(card, owner, how, model = '') {
     if (session.stopped || session.card !== card || card.busy) return false
     card.busy = true
-    deliverOrder(card, owner, how)
+    deliverOrder(card, owner, how, model)
     return true
   }
 
-  async function deliverOrder(card, owner, how) {
+  async function deliverOrder(card, owner, how, model) {
     deps.clearTimeout(card.expiry)
     deps.clearTimeout(card.tick)
     deps.clearTimeout(card.settle)
@@ -5775,8 +5835,9 @@ function openVoice(deps, ui) {
     ui.orderNote?.(VOICE_ORDER.sending)
     const order = card.order
     const forAgent = order.kind === 'task' && owner && card.words.owners.some((one) => one.value === owner) ? owner : ''
+    const tier = order.kind === 'task' && model && card.words.models.some((one) => one.value === model) ? model : ''
     const body = order.kind === 'task'
-      ? { action: 'task', title: order.title, ...(order.details ? { details: order.details } : {}), ...(forAgent ? { for: forAgent } : {}) }
+      ? { action: 'task', title: order.title, ...(order.details ? { details: order.details } : {}), ...(forAgent ? { for: forAgent } : {}), ...(tier ? { model: tier } : {}) }
       : { workflow: order.slug, action: 'run' }
     const sent = { key: orderKey(order), at: deps.now() }
     session.sent.push(sent)
@@ -5810,11 +5871,11 @@ function openVoice(deps, ui) {
 
   // The card's Yes, tapped: only a real, trusted click (or Enter or Space) by the person - confirmsYes -
   // on the Yes of THIS card (its id is on the button), once it has been up CARD_SETTLE_MS.
-  function confirm(event, owner, cardId) {
+  function confirm(event, owner, cardId, model) {
     const card = session.card
     if (session.stopped || !card || !confirmsYes(event)) return false
     if (cardId !== card.id || deps.now() - card.shownAt < CARD_SETTLE_MS) return false
-    return sendOrder(card, typeof owner === 'string' ? owner : '', 'tap')
+    return sendOrder(card, typeof owner === 'string' ? owner : '', 'tap', typeof model === 'string' ? model : '')
   }
 
   // The card's No, or Esc.
@@ -5843,7 +5904,7 @@ function openVoice(deps, ui) {
       now: deps.now()
     })
     if (verdict === 'yes' && !spokenYesFits(card.order)) ui.orderNote?.(card.words.say || VOICE_ORDER.unclear)
-    else if (verdict === 'yes') sendOrder(card, ui.orderOwner?.() ?? card.words.owner, 'spoken')
+    else if (verdict === 'yes') sendOrder(card, ui.orderOwner?.() ?? card.words.owner, 'spoken', ui.orderModel?.() ?? card.words.model)
     else if (verdict === 'no') closeCard(VOICE_ORDER.no)
     else if (verdict === 'unclear') ui.orderNote?.(VOICE_ORDER.unclear)
   }

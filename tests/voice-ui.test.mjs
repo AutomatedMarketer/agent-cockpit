@@ -150,6 +150,8 @@ const CARD = {
   details: '<script>bad()</script>Use the notes from Monday.',
   owners: [{ value: '', label: 'Let the orchestrator choose' }, { value: 'research', label: '<b>Scout</b>' }],
   owner: 'research',
+  models: [{ value: '', label: 'The agent\'s own model' }, { value: 'opus', label: 'opus' }, { value: 'sonnet', label: 'sonnet' }],
+  model: 'opus',
   pick: '',
   say: 'Or say "yes".',
   id: 'card-7'
@@ -164,6 +166,8 @@ test('the order card is in the sheet, hidden until there is an order: a group wi
   assert.match(markup, /<button class="fire voice-order-no" type="button" id="voice-order-no">No<\/button>/)
   assert.match(markup, /<label class="voice-order-for" id="voice-order-for-label" for="voice-order-for" hidden>/)
   assert.match(markup, /<select class="voice-order-owner" id="voice-order-for"><\/select>/)
+  assert.match(markup, /<label class="voice-order-for" id="voice-order-model-label" for="voice-order-model" hidden>Model<\/label>/)
+  assert.match(markup, /<select class="voice-order-owner" id="voice-order-model"><\/select>/)
   assert.match(markup, /<p class="voice-order-note" id="voice-order-note" role="status" aria-live="polite"><\/p>/)
   // The countdown is not read out every second.
   assert.match(markup, /<p class="voice-order-time" id="voice-order-time" aria-hidden="true"><\/p>/)
@@ -194,6 +198,9 @@ test('the card shows exactly what will be sent, as text: never markup, never the
   assert.ok(options.every((option) => option.innerHTML === ''), 'an agent name was put in as markup')
   assert.equal(page.node('voice-order-for').value, 'research')
   assert.equal(page.node('voice-order-for-label').hidden, false)
+  assert.deepEqual(page.node('voice-order-model').children.map((option) => [option.value, option.textContent]), [['', 'The agent\'s own model'], ['opus', 'opus'], ['sonnet', 'sonnet']])
+  assert.equal(page.node('voice-order-model').value, 'opus')
+  assert.equal(page.node('voice-order-model-label').hidden, false)
   assert.equal(page.node('voice-order-say').hidden, false)
   assert.equal(page.node('voice-order-say').textContent, 'Or say "yes".')
   // Yes carries the card it answers, so a tap can only ever send that card.
@@ -605,7 +612,7 @@ test('with an order card open, Esc is its No and never a hang-up; Yes hands the 
     stopped: [], declined: 0, confirmed: [], interrupted: 0, open: true,
     orderOpen() { return this.open },
     decline() { this.declined += 1; this.open = false; return true },
-    confirm(event, owner, card) { this.confirmed.push({ event, owner, card }); return true },
+    confirm(event, owner, card, model) { this.confirmed.push({ event, owner, card, model }); return true },
     interrupt() { this.interrupted += 1; return false },
     stop(reason) { this.stopped.push(reason) }
   }
@@ -621,27 +628,35 @@ test('with an order card open, Esc is its No and never a hang-up; Yes hands the 
   const yes = { dataset: { card: 'card-3' }, closest: (selector) => (selector === '#voice-order-yes' ? yes : null) }
   const no = { closest: (selector) => (selector === '#voice-order-no' ? no : null) }
   page.node('voice-order-for').value = 'research'
+  page.node('voice-order-model').value = 'opus'
   const tap = { target: yes, isTrusted: true }
   fire('click', tap)
   assert.equal(session.confirmed.length, 1)
   assert.equal(session.confirmed[0].event, tap, 'the call was not handed the tap itself to check')
   assert.equal(session.confirmed[0].owner, 'research')
   assert.equal(session.confirmed[0].card, 'card-3', 'the tap was not tied to the card on the button')
+  assert.equal(session.confirmed[0].model, 'opus', 'the model on the card was not sent with the tap')
   fire('click', { target: no })
   assert.equal(session.declined, 2)
 })
 
-test('Jev\'s pick sets the picker and says who picked it, as text; the picker is what the card says now', async () => {
+test('Jev\'s picks set both pickers and say who and which model, with the odds, as text; the pickers are what the card says now', async () => {
   const page = await boot(brandAnswer({ voice: VOICE_ON }), { expose: ['voiceUi'] })
   const { voiceUi } = page.exposed
-  voiceUi.order(CARD)
+  voiceUi.order({ ...CARD, owner: '', model: '' })
   assert.equal(page.node('voice-order-pick').hidden, true)
-  voiceUi.orderPick('research', 'Picked by Jev (84% sure). Change it if you like.')
+  voiceUi.orderPick({ owner: 'research', model: 'sonnet', words: 'Agent: research · 82%\nModel: sonnet · 74%' })
   assert.equal(page.node('voice-order-for').value, 'research')
-  assert.equal(page.node('voice-order-pick').textContent, 'Picked by Jev (84% sure). Change it if you like.')
+  assert.equal(page.node('voice-order-model').value, 'sonnet')
+  assert.equal(page.node('voice-order-pick').textContent, 'Agent: research · 82%\nModel: sonnet · 74%')
   assert.equal(page.node('voice-order-pick').innerHTML, '')
   assert.equal(page.node('voice-order-pick').hidden, false)
   assert.equal(voiceUi.orderOwner(), 'research')
+  assert.equal(voiceUi.orderModel(), 'sonnet')
   page.node('voice-order-for').value = ''
+  page.node('voice-order-model').value = 'opus'
   assert.equal(voiceUi.orderOwner(), '', 'the owner\'s own change was not read')
+  assert.equal(voiceUi.orderModel(), 'opus', 'the owner\'s own change was not read')
+  // One line each, so the odds read as a list.
+  assert.equal(valuesOf('.voice-order-pick')['white-space'], 'pre-line')
 })

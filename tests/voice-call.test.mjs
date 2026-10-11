@@ -1152,9 +1152,9 @@ const systemNotes = (browser) => browser.state.channel.sent
 const lastCard = (browser) => browser.ui.cards.at(-1)
 // The owner's tap on Yes, as a person makes it: on the card that is showing - its id is on the button -
 // once it has been up long enough to read (CARD_SETTLE_MS).
-const tapYes = (browser, owner = '') => {
+const tapYes = (browser, owner = browser.ui.ownerNow ?? '') => {
   browser.clock.now += 800
-  return browser.call.confirm(trustedClick(), owner, lastCard(browser)?.id)
+  return browser.call.confirm(trustedClick(), owner, lastCard(browser)?.id, browser.ui.modelNow ?? '')
 }
 
 test('add_task shows the owner a card and tells the model it waits for them - nothing is sent', async () => {
@@ -1504,46 +1504,135 @@ test('the page\'s re-check for "is it done?" is the Readiness check: one small c
   assert.equal((await recheck(reply(500, { error: 'no' }))).checked, false)
 })
 
-/* ---------- Jev's pick, when the switch is on ---------- */
+/* ---------- Jev's picks, when the switch is on: who, and which model ---------- */
 
-test('with Jev on, a task card asks it who should do it, shows the pick and how sure it was, and the owner can change it', async () => {
-  const browser = await ordering({
-    keyHeld: true,
-    answer: { orders: { ...ORDERS, jev: true } },
-    routeTask: async () => ({ for: 'research', confidence: 0.84 })
-  })
+const BOARD_TIERS = () => ({
+  ...BOARD(),
+  agents: [
+    { slug: 'research', state: 'working', model: 'sonnet', description: 'Finds things out.' },
+    { slug: 'content', state: 'working', model: 'opus', description: 'Writes the posts.' },
+    { slug: 'sales', state: 'not-in-use', model: 'haiku', description: 'Sells.' }
+  ]
+})
+const JEV = { answer: { orders: { ...ORDERS, jev: true } }, data: BOARD_TIERS() }
+const jevSays = (agent, model) => async () => ({ agent, model })
+const UNSURE = { pick: null, why: 'unsure' }
+// The words on the card are only ever these shapes: an allow-listed name, a number, or our own reason.
+const PICK_WORDS = /^Agent: (?:[a-z0-9-]+ · (?:\d{1,3}%|you chose)|the orchestrator decides · Jev (?:was not sure|did not answer in time))\nModel: (?:(?:opus|sonnet|haiku) · (?:\d{1,3}%|you chose)|the agent's own · Jev (?:was not sure|did not answer in time))$/
+
+test('with Jev on, a task card shows who and which model Jev picked, each with its odds, as plain text - and sends both', async () => {
+  const browser = await ordering({ ...JEV, keyHeld: true, routeTask: jevSays({ pick: 'research', odds: 82 }, { pick: 'sonnet', odds: 74 }) })
   propose(browser, 'add_task', { title: 'Draft it' })
+  assert.equal(lastCard(browser).pick, 'Asking Jev who should do it…')
   await flush()
-  assert.deepEqual(browser.state.routed, [{ title: 'Draft it', agents: [{ slug: 'research', description: 'Finds things out.' }] }])
-  assert.deepEqual(browser.ui.picks.at(-1), { owner: 'research', words: 'Picked by Jev (84% sure). Change it if you like.' })
-  // A spoken yes goes with what the card says now - the pick, or whatever the owner changed it to.
-  browser.ui.ownerNow = ''
-  browser.clock.now += 2000
-  say(browser, 'item_yes', 'yes')
+  assert.deepEqual(browser.state.routed, [{
+    title: 'Draft it',
+    agents: [{ slug: 'research', description: 'Finds things out.' }, { slug: 'content', description: 'Writes the posts.' }],
+    models: ['opus', 'sonnet']
+  }], 'Jev was not asked about exactly the agents in use and the tiers they use')
+  assert.deepEqual(browser.ui.picks.at(-1), { owner: 'research', model: 'sonnet', words: 'Agent: research · 82%\nModel: sonnet · 74%' })
+  // The card offers only the tiers the team's agents in use name - never one a switched-off agent uses.
+  assert.deepEqual(lastCard(browser).models.map((one) => one.value), ['', 'opus', 'sonnet'])
+  assert.equal(tapYes(browser), true)
   await flush()
-  assert.deepEqual(browser.state.dispatched[0].body, { action: 'task', title: 'Draft it' }, 'the owner\'s change was not kept')
+  assert.deepEqual(browser.state.dispatched[0].body, { action: 'task', title: 'Draft it', for: 'research', model: 'sonnet' })
+  ownWordsOnly(browser)
+  // A spoken yes sends whatever the card says now: the owner may have changed either picker.
+  const spoken = await ordering({ ...JEV, keyHeld: true, routeTask: jevSays({ pick: 'research', odds: 82 }, { pick: 'sonnet', odds: 74 }) })
+  propose(spoken, 'add_task', { title: 'Draft it' })
+  await flush()
+  spoken.ui.ownerNow = 'content'
+  spoken.ui.modelNow = ''
+  spoken.clock.now += 2000
+  say(spoken, 'item_yes', 'yes')
+  await flush()
+  assert.deepEqual(spoken.state.dispatched[0].body, { action: 'task', title: 'Draft it', for: 'content' })
 })
 
-test('a pick the card did not offer, a late pick, a run card, or Jev off: the orchestrator stays the choice', async () => {
-  const offList = await ordering({ answer: { orders: { ...ORDERS, jev: true } }, routeTask: async () => ({ for: 'sales', confidence: 0.99 }) })
-  propose(offList, 'add_task', { title: 'Draft it' })
+test('a name the person said wins - agent or model - and the card says "you chose"; Jev is asked only about the rest', async () => {
+  const both = await ordering({ ...JEV, routeTask: jevSays({ pick: 'research', odds: 99 }, { pick: 'sonnet', odds: 99 }) })
+  propose(both, 'add_task', { title: 'Draft it', agent: 'content', model: 'opus' })
   await flush()
-  assert.deepEqual(offList.ui.picks, [], 'a switched-off agent was picked')
+  assert.deepEqual(both.state.routed, [], 'Jev was asked about what the person had already said')
+  assert.equal(lastCard(both).owner, 'content')
+  assert.equal(lastCard(both).model, 'opus')
+  assert.equal(lastCard(both).pick, 'Agent: content · you chose\nModel: opus · you chose')
+  const one = await ordering({ ...JEV, routeTask: jevSays({ pick: 'research', odds: 82 }, { pick: 'sonnet', odds: 74 }) })
+  propose(one, 'add_task', { title: 'Draft it', model: 'opus' })
+  await flush()
+  assert.deepEqual(one.state.routed[0].models, [], 'Jev was asked to pick a model the person named')
+  assert.deepEqual(one.ui.picks.at(-1), { owner: 'research', model: 'opus', words: 'Agent: research · 82%\nModel: opus · you chose' })
+  // Jev off: a name the person said still goes, and says so.
+  const off = await ordering({ data: BOARD_TIERS() })
+  propose(off, 'add_task', { title: 'Draft it', agent: 'research' })
+  assert.equal(lastCard(off).pick, 'Agent: research · you chose\nModel: the agent\'s own')
+  assert.deepEqual(off.state.routed, [])
+  // A name the card does not offer is not a name the person said: a switched-off agent, an agent the
+  // board does not have, a tier no agent in use names, or anything with hidden characters.
+  for (const [agent, model] of [['sales', 'haiku'], ['nobody', 'Opus'], ['research\u200B', 'gpt-5']]) {
+    const odd = await ordering({ data: BOARD_TIERS() })
+    propose(odd, 'add_task', { title: 'Draft it', agent, model })
+    assert.equal(lastCard(odd).owner, '', `${agent} was taken as named`)
+    assert.equal(lastCard(odd).model, '', `${model} was taken as named`)
+    assert.equal(lastCard(odd).pick, '')
+  }
+})
+
+test('Jev unsure, silent, slow or off the list: the orchestrator decides, on the agent\'s own model, and the card says why', async () => {
+  const card = async (routeTask) => {
+    const browser = await ordering({ ...JEV, routeTask })
+    propose(browser, 'add_task', { title: 'Draft it' })
+    await flush()
+    return browser
+  }
+  const unsure = await card(jevSays(UNSURE, UNSURE))
+  assert.equal(unsure.ui.picks.at(-1).words, 'Agent: the orchestrator decides · Jev was not sure\nModel: the agent\'s own · Jev was not sure')
+  tapYes(unsure)
+  await flush()
+  assert.deepEqual(unsure.state.dispatched[0].body, { action: 'task', title: 'Draft it' })
+  const silent = await card(async () => null)
+  assert.equal(silent.ui.picks.at(-1).words, 'Agent: the orchestrator decides · Jev did not answer in time\nModel: the agent\'s own · Jev did not answer in time')
+  const failing = await card(async () => { throw new Error('offline') })
+  assert.match(failing.ui.picks.at(-1).words, /did not answer in time/)
+  // Off the list, or odds that are not a whole 0-100: Jev's answer is not trusted.
+  for (const [agent, model] of [[{ pick: 'sales', odds: 99 }, { pick: 'gpt-5', odds: 99 }], [{ pick: 'research', odds: 250 }, { pick: 'sonnet', odds: 61.5 }], [{ pick: 'research', odds: 59 }, { pick: 'sonnet', odds: '90' }], ['research', null]]) {
+    const odd = await card(jevSays(agent, model))
+    assert.equal(odd.ui.picks.at(-1).owner, '', JSON.stringify(agent))
+    assert.equal(odd.ui.picks.at(-1).model, '', JSON.stringify(model))
+    assert.match(odd.ui.picks.at(-1).words, PICK_WORDS)
+  }
+  // Slow: past 2 s the page stops waiting, and an answer after that changes nothing.
+  let late
+  const slow = await card(() => new Promise((resolve) => { late = resolve }))
+  const wait = [...slow.timers.entries()].find(([, timer]) => timer.ms === 2000)
+  assert.ok(wait, 'nothing stops the page waiting for Jev')
+  wait[1].fn()
+  await flush()
+  assert.match(slow.ui.picks.at(-1).words, /did not answer in time/)
+  late({ agent: { pick: 'research', odds: 90 }, model: { pick: 'sonnet', odds: 90 } })
+  await flush()
+  assert.equal(slow.ui.picks.length, 1, 'a late answer changed the card')
+  for (const browser of [unsure, silent, failing, slow]) assert.match(browser.ui.picks.at(-1).words, PICK_WORDS)
+})
+
+test('a late pick, a run card, or Jev off: nothing is asked or shown', async () => {
   let answerLate
-  const late = await ordering({ answer: { orders: { ...ORDERS, jev: true } }, routeTask: () => new Promise((resolve) => { answerLate = resolve }) })
+  const late = await ordering({ ...JEV, routeTask: () => new Promise((resolve) => { answerLate = resolve }) })
   propose(late, 'add_task', { title: 'Draft it' })
   late.call.decline()
-  answerLate({ for: 'research', confidence: 0.9 })
+  answerLate({ agent: { pick: 'research', odds: 90 }, model: { pick: 'sonnet', odds: 90 } })
   await flush()
   assert.deepEqual(late.ui.picks, [], 'a pick arrived on a card that was already gone')
-  const run = await ordering({ answer: { orders: { ...ORDERS, jev: true } } })
+  const run = await ordering(JEV)
   propose(run, 'run_job', { workflow: 'morning-intel' })
   await flush()
   assert.deepEqual(run.state.routed, [], 'a run was sent to Jev')
-  const off = await ordering()
+  assert.equal(lastCard(run).pick, '')
+  const off = await ordering({ data: BOARD_TIERS() })
   propose(off, 'add_task', { title: 'Draft it' })
   await flush()
   assert.deepEqual(off.state.routed, [], 'the order went to Jev with the switch off')
+  assert.equal(lastCard(off).pick, '')
 })
 
 test('the page asks /api/route-task as a change - JSON, the edit key when there is one - and takes any failure as no pick', async () => {
@@ -1625,7 +1714,7 @@ test('Jev\'s pick changes the card, so Yes waits again and a yes begun before it
   // The person starts saying yes; the pick lands while they talk.
   browser.emit({ type: 'input_audio_buffer.speech_started', item_id: 'item_yes' })
   browser.clock.now += 300
-  answer({ for: 'research', confidence: 0.9 })
+  answer({ agent: { pick: 'research', odds: 90 }, model: UNSURE })
   await flush()
   assert.equal(browser.ui.busy.at(-1), true, 'Yes could be pressed as the pick changed the card')
   assert.equal(browser.call.confirm(trustedClick(), '', lastCard(browser).id), false)
@@ -1743,4 +1832,22 @@ test('a spoken yes approves only a job run or a short task with no details; anyt
   assert.equal(tapYes(detailed.browser), true)
   await flush()
   assert.equal(detailed.browser.state.dispatched.length, 1)
+})
+
+test('Jev is not asked who when the person named the agent, and a tap can only send a tier the card offered', async () => {
+  const named = await ordering({ ...JEV, routeTask: jevSays(UNSURE, { pick: 'sonnet', odds: 70 }) })
+  propose(named, 'add_task', { title: 'Draft it', agent: 'content' })
+  await flush()
+  assert.deepEqual(named.state.routed[0].agents, [], 'Jev was asked who, though the person said')
+  assert.deepEqual(named.state.routed[0].models, ['opus', 'sonnet'])
+  assert.equal(named.ui.picks.at(-1).words, 'Agent: content · you chose\nModel: sonnet · 70%')
+  for (const tier of ['haiku', 'gpt-5', 'Opus']) {
+    const browser = await ordering({ ...JEV })
+    propose(browser, 'add_task', { title: 'Draft it' })
+    await flush()
+    browser.clock.now += 800
+    browser.call.confirm(trustedClick(), '', lastCard(browser).id, tier)
+    await flush()
+    assert.deepEqual(browser.state.dispatched[0].body, { action: 'task', title: 'Draft it' }, `${tier} was sent though the card never offered it`)
+  }
 })

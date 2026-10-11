@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs'
 import { ordersConfig, ordersView, MAX_ORDER_JOBS } from '../api/_orders.js'
 import {
   ORDERS_OFF, voiceConfig, sessionFor, plainYes, plainNo, spokenYesCounts, orderFrom, VOICE_DETAILS_MAX, jobStatusAnswer, spokenYesFits, hiddenText,
+  boardModels, VOICE_MODEL_TIERS,
   CONFIRM_WINDOW_MS, YES_QUIET_BEFORE_MS, DOUBLE_SEND_MS
 } from '../api/_voice.js'
 import { makeHandler } from '../api/voice-session.js'
@@ -151,7 +152,9 @@ test('the order tools are offered exactly as far as fire is set up: add_task wit
   assert.deepEqual(run.parameters.properties.workflow.enum, ['gone-cold', 'morning-intel'], 'run_job can name a job with no link')
   assert.deepEqual(run.parameters.required, ['workflow'])
   const add = all.tools.find((tool) => tool.name === 'add_task')
-  assert.deepEqual(Object.keys(add.parameters.properties).sort(), ['details', 'title'], 'add_task takes something besides a title and details')
+  assert.deepEqual(Object.keys(add.parameters.properties).sort(), ['agent', 'details', 'model', 'title'], 'add_task takes something besides a title, details, and a name the person said')
+  assert.deepEqual(add.parameters.properties.model.enum, VOICE_MODEL_TIERS)
+  assert.match(add.parameters.properties.agent.description, /only if the person named/i)
   assert.deepEqual(add.parameters.required, ['title'])
   for (const tool of all.tools) {
     assert.equal(tool.parameters.additionalProperties, false, `${tool.name} accepts arguments nobody defined`)
@@ -458,5 +461,28 @@ test('the board\'s own code carries no character this rule refuses: every one it
   for (const file of files) {
     const text = readFileSync(new URL(file, import.meta.url), 'utf8')
     assert.equal(hiddenText(text), false, `${file} has a character in it nobody can see`)
+  }
+})
+
+/* ---------- the model tiers a card offers, and names the person said ---------- */
+
+test('a card offers the tiers the team\'s agents in use name, and keeps a name the person said only if it offers it', () => {
+  const data = {
+    agents: [
+      { slug: 'research', state: 'working', model: 'sonnet' },
+      { slug: 'content', state: 'quiet', model: 'opus' },
+      { slug: 'editor', state: 'working', model: 'opus' },
+      { slug: 'sales', state: 'not-in-use', model: 'haiku' },
+      { slug: 'odd', state: 'working', model: 'gpt-5' },
+      { slug: 'plain', state: 'working', model: 'unknown' }
+    ],
+    workflows: []
+  }
+  assert.deepEqual(boardModels(data), ['opus', 'sonnet'], 'the tiers are not the ones the agents in use name, in tier order')
+  assert.deepEqual(boardModels({}), [])
+  const orders = { on: true, tasks: true, jobs: [], key: 'fire-key', spokenYes: true, jev: true }
+  assert.deepEqual(orderFrom('add_task', { title: 'Draft it', agent: 'research', model: 'opus' }, { orders, data }), { order: { kind: 'task', title: 'Draft it', agent: 'research', model: 'opus' } })
+  for (const [agent, model] of [['sales', 'haiku'], ['nobody', 'Opus'], ['research\u200B', 'gpt-5'], [42, ['opus']], ['', '']]) {
+    assert.deepEqual(orderFrom('add_task', { title: 'Draft it', agent, model }, { orders, data }), { order: { kind: 'task', title: 'Draft it' } }, `${agent} / ${model} were kept`)
   }
 })
