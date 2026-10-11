@@ -103,7 +103,7 @@ async function boot({ hash = '#memory', graph = graphPayload(), graphAnswer, mot
     storage,
     media,
     expose: ['graphState', 'graphDeps', 'graphModel', 'graphSources', 'graphCap', 'graphModeFor', 'graphSelect', 'memorySetView', 'showScreen',
-      'GRAPH_NODE_CAP', 'GRAPH_LIBRARIES', 'GRAPH_SETTLE_TICKS', 'GRAPH_DOT_SIZE', 'GRAPH_WARMUP_TICKS', 'GRAPH_FIT', 'graphRender', 'graphSetMode', 'graphToggleKind', 'graphToggleLonely', 'graphSetSource', 'graphSetFind'],
+      'GRAPH_NODE_CAP', 'GRAPH_LIBRARIES', 'GRAPH_SETTLE_TICKS', 'GRAPH_DOT_SIZE', 'GRAPH_WARMUP_TICKS', 'GRAPH_FIT', 'GRAPH_RESIZE_SETTLE_MS', 'graphRender', 'graphSetMode', 'graphToggleKind', 'graphToggleLonely', 'graphSetSource', 'graphSetFind'],
     // `frames` holds back animation frames for the test to run, as a browser runs them after drawing.
     after: 'Object.assign(graphDeps, given.deps); if (given.frames) window.requestAnimationFrame = (fn) => { given.frames.push(fn); return 1 }',
     given: {
@@ -429,7 +429,7 @@ test('the 3D dots are sized to read as dots in a graph of a hundred or so notes'
 })
 
 test('framing waits for nobody who has already taken hold of the 3D view', async () => {
-  const { exposed, libraries } = await boot()
+  const { page, exposed, libraries } = await boot()
   exposed.memorySetView('graph')
   await flush()
   const graph = latest(libraries)
@@ -438,6 +438,15 @@ test('framing waits for nobody who has already taken hold of the 3D view', async
   graph.values.onEngineTick()
   graph.values.onEngineStop()
   assert.equal(fitsOf(graph).length, 0, 'the camera was taken from the person mid-turn')
+  // Nor later: coming back to the tab, or a new stage size, leaves their view alone.
+  page.document.visibilityState = 'hidden'
+  page.documentListeners.filter((entry) => entry.type === 'visibilitychange').forEach((entry) => entry.handler())
+  page.document.visibilityState = 'visible'
+  page.documentListeners.filter((entry) => entry.type === 'visibilitychange').forEach((entry) => entry.handler())
+  Object.assign(exposed.graphState.refs.canvas, { clientWidth: 900, clientHeight: 500 })
+  page.windowListeners.filter((entry) => entry.type === 'resize').forEach((entry) => entry.handler())
+  await new Promise((resolve) => setTimeout(resolve, exposed.GRAPH_RESIZE_SETTLE_MS + 50))
+  assert.equal(fitsOf(graph).length, 0, 'the view was taken back from the person')
 })
 
 test('switching Flat to 3D starts a fresh camera that is framed when its layout settles; a hidden tab is framed too', async () => {
@@ -820,10 +829,9 @@ test('a graph drawn in a tab the browser calls hidden is not paused by the board
   assert.equal(exposed.graphState.paused, false)
 })
 
-test('the 3D view is framed on the frame after the layout stops, once the dots have been placed, never before', async () => {
-  // Found in Chromium: for someone who asked for less motion the layout stops on its first frame, before
-  // the 3D library has put the dots where the layout says. Framed there, every dot was still at the middle,
-  // and the camera went inside the cloud: one dot 267 px across, four in five out of view.
+test('the settled graph is framed at the stop itself, from the layout\'s own positions: no animation frame needed', async () => {
+  // Found on prod: in a tab Chrome calls hidden, animation frames come rarely or not at all, and the final
+  // fit waited for one, so the cloud stayed at the size of its first frame (42% of the shorter side).
   const frames = []
   const { exposed, libraries } = await boot({ motion: { reducedMotion: true }, frames })
   exposed.memorySetView('graph')
@@ -831,9 +839,149 @@ test('the 3D view is framed on the frame after the layout stops, once the dots h
   const graph = latest(libraries)
   placeNodes(graph)
   graph.values.onEngineStop()
-  assert.equal(fitsOf(graph).length, 0, 'it framed the graph before the dots were placed')
-  for (const frame of frames.splice(0)) frame()
-  assert.equal(fitsOf(graph).length, 1, 'it never framed the graph')
+  assert.equal(fitsOf(graph).length, 1, 'the fit waited for an animation frame')
+  assert.deepEqual(frames, [], 'the fit asked for an animation frame')
+})
+
+test('a tab hidden when the layout settles is framed then, at once, and framed again once when it is seen', async () => {
+  const frames = []
+  const { page, exposed, libraries } = await boot({ frames })
+  page.document.visibilityState = 'hidden'
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  const nodes = placeNodes(graph)
+  graph.values.onEngineStop()
+  const atStop = fitsOf(graph)
+  assert.equal(atStop.length, 1)
+  assert.equal(atStop[0][3], 0, 'a fit in a hidden tab glided, which needs frames it does not get')
+  // Seen: framed once more, from the settled positions, with the glide.
+  const visibility = page.documentListeners.filter((entry) => entry.type === 'visibilitychange').map((entry) => entry.handler)
+  nodes[0].x += 50
+  page.document.visibilityState = 'visible'
+  visibility.forEach((handler) => handler())
+  const afterSeen = fitsOf(graph)
+  assert.equal(afterSeen.length, 2, 'coming into view did not frame the settled graph')
+  assert.equal(afterSeen[1][3], 400)
+  const centreX = nodes.reduce((sum, node) => sum + node.x, 0) / nodes.length
+  assert.ok(Math.abs(afterSeen[1][2].x - centreX) < 1e-9, 'the fit on coming into view did not use the settled positions')
+  // Seen again: nothing new to frame.
+  page.document.visibilityState = 'hidden'
+  visibility.forEach((handler) => handler())
+  page.document.visibilityState = 'visible'
+  visibility.forEach((handler) => handler())
+  assert.equal(fitsOf(graph).length, 2, 'every return to the tab took the view again')
+  assert.deepEqual(frames, [])
+})
+
+test('a tab that was in view when the layout settled is not framed again when it is next seen', async () => {
+  const { page, exposed, libraries } = await boot()
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  placeNodes(graph)
+  graph.values.onEngineStop()
+  const visibility = page.documentListeners.filter((entry) => entry.type === 'visibilitychange').map((entry) => entry.handler)
+  page.document.visibilityState = 'hidden'
+  visibility.forEach((handler) => handler())
+  page.document.visibilityState = 'visible'
+  visibility.forEach((handler) => handler())
+  assert.equal(fitsOf(graph).length, 1)
+})
+
+test('a graph that settled in a hidden tab and is on the List when the tab is seen is framed when the Graph is shown again', async () => {
+  const { page, exposed, libraries } = await boot()
+  page.document.visibilityState = 'hidden'
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  placeNodes(graph)
+  graph.values.onEngineStop()
+  assert.equal(fitsOf(graph).length, 1)
+  exposed.memorySetView('list')
+  await flush()
+  page.document.visibilityState = 'visible'
+  page.documentListeners.filter((entry) => entry.type === 'visibilitychange').forEach((entry) => entry.handler())
+  assert.equal(fitsOf(graph).length, 1, 'a graph out of sight was framed, at a stage size it does not have')
+  exposed.memorySetView('graph')
+  await flush()
+  assert.equal(latest(libraries), graph, 'the same drawing was not kept')
+  assert.equal(fitsOf(graph).length, 2, 'the graph was not framed when it was shown again')
+  // Shown again later: nothing new to frame.
+  exposed.memorySetView('list')
+  exposed.memorySetView('graph')
+  await flush()
+  assert.equal(fitsOf(graph).length, 2)
+})
+
+test('a drawing that has gone is never framed, even when it settled in a hidden tab', async () => {
+  const { page, exposed, libraries } = await boot()
+  page.document.visibilityState = 'hidden'
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  placeNodes(graph)
+  graph.values.onEngineStop()
+  exposed.graphSetMode('flat')
+  page.document.visibilityState = 'visible'
+  page.documentListeners.filter((entry) => entry.type === 'visibilitychange').forEach((entry) => entry.handler())
+  assert.equal(fitsOf(graph).length, 1, 'a drawing that was taken down was framed')
+})
+
+test('when the stage changes size after the layout settled, the graph is framed again once the size settles', async () => {
+  const { page, exposed, libraries } = await boot()
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  placeNodes(graph)
+  const resize = page.windowListeners.filter((entry) => entry.type === 'resize').map((entry) => entry.handler)
+  // Before it settles, a resize only sizes the drawing: the settle will frame it.
+  Object.assign(exposed.graphState.refs.canvas, { clientWidth: 700, clientHeight: 450 })
+  resize.forEach((handler) => handler())
+  assert.deepEqual(call(graph, 'width'), ['width', 700])
+  await new Promise((resolve) => setTimeout(resolve, exposed.GRAPH_RESIZE_SETTLE_MS + 50))
+  assert.equal(fitsOf(graph).length, 0)
+  graph.values.onEngineStop()
+  assert.equal(fitsOf(graph).length, 1)
+  // Three quick resizes (a window being dragged), one fit, once they stop.
+  for (const width of [800, 850, 900]) {
+    Object.assign(exposed.graphState.refs.canvas, { clientWidth: width, clientHeight: 500 })
+    resize.forEach((handler) => handler())
+  }
+  assert.equal(fitsOf(graph).length, 1, 'it framed before the size settled')
+  await new Promise((resolve) => setTimeout(resolve, exposed.GRAPH_RESIZE_SETTLE_MS + 50))
+  assert.equal(fitsOf(graph).length, 2, 'a resize after it settled was not framed')
+  assert.deepEqual(call(graph, 'width'), ['width', 900])
+})
+
+test('the stage itself changing size, with the window the same, frames a settled graph again; an unchanged size does nothing', async () => {
+  const watchers = []
+  globalThis.ResizeObserver = class {
+    constructor(callback) { this.callback = callback; this.targets = []; watchers.push(this) }
+    observe(target) { this.targets.push(target) }
+    disconnect() { this.targets = [] }
+  }
+  try {
+    const { exposed, libraries } = await boot()
+    exposed.memorySetView('graph')
+    await flush()
+    const graph = latest(libraries)
+    placeNodes(graph)
+    graph.values.onEngineStop()
+    assert.equal(watchers.length, 1)
+    assert.deepEqual(watchers[0].targets, [exposed.graphState.refs.canvas], 'the stage is not watched')
+    const settle = () => new Promise((resolve) => setTimeout(resolve, exposed.GRAPH_RESIZE_SETTLE_MS + 50))
+    watchers[0].callback()
+    await settle()
+    assert.equal(fitsOf(graph).length, 1, 'a size that did not change took the view again')
+    Object.assign(exposed.graphState.refs.canvas, { clientWidth: 700, clientHeight: 380 })
+    watchers[0].callback()
+    await settle()
+    assert.equal(fitsOf(graph).length, 2)
+    assert.deepEqual(call(graph, 'height'), ['height', 380])
+  } finally {
+    delete globalThis.ResizeObserver
+  }
 })
 
 test('on a stage taller than it is wide, 3D fits the ball to the width, the shorter side', async () => {

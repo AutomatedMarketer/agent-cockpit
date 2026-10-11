@@ -37,6 +37,9 @@ const GRAPH_GATHER = 0.04
 const GRAPH_DOT_SIZE = { '3d': 6, flat: 4 }
 const GRAPH_FIT = { ms: 400, share: 0.8, ballShare: 0.95 }
 
+// How long the stage's size must hold still before a settled graph is framed again for its new size.
+const GRAPH_RESIZE_SETTLE_MS = 200
+
 // The order the server numbers line kinds in (TEAM_EDGE_KINDS), and the order they are shown in.
 const GRAPH_EDGE_KINDS = ['link', 'mention', 'day', 'tag', 'agent']
 
@@ -480,16 +483,18 @@ function graphRestyle(instance = graphState.instance, mode = graphState.drawn?.m
 // Frames the graph. Flat: the library's own fit, leaving a tenth of the shorter side on each side. 3D: the
 // camera, by the board - a ball round every dot, centred on the cloud, fills almost all of the shorter
 // side. A ball rather than a box, because the view turns, and a ball holds every dot in view all the way
-// round. Both read the layout's own positions, so they are right on the frame the layout stops.
+// round. Both read the layout's own positions, so they are right the moment the layout stops, with no
+// frame drawn first. Says whether there was anything placed to frame.
 function graphFrame(instance, mode, ms) {
   const { width, height } = graphStageSize()
   if (mode !== '3d') {
+    if (!(instance.graphData?.()?.nodes ?? []).some((node) => Number.isFinite(node.x) && Number.isFinite(node.y))) return false
     instance.zoomToFit(ms, Math.round(Math.min(width, height) * (1 - GRAPH_FIT.share) / 2))
-    return
+    return true
   }
   const camera = instance.camera?.()
   const nodes = (instance.graphData?.()?.nodes ?? []).filter((node) => [node.x, node.y, node.z].every(Number.isFinite))
-  if (!camera || !nodes.length) return
+  if (!camera || !nodes.length) return false
   const centre = { x: 0, y: 0, z: 0 }
   for (const node of nodes) for (const axis of ['x', 'y', 'z']) centre[axis] += node[axis] / nodes.length
   const radius = Math.max(...nodes.map((node) => Math.hypot(node.x - centre.x, node.y - centre.y, node.z - centre.z))) + GRAPH_DOT_SIZE['3d'] * 2
@@ -502,6 +507,7 @@ function graphFrame(instance, mode, ms) {
   const length = Math.hypot(...away)
   const [dx, dy, dz] = length > 1e-6 ? away.map((part) => part / length) : [0, 0, 1]
   instance.cameraPosition({ x: centre.x + dx * distance, y: centre.y + dy * distance, z: centre.z + dz * distance }, centre, ms)
+  return true
 }
 
 // A d3 force that draws every dot a little toward the middle, in depth too for 3D.
@@ -526,6 +532,7 @@ function graphConfigure(instance, mode, capped) {
   // The d3 layout engine. The other one (ngraph) builds code from text, which this page's policy refuses.
   if (mode === '3d') instance.forceEngine('d3')
   instance.width(size.width).height(size.height)
+  graphState.sized = `${size.width}x${size.height}`
   instance.nodeId('id')
   instance.nodeLabel((node) => graphTip(node))
   instance.linkLabel(() => null)
@@ -540,20 +547,43 @@ function graphConfigure(instance, mode, capped) {
   // settles close to the rest instead of drifting off the edge.
   instance.d3Force?.('charge')?.distanceMax?.(GRAPH_PUSH_REACH)
   instance.d3Force?.('gather', graphGatherForce(mode === '3d'))
-  // The whole graph is framed on its first frame, and once more when the layout settles - unless the
+  // The whole graph is framed on its first step, and once more when the layout settles - unless the
   // person has already taken hold of it, and then the view stays theirs. A new drawing (Flat to 3D)
-  // starts a new camera. Each fit waits for the next frame, so the layout's positions have been drawn.
+  // starts a new camera. Each fit happens there and then, never on a later animation frame: a tab Chrome
+  // calls hidden gets few frames or none, and a fit that waited for one left the cloud at its first,
+  // small size. In a hidden tab the fit is made at once, with no glide (a glide needs frames too), and
+  // made again the first time the tab is seen. A stage that changes size is framed again once it settles.
+  // A fit due while the graph is out of sight (the List, another screen) waits until it is shown again.
   let held = false
-  const framedAt = { tick: false, stop: false }
-  const frame = (moment) => {
-    if (framedAt[moment] || held) return
-    framedAt[moment] = true
-    window.requestAnimationFrame(() => {
-      if (!held) graphFrame(instance, mode, still ? 0 : GRAPH_FIT.ms)
-    })
+  let stepped = false
+  let settled = false
+  let unseen = false
+  let missed = false
+  const fit = () => {
+    const hidden = document.visibilityState === 'hidden'
+    unseen = !graphFrame(instance, mode, still || hidden ? 0 : GRAPH_FIT.ms) || hidden
+    missed = false
   }
-  instance.onEngineTick(() => frame('tick'))
-  instance.onEngineStop(() => frame('stop'))
+  instance.onEngineTick(() => {
+    if (stepped || held) return
+    stepped = true
+    fit()
+  })
+  instance.onEngineStop(() => {
+    if (settled) return
+    settled = true
+    if (!held) fit()
+  })
+  graphState.refit = (reason) => {
+    if (graphState.instance !== instance || !settled || held) return
+    if (reason === 'visible' && !unseen) return
+    if (reason === 'shown' && !missed) return
+    if (memoryView !== 'graph' || location.hash.slice(1) !== 'memory') {
+      missed = true
+      return
+    }
+    fit()
+  }
   if (mode === '3d') {
     instance.showNavInfo(false).nodeRelSize(GRAPH_DOT_SIZE['3d']).nodeOpacity(0.92).linkOpacity(0.45).nodeResolution(10)
     instance.renderer()?.setPixelRatio?.(graphDeps.pixelRatio())
@@ -596,6 +626,7 @@ async function graphDraw(model) {
     }
     graphRestyle()
     graphResume()
+    graphState.refit?.('shown')
     return
   }
   // A library on its way for this very drawing: let it finish.
@@ -635,6 +666,10 @@ async function graphDraw(model) {
     return
   }
   graphState.instance = instance
+  if (graphStageWatch) {
+    graphStageWatch.disconnect()
+    graphStageWatch.observe(refs.canvas)
+  }
   graphState.drawn = { refs, mode, data: graphState.data, key: current.source.key }
   graphState.paused = false
   refs.stageNote.textContent = graphStageNote(capped, mode)
@@ -711,10 +746,29 @@ function graphSetMode(mode) {
   graphRender()
 }
 
-window.addEventListener('resize', () => {
-  if (!graphState.instance) return
+// The stage changed size - the window, or the page round it. The drawing takes the new size at once;
+// a settled graph is framed again for it once the size has held still for a moment.
+let graphResizeTimer = null
+function graphStageResized() {
+  const instance = graphState.instance
+  if (!instance) return
   const size = graphStageSize()
-  graphState.instance.width(size.width).height(size.height)
+  const key = `${size.width}x${size.height}`
+  if (graphState.sized === key) return
+  graphState.sized = key
+  instance.width(size.width).height(size.height)
+  clearTimeout(graphResizeTimer)
+  graphResizeTimer = setTimeout(() => {
+    graphResizeTimer = null
+    graphState.refit?.('resize')
+  }, GRAPH_RESIZE_SETTLE_MS)
+}
+window.addEventListener('resize', graphStageResized)
+const graphStageWatch = typeof ResizeObserver === 'function' ? new ResizeObserver(() => graphStageResized()) : null
+
+// A tab seen again: a graph that settled while it was hidden is framed now, once.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden') graphState.refit?.('visible')
 })
 
 // A theme change repaints the drawing from the new theme's tokens: a choice made with the switch is
