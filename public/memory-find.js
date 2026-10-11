@@ -550,6 +550,8 @@ function memoryFindNode() {
   const inFolder = result.hits.filter((hit) => !memorySource || memoryTopOf(hit.path) === memorySource)
   const shown = inFolder.slice(0, MEMORY_HITS_MAX)
   memoryMeaning.last = { ...result, hits: shown }
+  // The numbers on the screen are the ones that open: a folder tap renumbers them (memoryVoiceList).
+  if (voice) voice.shown = shown
   const meaningLine = result.meaningSaid && result.meaning !== 'done'
     ? [readinessNode('p', { cls: 'mem-hits-meaning small muted', text: result.meaningSaid })]
     : []
@@ -618,9 +620,17 @@ async function memoryFindForVoice(question) {
   return found
 }
 
-// open_note: number N (1 to 5) of the list voice found, opened in the viewer. False for any other number.
+// The list voice found as the screen numbers it now - a folder tap narrows and renumbers it - so what
+// open_note opens, and what the voice is told it opened, is what the person sees. Null with no voice list.
+function memoryVoiceList() {
+  const voice = memoryMeaning.voice
+  if (!voice?.found) return null
+  return { ...voice.found, hits: voice.shown ?? voice.found.hits }
+}
+
+// open_note: number N (1 to 5) of that list, opened in the viewer. False for any other number.
 function memoryOpenFound(n) {
-  const hits = memoryMeaning.voice?.found?.hits ?? []
+  const hits = memoryVoiceList()?.hits ?? []
   if (!Number.isInteger(n) || n < 1 || n > Math.min(5, hits.length)) return false
   openFile(hits[n - 1].path)
   return true

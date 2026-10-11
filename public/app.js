@@ -4935,7 +4935,7 @@ function voiceDeps() {
     recheck: () => recheckBoardNow(),
     // "Find my note": Memory's one search (memory-find.js), the list it showed, and number N of it.
     findNotes: (query) => memoryVoiceFind(query),
-    lastFound: () => (typeof memoryMeaning === 'undefined' ? null : memoryMeaning.voice?.found ?? null),
+    lastFound: () => (typeof memoryVoiceList === 'function' ? memoryVoiceList() : null),
     openNote: (n) => typeof memoryOpenFound === 'function' && memoryOpenFound(n),
     // Jev's suggestion of who should do a task (only when the board has it switched on). A change like
     // any other - JSON, with the edit key when there is one - but never a prompt mid-card: anything

@@ -90,7 +90,7 @@ const COMMIT = 'e'.repeat(40)
 const team = { ...buildTeamGraph(Object.entries(NOTES).map(([path, text]) => ({ path, text }))), hidden: 0, more: 0, unread: 0 }
 const reply = (status, body) => ({ ok: status < 300, status, headers: { get: () => null }, json: async () => body })
 
-async function boot({ search = () => reply(200, { on: true, ready: true, commit: COMMIT, indexed: 5, hits: [] }), notes = NOTES } = {}) {
+async function boot({ search = () => reply(200, { on: true, ready: true, commit: COMMIT, indexed: 5, hits: [] }), notes = NOTES, hash = '#today' } = {}) {
   const team = { ...buildTeamGraph(Object.entries(notes).map(([path, text]) => ({ path, text }))), hidden: 0, more: 0, unread: 0 }
   const asked = { search: 0, files: [], graph: 0 }
   const timers = []
@@ -109,7 +109,7 @@ async function boot({ search = () => reply(200, { on: true, ready: true, commit:
       }
       return reply(200, {})
     },
-    hash: '#today',
+    hash,
     expose: ['memoryFindForVoice', 'memoryFind', 'memoryOpenFound', 'memoryMeaning', 'memoryFindDeps', 'voiceDeps', 'voiceNamesOnBoard'],
     after: `Object.assign(memoryFindDeps, { now: () => ${NOW}, zone: () => 'Europe/London', wait: (fn, ms) => { given.timers.push({ fn, ms }); return given.timers.length }, stop: () => {} })`,
     given: { timers }
@@ -187,7 +187,7 @@ test('the voice deps reach the page\'s search, and the top folders join the name
   assert.equal(typeof deps.lastFound, 'function')
   const result = await deps.findNotes('in my inbox')
   assert.deepEqual(result.hits.map((one) => one.path), ['inbox/2026-10-11/evening-notes.md', 'inbox/2026-10-11/morning-intel.md', 'inbox/2026-10-09/brief.md'])
-  assert.equal(deps.lastFound(), result)
+  assert.deepEqual(deps.lastFound().hits.map((one) => one.path), result.hits.map((one) => one.path))
   const names = page.exposed.voiceNamesOnBoard()
   for (const folder of ['agents', 'inbox', 'shared']) assert.ok(names.includes(folder), folder)
   assert.ok(names.length <= 24)
@@ -213,4 +213,28 @@ test('a search with more than 50 hits keeps them all: the list shows the newest 
   assert.equal(withClass(tree, 'mem-hit').length, 50)
   assert.equal(withClass(tree, 'mem-hits-count')[0].textContent, 'The newest 50 of 55 pages that match, newest first.')
   assert.equal(searchMemoryAnswer({ query: 'in my inbox' }, { found: result, now: NOW }).more, 50)
+})
+
+test('after a voice search, a folder tap renumbers the list - and "open number 2" opens the screen\'s 2, told by its title', async () => {
+  const { page, asked } = await boot({
+    hash: '#memory',
+    search: () => reply(200, { on: true, ready: true, commit: COMMIT, indexed: 5, hits: [['inbox/2026-10-09/brief.md', 0.6], ['inbox/2026-10-11/morning-intel.md', 0.5]] })
+  })
+  const found = await page.exposed.memoryFindForVoice('writing')
+  // Voice's own list: 2 is writing-rules (an equal score keeps path order).
+  assert.deepEqual(found.hits.map((one) => one.path), ['inbox/2026-10-09/brief.md', 'shared/writing-rules.md', 'inbox/2026-10-11/morning-intel.md'])
+  // The person taps the inbox folder: the list on the screen is now inbox notes, numbered again.
+  page.node('memory-filters').listeners.click.at(-1)({ target: { closest: () => ({ dataset: { source: 'inbox' } }) } })
+  await flush()
+  const rows = withClass(page.node('memory-tree'), 'mem-hit')
+  const screen = rows.map((row) => [withClass(row, 'mem-hit-n')[0]?.textContent, row.dataset.path])
+  assert.deepEqual(screen, [['1.', 'inbox/2026-10-09/brief.md'], ['2.', 'inbox/2026-10-11/morning-intel.md']])
+  // What is seen is what opens, and what the voice is told it opened.
+  const told = openNoteAnswer({ n: 2 }, page.exposed.voiceDeps().lastFound())
+  assert.equal(told.opened, 'morning-intel')
+  assert.deepEqual(told.others, [{ n: 1, title: 'brief' }])
+  assert.equal(page.exposed.memoryOpenFound(2), true)
+  await flush()
+  assert.deepEqual(asked.files, ['inbox/2026-10-11/morning-intel.md'])
+  assert.equal(page.exposed.memoryOpenFound(3), false, 'a number the screen no longer shows was opened')
 })
