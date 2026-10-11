@@ -112,8 +112,8 @@ test('talking to the board needed no change to the policy, and the page still re
   for (const path of ['/api/voice-session', '/api/speak', '/api/voice-meter']) {
     assert.ok(page.includes(`'${path}'`), `the page does not reach ${path} on its own site`)
   }
-  // Nothing new needs longer than the default to run, so vercel.json is untouched by voice.
-  assert.deepEqual(Object.keys(config.functions ?? {}), ['api/generate.js'])
+  // Nothing voice needs runs longer than the default, so vercel.json is untouched by voice.
+  assert.deepEqual(Object.keys(config.functions ?? {}), ['api/generate.js', 'api/memory-index.js'])
 })
 
 test('the other security headers are unchanged', () => {
@@ -156,8 +156,8 @@ test('making a picture gets 60 seconds, and gives up on OpenAI before the platfo
   // gpt-image models can take tens of seconds. The function stops waiting at its own timeout so
   // the person sees our sentence, not the platform's timeout page - which only works if that
   // timeout is shorter than maxDuration.
-  assert.deepEqual(Object.keys(config.functions ?? {}), ['api/generate.js'],
-    'only the picture-making function needs longer than the default')
+  assert.deepEqual(Object.keys(config.functions ?? {}), ['api/generate.js', 'api/memory-index.js'],
+    'only picture-making and learning notes by meaning need longer than the default')
   const { maxDuration } = config.functions['api/generate.js']
   assert.equal(maxDuration, 60)
   assert.ok(existsSync(fileURLToPath(new URL('api/generate.js', ROOT))), 'vercel.json configures a function that does not exist')
