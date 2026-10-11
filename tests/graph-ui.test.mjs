@@ -50,10 +50,13 @@ function fakeLibraries() {
     const record = { mode, element, config, calls: [], values: {}, paused: 0, resumed: 0, destroyed: 0 }
     const controls = { autoRotate: false, autoRotateSpeed: 0, listeners: {}, addEventListener(type, fn) { this.listeners[type] = fn } }
     const renderer = { ratio: null, setPixelRatio(value) { this.ratio = value } }
+    // The 3D library's camera: a 40-degree view, looking at the middle from a long way off.
+    const camera = { fov: 40, position: { x: 0, y: 0, z: 1000 } }
     const api = new Proxy({}, {
       get(_, name) {
         if (name === 'controls') return () => controls
         if (name === 'renderer') return () => renderer
+        if (name === 'camera') return () => (mode === '3d' ? camera : undefined)
         if (name === 'pauseAnimation') return () => { record.paused += 1; return api }
         if (name === 'resumeAnimation') return () => { record.resumed += 1; return api }
         if (name === '_destructor') return () => { record.destroyed += 1 }
@@ -100,7 +103,7 @@ async function boot({ hash = '#memory', graph = graphPayload(), graphAnswer, mot
     storage,
     media,
     expose: ['graphState', 'graphDeps', 'graphModel', 'graphSources', 'graphCap', 'graphModeFor', 'graphSelect', 'memorySetView', 'showScreen',
-      'GRAPH_NODE_CAP', 'GRAPH_LIBRARIES', 'GRAPH_SETTLE_TICKS', 'GRAPH_DOT_SIZE', 'graphRender', 'graphSetMode', 'graphToggleKind', 'graphToggleLonely', 'graphSetSource', 'graphSetFind'],
+      'GRAPH_NODE_CAP', 'GRAPH_LIBRARIES', 'GRAPH_SETTLE_TICKS', 'GRAPH_DOT_SIZE', 'GRAPH_WARMUP_TICKS', 'GRAPH_FIT', 'graphRender', 'graphSetMode', 'graphToggleKind', 'graphToggleLonely', 'graphSetSource', 'graphSetFind'],
     // `frames` holds back animation frames for the test to run, as a browser runs them after drawing.
     after: 'Object.assign(graphDeps, given.deps); if (given.frames) window.requestAnimationFrame = (fn) => { given.frames.push(fn); return 1 }',
     given: {
@@ -299,9 +302,11 @@ test('when motion is allowed the 3D view turns slowly and settles as it lays out
   await flush()
   const graph = latest(libraries)
   assert.equal(graph.controls.autoRotate, true)
-  // It lays out on screen: not worked out in advance, not frozen at once (it settles by its own steps).
+  // Most of the layout is worked out before the first frame, so the graph never opens as a tight ball;
+  // the rest settles on screen, by its own steps.
+  assert.equal(graph.values.warmupTicks, exposed.GRAPH_WARMUP_TICKS, 'the graph opens before its layout has spread')
+  assert.ok(exposed.GRAPH_WARMUP_TICKS >= 60 && exposed.GRAPH_WARMUP_TICKS < exposed.GRAPH_SETTLE_TICKS)
   assert.ok(graph.values.cooldownTicks > 0, 'the layout was frozen for someone who did not ask')
-  assert.equal(graph.values.warmupTicks, undefined, 'the layout was worked out before it was drawn')
   // It stops turning the moment somebody takes hold of it.
   graph.controls.listeners.start()
   assert.equal(graph.controls.autoRotate, false)
@@ -320,18 +325,69 @@ test('for someone who asked for less motion: no turning, and the layout is worke
   }
 })
 
-test('once the layout settles the whole graph is framed, once, with room round it, and with no glide for someone who asked for less motion', async () => {
+// Gives every drawn dot a place, as the layout would: a ball of radius 100 round (10, -20, 30).
+function placeNodes(graph) {
+  const nodes = graph.values.graphData.nodes
+  nodes.forEach((node, index) => {
+    const turn = (index / nodes.length) * 2 * Math.PI
+    node.x = 10 + 100 * Math.cos(turn)
+    node.y = -20 + 100 * Math.sin(turn)
+    node.z = 30 + (index % 2 ? 100 : -100) * (index === 0 ? 1 : 0)
+  })
+  return nodes
+}
+// Every time the view was framed: the flat library's own fit, or the 3D camera moved by the board.
+const fitsOf = (graph) => graph.calls.filter((entry) => entry[0] === 'zoomToFit' || entry[0] === 'cameraPosition')
+
+test('the graph is framed on its first frame and again when its layout settles, once each, with no glide for less motion', async () => {
   for (const [mode, motion, time] of [['3d', {}, 400], ['flat', {}, 400], ['3d', { reducedMotion: true }, 0], ['flat', { reducedMotion: true }, 0]]) {
     const { exposed, libraries } = await boot({ motion, storage: { 'agent-cockpit-graph-mode': mode } })
     exposed.memorySetView('graph')
     await flush()
     const graph = latest(libraries)
+    placeNodes(graph)
+    graph.values.onEngineTick()
+    graph.values.onEngineTick()
+    assert.equal(fitsOf(graph).length, 1, `${mode}: not framed once on its first frame`)
     graph.values.onEngineStop()
     graph.values.onEngineStop()
-    const fits = graph.calls.filter((entry) => entry[0] === 'zoomToFit')
-    assert.equal(fits.length, 1, `${mode}: it framed the graph more than once, taking the view from the person`)
-    assert.deepEqual(fits[0].slice(1, 3), [time, 40], `${mode}: framed with the wrong glide or padding`)
+    assert.equal(fitsOf(graph).length, 2, `${mode}: not framed once more when it settled`)
+    for (const fit of fitsOf(graph)) assert.equal(fit[0] === 'zoomToFit' ? fit[1] : fit[3], time, `${mode}: framed with the wrong glide`)
   }
+})
+
+test('3D frames a ball round every dot to fill almost all of the stage\'s shorter side, looking at the middle of the cloud', async () => {
+  // A ball, not a box: the view turns, and a ball fitted once holds every dot in view all the way round.
+  const { exposed, libraries } = await boot()
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  const nodes = placeNodes(graph)
+  graph.values.onEngineStop()
+  const [, at, lookAt] = fitsOf(graph).at(-1)
+  const centre = ['x', 'y', 'z'].map((axis) => nodes.reduce((sum, node) => sum + node[axis], 0) / nodes.length)
+  assert.deepEqual([lookAt.x, lookAt.y, lookAt.z].map((value) => Math.round(value * 1000)), centre.map((value) => Math.round(value * 1000)))
+  const radius = Math.max(...nodes.map((node) => Math.hypot(node.x - centre[0], node.y - centre[1], node.z - centre[2]))) + exposed.GRAPH_DOT_SIZE['3d'] * 2
+  // The stand-in stage is 640 by 420: wide, so its height is the shorter side.
+  const half = exposed.GRAPH_FIT.ballShare * Math.tan((40 * Math.PI) / 360)
+  const expected = radius * Math.sqrt(1 + 1 / (half * half))
+  const distance = Math.hypot(at.x - centre[0], at.y - centre[1], at.z - centre[2])
+  assert.ok(Math.abs(distance - expected) / expected < 0.001, `the camera is ${distance} from the middle, not ${expected}`)
+  // The ball nearly fills the side, so the cloud inside it fills about four fifths (measured in Chromium).
+  assert.ok(exposed.GRAPH_FIT.ballShare >= 0.85 && exposed.GRAPH_FIT.ballShare < 1)
+  assert.ok(exposed.GRAPH_FIT.share >= 0.7 && exposed.GRAPH_FIT.share <= 0.85)
+  assert.equal(graph.calls.filter((entry) => entry[0] === 'zoomToFit').length, 0, 'the 3D library\'s own loose fit was used')
+})
+
+test('Flat leaves a tenth of the stage\'s shorter side round the graph, so it fills about four fifths of it', async () => {
+  const { exposed, libraries } = await boot({ storage: { 'agent-cockpit-graph-mode': 'flat' } })
+  exposed.memorySetView('graph')
+  await flush()
+  const graph = latest(libraries)
+  placeNodes(graph)
+  graph.values.onEngineStop()
+  const [, , padding] = fitsOf(graph).at(-1)
+  assert.equal(padding, Math.round(420 * (1 - exposed.GRAPH_FIT.share) / 2))
 })
 
 test('the layout settles by its own progress, not by the clock, so a slow or background tab never freezes it half-spread', async () => {
@@ -377,9 +433,11 @@ test('framing waits for nobody who has already taken hold of the 3D view', async
   exposed.memorySetView('graph')
   await flush()
   const graph = latest(libraries)
+  placeNodes(graph)
   graph.controls.listeners.start()
+  graph.values.onEngineTick()
   graph.values.onEngineStop()
-  assert.equal(graph.calls.filter((entry) => entry[0] === 'zoomToFit').length, 0, 'the camera was taken from the person mid-turn')
+  assert.equal(fitsOf(graph).length, 0, 'the camera was taken from the person mid-turn')
 })
 
 test('switching Flat to 3D starts a fresh camera that is framed when its layout settles; a hidden tab is framed too', async () => {
@@ -392,8 +450,9 @@ test('switching Flat to 3D starts a fresh camera that is framed when its layout 
   const graph = latest(libraries)
   assert.equal(graph.mode, '3d')
   assert.equal(libraries.made.length, 2, 'the 3D view reused the flat one')
+  placeNodes(graph)
   graph.values.onEngineStop()
-  assert.equal(graph.calls.filter((entry) => entry[0] === 'zoomToFit').length, 1, 'the hidden tab skipped the fit')
+  assert.equal(fitsOf(graph).length, 1, 'the hidden tab skipped the fit')
 })
 
 test('dragging dots is for a mouse only: on a touch screen a finger moves the view, not the notes', async () => {
@@ -770,27 +829,26 @@ test('the 3D view is framed on the frame after the layout stops, once the dots h
   exposed.memorySetView('graph')
   await flush()
   const graph = latest(libraries)
+  placeNodes(graph)
   graph.values.onEngineStop()
-  assert.equal(graph.calls.filter((entry) => entry[0] === 'zoomToFit').length, 0, 'it framed the graph before the dots were placed')
+  assert.equal(fitsOf(graph).length, 0, 'it framed the graph before the dots were placed')
   for (const frame of frames.splice(0)) frame()
-  assert.equal(graph.calls.filter((entry) => entry[0] === 'zoomToFit').length, 1, 'it never framed the graph')
+  assert.equal(fitsOf(graph).length, 1, 'it never framed the graph')
 })
 
-test('the fit waits, a frame at a time, until the drawn dots span what the layout says', async () => {
-  const frames = []
-  const { exposed, libraries } = await boot({ frames })
+test('on a stage taller than it is wide, 3D fits the ball to the width, the shorter side', async () => {
+  const { exposed, libraries } = await boot()
   exposed.memorySetView('graph')
   await flush()
   const graph = latest(libraries)
-  const nodes = graph.values.graphData.nodes
-  nodes.forEach((node, index) => { node.x = index * 10 - 40 })
-  // The library still has every dot at the middle.
-  graph.values.getGraphBbox = { x: [-1, 1], y: [-1, 1], z: [-1, 1] }
+  const nodes = placeNodes(graph)
+  Object.assign(exposed.graphState.refs.canvas, { clientWidth: 300, clientHeight: 600 })
   graph.values.onEngineStop()
-  frames.shift()()
-  const fits = () => graph.calls.filter((entry) => entry[0] === 'zoomToFit').length
-  assert.equal(fits(), 0, 'it framed dots that were not yet placed')
-  graph.values.getGraphBbox = { x: [-40, 10 * nodes.length - 50], y: [-30, 30], z: [-30, 30] }
-  frames.shift()()
-  assert.equal(fits(), 1)
+  const [, at, lookAt] = fitsOf(graph).at(-1)
+  const radius = Math.max(...nodes.map((node) => Math.hypot(node.x - lookAt.x, node.y - lookAt.y, node.z - lookAt.z))) + exposed.GRAPH_DOT_SIZE['3d'] * 2
+  // The camera's angle is top to bottom; across a 300 by 600 stage it is half as wide.
+  const half = exposed.GRAPH_FIT.ballShare * Math.tan((40 * Math.PI) / 360) * (300 / 600)
+  const expected = radius * Math.sqrt(1 + 1 / (half * half))
+  const distance = Math.hypot(at.x - lookAt.x, at.y - lookAt.y, at.z - lookAt.z)
+  assert.ok(Math.abs(distance - expected) / expected < 0.001, `the camera is ${distance} from the middle, not ${expected}`)
 })
