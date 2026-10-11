@@ -64,7 +64,7 @@ function memoryRank(entries, query) {
       if (part > 0 && (!best || part > best.part)) best = { field, part }
       score += part
     }
-    hits.push({ path: doc.entry.path, size: doc.entry.size ?? null, score, where: best.field.where(doc.entry, terms) })
+    hits.push({ path: doc.entry.path, size: doc.entry.size ?? null, score, where: best.field.where(doc.entry, terms), field: best.field.key })
   }
   return hits.sort((a, b) => b.score - a.score || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
 }
@@ -351,19 +351,21 @@ function memoryFind(question, { now = memoryFindDeps.now(), timeZone = memoryFin
   const inWindow = (path) => !parts.day || (dayOf(path) !== null && dayOf(path) >= parts.day.from && dayOf(path) <= parts.day.to)
   const inPlace = (path) => !parts.place || memoryTopOf(path) === parts.place
   const scored = new Map()
-  const add = (path, rank, weight, why) => {
+  // `why` is what the screen shows; `reason` is the board's own key for it, all the voice is told.
+  const add = (path, rank, weight, why, reason) => {
     if (!known(path)) return
-    const hit = scored.get(path) ?? { path, score: 0, why: [] }
+    const hit = scored.get(path) ?? { path, score: 0, why: [], reasons: [] }
     hit.score += weight / (MEMORY_FUSION + rank + 1)
     if (!hit.why.includes(why)) hit.why.push(why)
+    if (!hit.reasons.includes(reason)) hit.reasons.push(reason)
     scored.set(path, hit)
   }
   const entries = context.files.map((file) => ({ ...(context.index.get(file.path) ?? {}), path: file.path, size: file.size }))
   if (parts.words.length) {
-    memoryRank(entries, parts.words.join(' ')).forEach((hit, rank) => add(hit.path, rank, 1, hit.where))
+    memoryRank(entries, parts.words.join(' ')).forEach((hit, rank) => add(hit.path, rank, 1, hit.where, hit.field))
     for (const { word, as } of memoryHeardAs(parts.words, context.vocabulary)) {
       memoryRank(entries, parts.words.map((one) => (one === word ? as : one)).join(' '))
-        .forEach((hit, rank) => add(hit.path, rank, MEMORY_HEARD_WEIGHT, `heard as ${as}`))
+        .forEach((hit, rank) => add(hit.path, rank, MEMORY_HEARD_WEIGHT, `heard as ${as}`, 'heard'))
     }
   }
   if (parts.meaningText) {
@@ -385,13 +387,13 @@ function memoryFind(question, { now = memoryFindDeps.now(), timeZone = memoryFin
     } else {
       result.meaning = 'done'
       result.meaningSaid = MEMORY_SAY.matched
-      ;(answer.hits ?? []).forEach((path, rank) => add(path, rank, 1, MEMORY_SAY.meaning))
+      ;(answer.hits ?? []).forEach((path, rank) => add(path, rank, 1, MEMORY_SAY.meaning, 'meaning'))
     }
   }
   let found = [...scored.values()]
   // Only a day or a folder: every note of that day, or in that folder, newest first.
   if (!parts.words.length && !parts.meaningText && (parts.day || parts.place)) {
-    found = [...new Set([...sizes.keys(), ...context.notes.keys()])].map((path) => ({ path, score: 0, why: [] }))
+    found = [...new Set([...sizes.keys(), ...context.notes.keys()])].map((path) => ({ path, score: 0, why: [], reasons: [] }))
   }
   found = found.filter((hit) => inWindow(hit.path) && inPlace(hit.path))
   const byPath = (a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
@@ -406,14 +408,21 @@ function memoryFind(question, { now = memoryFindDeps.now(), timeZone = memoryFin
   }
   result.hits = found.map((hit) => {
     const why = [...hit.why]
-    if (parts.day) why.push(`dated ${parts.day.label}`)
-    else if (!why.length && parts.place) why.push(`in ${parts.place}/`)
+    const reasons = [...hit.reasons]
+    if (parts.day) {
+      why.push(`dated ${parts.day.label}`)
+      reasons.push('day')
+    } else if (!why.length && parts.place) {
+      why.push(`in ${parts.place}/`)
+      reasons.push('folder')
+    }
     return {
       path: hit.path,
       title: memoryTitleOf(hit.path, context.notes),
       folder: memoryTopOf(hit.path),
       day: dayOf(hit.path),
       why: why.join('; '),
+      reasons,
       size: sizes.get(hit.path) ?? null,
       opening: typeof context.index.get(hit.path)?.opening === 'string' ? context.index.get(hit.path).opening : '',
       score: hit.score

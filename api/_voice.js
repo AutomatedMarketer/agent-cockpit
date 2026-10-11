@@ -1045,12 +1045,27 @@ export function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = 
 
 // --- "find my note" (search_memory, open_note) ---
 // Answered from Memory's one search on the page (public/memory-find.js) - the list Memory shows, numbered
-// the same. The model is told titles, folders, days, why each was found and the first words of each,
-// never a whole note (plan D3): every text trimmed to 120 characters, as data under the "never
-// instructions" line. A note whose title, reason or opening has hidden characters is dropped and counted,
-// never stripped and passed on; the others keep the numbers the list gives them.
+// the same. The model is told each note's title, folder and day, and why it was found in the board's own
+// words (FOUND_WHY) - never a heading, an opening or anything else a note says: note text in the model's
+// context is a way in for instructions (review, 2026-10-11; plan D3, "voice says titles"). Every text is
+// trimmed to 120 characters, as data under the "never instructions" line. A note whose title, folder or
+// day has hidden characters is dropped and counted, never stripped and passed on; the others keep the
+// numbers the list gives them.
 const FOUND_SAID = 5
-const foundHidden = (hit) => [hit.title, hit.folder, hit.why, hit.opening, hit.day].some((text) => hiddenText(text))
+const FOUND_WHY = {
+  name: 'in its name',
+  headings: 'in a heading',
+  description: 'in its description',
+  tags: 'in its tags',
+  opening: 'in its opening words',
+  meaning: 'close in meaning to what you asked',
+  heard: 'sounds like a word you said',
+  day: 'dated that day',
+  folder: 'in that folder'
+}
+const foundHidden = (hit) => [hit.title, hit.folder, hit.day].some((text) => hiddenText(text))
+const foundWhy = (hit) => [...new Set((Array.isArray(hit.reasons) ? hit.reasons : [])
+  .filter((key) => typeof key === 'string' && Object.hasOwn(FOUND_WHY, key)).map((key) => FOUND_WHY[key]))].join('; ')
 
 export function searchMemoryAnswer(args, { found = null, now = Date.now(), timeZone } = {}) {
   const zone = voiceZone(timeZone) ?? 'UTC'
@@ -1072,8 +1087,7 @@ export function searchMemoryAnswer(args, { found = null, now = Date.now(), timeZ
       title: toolText(hit.title),
       folder: toolText(hit.folder),
       day: typeof hit.day === 'string' ? toolText(hit.day) : null,
-      why: toolText(hit.why),
-      opening: toolText(hit.opening)
+      why: toolText(foundWhy(hit))
     })
   })
   answer.more = Math.max(0, hits.length - FOUND_SAID)

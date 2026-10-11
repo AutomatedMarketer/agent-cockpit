@@ -124,7 +124,7 @@ test('the README says what search by meaning sends where, how to switch it on, a
   const readme = await readFile(join(root, 'README.md'), 'utf8')
   const where = readme.slice(readme.indexOf('### What goes where'))
   assert.match(where, /\| With `MEMORY_MEANING=on`: the text of each note the board can open \(its first 8,000 characters\), and the words of each search \| \*\*OpenAI\*\* \| [^|]*30 days[^|]*never trained on[^|]*\|/)
-  assert.match(where, /titles, folders, days and first words of the notes a search found/i)
+  assert.match(where, /\| The titles, folders and days of the notes a search found, and why each was found in the board's own words, when you ask by voice \| \*\*OpenAI\*\* \| [^|]*Never a heading, an opening or anything else a note says/)
   assert.match(readme, /\| `MEMORY_MEANING` \| /, 'MEMORY_MEANING is not in the settings table')
   assert.match(readme, /#### Search by meaning/)
   assert.match(readme, /Private Blob store/)

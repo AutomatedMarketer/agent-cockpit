@@ -248,7 +248,8 @@ Each hit says why it is there ("in its name", "close in meaning to what you aske
 - **Who can use it.** Anyone who can change the board: it spends a little of your OpenAI credit, so a
   board shared read-only (`EDIT_KEY` set) gives word search to anyone without the key, and says so
 - **By voice.** "Find my note about pricing" shows the same numbered list on **Memory**, and "open
-  number two" opens it. The assistant says titles and why each was found; it never reads a note out
+  number two" opens the one the screen calls 2. The assistant is told titles, folders, days and why each
+  was found, in the board's own words - no note text at all - and it never reads a note out
 - **What it cannot stop.** Someone who can push to your team repo could write a page made to come
   first in every search. It is still only a result with its name on it: nothing is ever done because
   of one
@@ -659,7 +660,7 @@ Fish Audio can speak the answers in a voice you pick from its library.
 | The words of an order you say yes to | **Your `task-intake` routine** (a task) or **that job's routine** (a run), through the board's own `/api/fire` | So your team does it. The trigger URLs stay in Vercel; none reaches your browser |
 | With `JEV_ROUTING=on`: a task's title and details, your agents' slugs and descriptions, and the board's note on each model tier | **OpenRouter** (Jev) | So it can pick who does the task and on which model. Off by default |
 | With `MEMORY_MEANING=on`: the text of each note the board can open (its first 8,000 characters), and the words of each search | **OpenAI** | So notes can be found by meaning. Kept up to 30 days in OpenAI's abuse logs, never trained on. The lists of numbers made from them stay in your private picture store |
-| The titles, folders, days and first words of the notes a search found, when you ask by voice | **OpenAI** | So the assistant can say what it found. Never a whole note |
+| The titles, folders and days of the notes a search found, and why each was found in the board's own words, when you ask by voice | **OpenAI** | So the assistant can say what it found. Never a heading, an opening or anything else a note says |
 
 Everything else stays where it was. The page's security policy did not change: the call itself is
 browser-to-OpenAI audio, and the page only ever talks to its own site.
@@ -849,7 +850,7 @@ Locally:
 npm test
 ```
 
-2053 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2056 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -
