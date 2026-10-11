@@ -1021,6 +1021,12 @@ export function confirmsYes(event) {
   return event.type === 'keydown' && (event.key === 'Enter' || event.key === ' ')
 }
 
+// --- the model tiers a task may ask for ---
+// The tiers a Claude Code agent file names in its own "model:" line. A task card may carry one (Jev's
+// pick, or the owner's), and /api/fire takes only these, exactly. The page offers only the ones the
+// team's agent files actually use.
+export const VOICE_MODEL_TIERS = ['opus', 'sonnet', 'haiku']
+
 // --- text a person cannot see ---
 // THE one rule for every title and details an order or a task card carries - this check, the spoken-
 // yes rule, and /api/fire (which imports it) - so the page and the server cannot disagree. Refused,

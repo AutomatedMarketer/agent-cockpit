@@ -997,3 +997,29 @@ test('fire refuses hidden text in a task or a creation - from voice and from the
   assert.ok(!JSON.stringify(response.body).includes('Draft'), 'the hidden title was echoed')
   assertNoSecrets(response)
 })
+
+/* ---------- the model a task card asks for ---------- */
+// Jev (or the owner) can say which model tier should do a task. Nothing downstream reads it yet:
+// the task-intake routine writes it into the card's frontmatter as `model:`, and the task sweep
+// (work-the-tasks) does not read that field today - so it is a recommendation until it does.
+
+test('a task may name a model tier - only opus, sonnet or haiku, exactly - and it rides in the payload', async () => {
+  assert.deepEqual(validateTask({ title: 'Draft it', model: 'sonnet' }), { task: { title: 'Draft it', model: 'sonnet' } })
+  assert.deepEqual(validateTask({ title: 'Draft it', model: '' }), { task: { title: 'Draft it' } })
+  assert.deepEqual(validateTask({ title: 'Draft it', model: null }), { task: { title: 'Draft it' } })
+  for (const bad of ['Sonnet', 'gpt-5', 'claude-opus-4', 'opus ', 'opus​', 42, ['opus'], 'inherit']) {
+    assert.ok(validateTask({ title: 'Draft it', model: bad }).error, `model ${JSON.stringify(bad)} was accepted`)
+  }
+  const payload = taskDispatchPayload({ title: 'Draft it', model: 'opus' })
+  assert.equal(payload.model, 'opus')
+  assert.match(payload.instruction, /plus model: <tier> when this payload names one/)
+  assert.equal('model' in taskDispatchPayload({ title: 'Just this' }), false)
+  // End to end: the trigger gets it; a bad one is a 400 before anything is sent.
+  const sent = await fire(withKey({ action: 'task', title: 'Chase the Acme invoice', model: 'haiku' }), { trigger: { status: 202, body: 'accepted' } })
+  assert.equal(sent.response.statusCode, 200)
+  assert.equal(JSON.parse(sent.calls.trigger[0].options.body).model, 'haiku')
+  const refused = await fire(withKey({ action: 'task', title: 'Chase the Acme invoice', model: 'gpt-5' }))
+  assert.equal(refused.response.statusCode, 400)
+  assert.equal(refused.calls.trigger.length, 0)
+  assertNoSecrets(refused.response)
+})
