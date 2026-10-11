@@ -215,8 +215,13 @@ export function failureAnswer(error) {
 //                                                          cap cannot know which is coming
 //   a picture from words                                  1 put  - the save that counts it (storing
 //                                                          the picture is then an upload)
+//   the meaning index (memory-index.json)                 at most INDEX_SAVES_PER_DAY = 2 puts, counted
+//                                                          inside its own file (spendIndexSave, below)
 //
-//   2 x WRITE_DAILY_CAP + GENERATE_DAILY_CAP <= ADVANCED_OPS_PER_DAY = 55
+//   2 x WRITE_DAILY_CAP + GENERATE_DAILY_CAP + 2 <= ADVANCED_OPS_PER_DAY = 55
+//
+// The index's 2 were taken from the changes, 20 -> 19 a day, so the voice meter keeps its 5:
+// 2 x 19 + 10 + 2 + 5 = 55 (meaning search plan, T3).
 //
 // 55 a day is 1,705 in a 31-day month, which keeps 295 of the 2,000 for the SDK retrying a failed
 // put (up to VERCEL_BLOB_RETRIES times, 10 unless set), a slot pointed back after a failed upload,
@@ -227,8 +232,8 @@ export function failureAnswer(error) {
 // same moment collides on ifMatch, and every collided put counts. Each save tries at most twice,
 // and each settings save that lands can make at most one save in flight on each other instance
 // collide, so a burst costs at most 2 x counted + (instances - 1) x counted puts. Only a counter
-// outside Blob that changes atomically would remove that; this board does not have one. The defaults, 20 and
-// 10, are 50 a day. Asked for more, the caps are clamped (dailyCaps, below), never trusted: so
+// outside Blob that changes atomically would remove that; this board does not have one. The defaults, 19 and
+// 10, are 48 a day, and the index's 2 make 50. Asked for more, the caps are clamped (dailyCaps, below), never trusted: so
 // raising a cap is never the advice, because past the budget it is the advice that locks the store.
 //
 // The day is the UTC day: the count starts again at midnight UTC. The server cannot know which
@@ -238,7 +243,10 @@ export function failureAnswer(error) {
 export const ADVANCED_OPS_PER_DAY = 55
 const PUTS_PER_CHANGE = 2
 const PUTS_PER_PICTURE_MADE = 1
-const DEFAULT_CAPS = { writes: 20, generated: 10 }
+const DEFAULT_CAPS = { writes: 19, generated: 10 }
+export const INDEX_SAVES_PER_DAY = 2
+// What the caps may share: the budget less the index's saves.
+const CAPS_BUDGET = ADVANCED_OPS_PER_DAY - INDEX_SAVES_PER_DAY
 
 const WHY_THE_LIMIT =
   'the limit keeps the picture store inside Vercel\'s free monthly allowance, which locks the ' +
@@ -255,17 +263,17 @@ const CAP_SENTENCES = {
 
 // A whole number, zero or more; anything else keeps the default rather than guessing. Zero is a
 // real choice: it turns that kind of change off. Then clamped to the budget above: changes first,
-// to as many as fit on their own (27), and pictures from words to whatever the changes leave -
+// to as many as fit on their own beside the index (26), and pictures from words to whatever is left -
 // a made picture is no use without a change to store it with.
 export function dailyCaps(env = process.env) {
   const read = (value, fallback) => (/^\d+$/.test(String(value ?? '').trim()) ? Number(value) : fallback)
   const writes = Math.min(
     read(env.WRITE_DAILY_CAP, DEFAULT_CAPS.writes),
-    Math.floor(ADVANCED_OPS_PER_DAY / PUTS_PER_CHANGE)
+    Math.floor(CAPS_BUDGET / PUTS_PER_CHANGE)
   )
   const generated = Math.min(
     read(env.GENERATE_DAILY_CAP, DEFAULT_CAPS.generated),
-    Math.floor((ADVANCED_OPS_PER_DAY - writes * PUTS_PER_CHANGE) / PUTS_PER_PICTURE_MADE)
+    Math.floor((CAPS_BUDGET - writes * PUTS_PER_CHANGE) / PUTS_PER_PICTURE_MADE)
   )
   return { writes, generated }
 }
@@ -348,7 +356,7 @@ export async function refuseIfSpent(pictures, charge) {
 // fights a picture save for the same file, and a meter that fails never blocks a picture change.
 //
 // It spends from the same monthly allowance as the pictures, so it is held to what the picture caps
-// leave over: ADVANCED_OPS_PER_DAY less the most the caps can spend, 5 writes a day at the defaults
+// leave over: ADVANCED_OPS_PER_DAY less the most the caps and the index can spend, 5 writes a day at the defaults
 // (55 - (2 x 20 + 10)). Counted inside this file, by the save that uses it, so counting costs no
 // extra operation. When the day's are used up a report stays in the device's outbox and rides along
 // with the next accepted one - one write carries up to 20 conversations - so nothing is lost, only
@@ -433,7 +441,7 @@ export function normaliseMeter(raw) {
 // How many meter writes a day the picture caps leave over. Zero when they use the whole budget.
 export function meterWritesPerDay(env = process.env) {
   const caps = dailyCaps(env)
-  return Math.max(0, ADVANCED_OPS_PER_DAY - (PUTS_PER_CHANGE * caps.writes + PUTS_PER_PICTURE_MADE * caps.generated))
+  return Math.max(0, CAPS_BUDGET - (PUTS_PER_CHANGE * caps.writes + PUTS_PER_PICTURE_MADE * caps.generated))
 }
 
 // The day only moves forward, as with the picture caps: a request whose clock still says yesterday
@@ -452,6 +460,32 @@ export function spendMeterWrite(meter, env, day) {
     meter.writes = 0
   }
   meter.writes += 1
+}
+
+// --- the meaning index's file -----------------------------------------------------------------
+// agent-cockpit/memory-index.json (api/_memory-index.js says what is in it). Written only by the server,
+// at most INDEX_SAVES_PER_DAY a UTC day, counted inside the file itself - so counting costs nothing - by
+// spendIndexSave, called from the save's own build. Never read as more than MEMORY_INDEX_MAX_BYTES:
+// bigger is read as no index, and the next build replaces it.
+export const MEMORY_INDEX_PATH = `${ROOT}/memory-index.json`
+export const MEMORY_INDEX_MAX_BYTES = 8 * 1024 * 1024
+const INDEX_CLASH = 'The meaning index was saved somewhere else at the same moment, so this copy is kept in memory until the next save.'
+const INDEX_TOO_BIG = 'The meaning index grew past 8 MB, so it was not saved.'
+
+// The file's count after one more save today, or null when today's saves are used. As with the
+// picture caps, the day only moves forward: a request whose clock still says yesterday is held to
+// the file's count.
+export function spendIndexSave(saves, day) {
+  const sameDay = saves.day >= day
+  const used = sameDay ? saves.count : 0
+  if (used >= INDEX_SAVES_PER_DAY) return null
+  return { day: sameDay ? saves.day : day, count: used + 1 }
+}
+
+const indexTurnKeys = new WeakMap()
+const indexTurnKey = (loadSdk) => {
+  if (!indexTurnKeys.has(loadSdk)) indexTurnKeys.set(loadSdk, {})
+  return indexTurnKeys.get(loadSdk)
 }
 
 // What this instance last read of the meter for showing it, kept SHOWN_MS like settings.json's.
@@ -711,5 +745,52 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk, { pause =
     throw new PictureStoreError(409, 'The voice meter was saved somewhere else at the same moment, so this conversation stays on this device for now.')
   }
 
-  return { readSettings, saveSettings, putPicture, getPicture, dropPicture, readMeter, saveMeter }
+  // --- the meaning index: its own file and its own turns ---------------------------------------------
+
+  // { text, etag }: the file's text, or null when there is none or it is too big to read (its etag is
+  // still given, so a rebuild can replace it). `fresh` skips the cache, for the read inside a save.
+  async function readIndex({ fresh = false } = {}) {
+    const found = await attempt((blob) => blob.get(MEMORY_INDEX_PATH, fresh ? { access: 'private', useCache: false } : { access: 'private' }))
+    if (!found || found.statusCode !== 200 || !found.stream) return { text: null, etag: null }
+    const etag = found.blob?.etag || null
+    const bytes = await readCapped(found.stream, MEMORY_INDEX_MAX_BYTES)
+    return { text: bytes ? bytes.toString('utf8') : null, etag }
+  }
+
+  // `build` gets the file's text as it is now (null for none) and returns the text to save, or null
+  // to save nothing - which is how a third save in a day is declined. Tried once more if another
+  // instance saved in between; { etag } when saved, null when declined.
+  const saveIndex = (build) => takeTurn(indexTurnKey(loadSdk), () => saveIndexNow(build))
+
+  async function saveIndexNow(build) {
+    for (let tries = 1; tries <= SAVE_TRIES; tries += 1) {
+      if (tries > 1) await pause(RETRY_PAUSE_MS.least + random() * (RETRY_PAUSE_MS.most - RETRY_PAUSE_MS.least))
+      const { text, etag } = await readIndex({ fresh: true })
+      const next = await build(text)
+      if (next === null || next === undefined) return null
+      if (Buffer.byteLength(next, 'utf8') > MEMORY_INDEX_MAX_BYTES) throw new PictureStoreError(413, INDEX_TOO_BIG)
+      const guard = etag ? { allowOverwrite: true, ifMatch: etag } : { allowOverwrite: false }
+      const blob = await sdk()
+      try {
+        const saved = await blob.put(MEMORY_INDEX_PATH, next, {
+          access: 'private',
+          contentType: 'application/json',
+          addRandomSuffix: false,
+          cacheControlMaxAge: 60,
+          ...guard
+        })
+        return { etag: saved?.etag ?? null }
+      } catch (error) {
+        const lostRace = etag
+          ? typeof blob.BlobPreconditionFailedError === 'function' && error instanceof blob.BlobPreconditionFailedError
+          : (await readIndex({ fresh: true })).etag !== null
+        if (lostRace) continue
+        const { status, error: sentence } = storeFailure(error, blob)
+        throw new PictureStoreError(status, sentence)
+      }
+    }
+    throw new PictureStoreError(409, INDEX_CLASH)
+  }
+
+  return { readSettings, saveSettings, putPicture, getPicture, dropPicture, readMeter, saveMeter, readIndex, saveIndex }
 }

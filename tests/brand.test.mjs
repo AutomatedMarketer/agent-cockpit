@@ -87,7 +87,7 @@ test('a connected, empty store reads as the defaults, with the full day\'s allow
     defaultArtStyle: DEFAULT_ART_STYLE,
     names: {},
     pictures: {},
-    left: { writes: 20, generated: 10 },
+    left: { writes: 19, generated: 10 },
     // Voice rides along; with no OPENAI_API_KEY it is off and says why.
     voice: { on: false, why: response.body.voice.why, mouth: 'openai' }
   })
@@ -168,7 +168,7 @@ test('the daily caps come from the environment, and a nonsense value keeps the d
   const set = await board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: '7', GENERATE_DAILY_CAP: '3' } }).get()
   assert.deepEqual(set.body.left, { writes: 7, generated: 3 })
   const nonsense = await board({ env: { ...STORE_ENV, WRITE_DAILY_CAP: 'lots', GENERATE_DAILY_CAP: '-1' } }).get()
-  assert.deepEqual(nonsense.body.left, { writes: 20, generated: 10 })
+  assert.deepEqual(nonsense.body.left, { writes: 19, generated: 10 })
 })
 
 test('GET is behind the view key', async () => {
@@ -377,7 +377,7 @@ test('a thousand changes refused at the cap cost no read that skips the cache', 
   // still ran the meter. The cached copy is checked first: it can only be behind (counts only
   // rise, the day only moves forward), so when it says the day is spent, the day is spent.
   const { post, fake } = board()
-  for (let i = 0; i < 20; i += 1) assert.equal((await post({ change: 'name', slug: 'content', value: `N${i}` })).statusCode, 200)
+  for (let i = 0; i < 19; i += 1) assert.equal((await post({ change: 'name', slug: 'content', value: `N${i}` })).statusCode, 200)
   const uncached = ((fake) => fake.calls.get.filter((read) => read.options.useCache === false).length)
   const before = uncached(fake)
   const puts = fake.calls.put.length
@@ -396,8 +396,8 @@ test('when another instance used up the day, this one pays for at most one read 
   const instanceB = makeHandler({ store: pictureStore(STORE_ENV, async () => fake.sdk), env: STORE_ENV, now: NOON })
   const post = (handler, body) => call(handler, { method: 'POST', headers: asTheBoard(JSON_TYPE), body })
   await post(instanceB, { change: 'assistant', value: 'Donna' })
-  await call(instanceA, { method: 'GET', headers: asTheBoard() }) // A now remembers 1 of 20 used
-  for (let i = 0; i < 19; i += 1) assert.equal((await post(instanceB, { change: 'name', slug: 'content', value: `n${i}` })).statusCode, 200)
+  await call(instanceA, { method: 'GET', headers: asTheBoard() }) // A now remembers 1 of 19 used
+  for (let i = 0; i < 18; i += 1) assert.equal((await post(instanceB, { change: 'name', slug: 'content', value: `n${i}` })).statusCode, 200)
   const uncached = () => fake.calls.get.filter((read) => read.options.useCache === false).length
   const before = uncached()
   for (let i = 0; i < 1000; i += 1) assert.equal((await post(instanceA, { change: 'name', slug: 'sales', value: 'x' })).statusCode, 429)

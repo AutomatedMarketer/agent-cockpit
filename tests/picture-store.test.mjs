@@ -11,10 +11,16 @@ import {
   storeFailure,
   emptySettings,
   dailyCaps,
+  meterWritesPerDay,
   ADVANCED_OPS_PER_DAY,
+  INDEX_SAVES_PER_DAY,
+  MEMORY_INDEX_PATH,
+  MEMORY_INDEX_MAX_BYTES,
+  spendIndexSave,
   SETTINGS_PATH,
   NOT_CONNECTED
 } from '../api/_picture-store.js'
+import { INDEX_CAPS } from '../api/_memory-index.js'
 import { fakeBlob } from './helpers/fake-blob.mjs'
 
 const STORE = { BLOB_STORE_ID: 'store_fake' }
@@ -518,17 +524,22 @@ test('a store failure during a real operation arrives as that sentence', async (
 test('however the daily caps are set, a day\'s worst case stays inside the budget', () => {
   // Hobby includes 2,000 advanced operations a month and locks the store for 30 days past them
   // (vercel.com/docs/vercel-blob/usage-and-pricing). A change costs at most two puts and a picture
-  // from words one, so 2 x changes + pictures must stay at or under 55 a day: 1,705 in a 31-day
-  // month, with the rest kept for retries and the owner browsing the store in Vercel.
+  // from words one, and the meaning index keeps 2 saves a day, so 2 x changes + pictures + 2 must stay at
+  // or under 55 a day: 1,705 in a 31-day month, with the rest kept for retries and the owner browsing
+  // the store in Vercel. The index's 2 came from the changes: 20 -> 19 (meaning search plan, T3).
   assert.ok(ADVANCED_OPS_PER_DAY * 31 <= 1705, 'the daily budget leaves no margin under 2,000 a month')
-  assert.deepEqual(dailyCaps({}), { writes: 20, generated: 10 }, 'the defaults moved')
+  assert.deepEqual(dailyCaps({}), { writes: 19, generated: 10 }, 'the defaults moved')
+  assert.equal(INDEX_SAVES_PER_DAY, 2)
+  assert.equal(2 * 19 + 10 + INDEX_SAVES_PER_DAY + meterWritesPerDay({}), ADVANCED_OPS_PER_DAY, 'changes, pictures, the index and the meter no longer add up to 55')
+  assert.equal(dailyCaps({ WRITE_DAILY_CAP: '99' }).writes, 26, 'changes may take at most what the index leaves, halved')
   const asked = [undefined, '', 'lots', '-1', '0', '1', '2', '10', '20', '25', '27', '28', '50', '55', '56', '1000', '99999999']
   for (const writes of asked) {
     for (const generated of asked) {
       const caps = dailyCaps({ WRITE_DAILY_CAP: writes, GENERATE_DAILY_CAP: generated })
       const label = `WRITE_DAILY_CAP=${writes} GENERATE_DAILY_CAP=${generated}`
-      const day = 2 * caps.writes + caps.generated
+      const day = 2 * caps.writes + caps.generated + INDEX_SAVES_PER_DAY
       assert.ok(day <= ADVANCED_OPS_PER_DAY, `${label} allows ${day} writes a day`)
+      assert.ok(day + meterWritesPerDay({ WRITE_DAILY_CAP: writes, GENERATE_DAILY_CAP: generated }) <= ADVANCED_OPS_PER_DAY, `${label}: with the meter, past 55`)
       if (/^\d+$/.test(writes ?? '')) assert.ok(caps.writes <= Number(writes), `${label} raised the changes past what was asked`)
       if (/^\d+$/.test(generated ?? '')) assert.ok(caps.generated <= Number(generated), `${label} raised the pictures past what was asked`)
     }
@@ -544,4 +555,81 @@ test('"sign out everywhere" is kept as a whole number of milliseconds, and anyth
     assert.equal((await store.readSettings()).settings.sessionsValidFrom, read, JSON.stringify(stored))
   }
   assert.equal(emptySettings().sessionsValidFrom, 0)
+})
+
+/* ---------- the meaning index's file ---------- */
+// agent-cockpit/memory-index.json: written only by the server, at most twice a UTC day, counted inside
+// the file itself (so counting costs nothing). Its own file and its own turns, like the voice meter's.
+
+test('the index may be saved twice a UTC day, counted in its own file; the day only moves forward', () => {
+  assert.deepEqual(spendIndexSave({ day: '', count: 0 }, '2026-10-11'), { day: '2026-10-11', count: 1 })
+  assert.deepEqual(spendIndexSave({ day: '2026-10-11', count: 1 }, '2026-10-11'), { day: '2026-10-11', count: 2 })
+  assert.equal(spendIndexSave({ day: '2026-10-11', count: 2 }, '2026-10-11'), null, 'a third save in a day')
+  assert.deepEqual(spendIndexSave({ day: '2026-10-10', count: 2 }, '2026-10-11'), { day: '2026-10-11', count: 1 }, 'a new day starts again')
+  assert.equal(spendIndexSave({ day: '2026-10-12', count: 2 }, '2026-10-11'), null, 'a slow clock is held to the file day')
+  assert.deepEqual(spendIndexSave({ day: '2026-10-12', count: 1 }, '2026-10-11'), { day: '2026-10-12', count: 2 })
+})
+
+test('the index file is private, saved and read back; the first save never replaces, later ones only the version read', async () => {
+  const { fake, store } = connected()
+  assert.equal(MEMORY_INDEX_PATH, 'agent-cockpit/memory-index.json')
+  assert.equal(MEMORY_INDEX_MAX_BYTES, INDEX_CAPS.fileBytes, 'the store and the index disagree on the biggest file')
+  assert.deepEqual(await store.readIndex(), { text: null, etag: null })
+  const first = await store.saveIndex((stored) => {
+    assert.equal(stored, null)
+    return '{"v":1}'
+  })
+  assert.ok(first.etag)
+  assert.equal(fake.calls.put[0].pathname, MEMORY_INDEX_PATH)
+  assert.equal(fake.calls.put[0].options.access, 'private')
+  assert.equal(fake.calls.put[0].options.allowOverwrite, false)
+  assert.equal(fake.calls.put[0].options.addRandomSuffix, false)
+  const read = await store.readIndex()
+  assert.equal(read.text, '{"v":1}')
+  await store.saveIndex((stored) => {
+    assert.equal(stored, '{"v":1}', 'a save is built on the file as it is now')
+    return '{"v":2}'
+  })
+  assert.equal(fake.calls.put[1].options.ifMatch, read.etag)
+  assert.equal(fake.files.get(MEMORY_INDEX_PATH).bytes.toString('utf8'), '{"v":2}')
+  assert.ok(fake.calls.get.at(-1).options.useCache === false, 'the read inside a save came from the cache')
+})
+
+test('a save the index declines writes nothing; a clash is tried once more; two clashes give up with a sentence', async () => {
+  const { fake, store, elsewhere } = connected()
+  await store.saveIndex(() => '{"v":1}')
+  const puts = fake.calls.put.length
+  assert.equal(await store.saveIndex(() => null), null)
+  assert.equal(fake.calls.put.length, puts, 'a declined save still wrote')
+  // Someone else saves between this save's read and its put, once: it reads again and wins.
+  let builds = 0
+  const saved = await store.saveIndex(async () => {
+    builds += 1
+    if (builds === 1) await elsewhere.saveIndex(() => '{"v":"theirs"}')
+    return `{"v":"mine-${builds}"}`
+  })
+  assert.ok(saved.etag)
+  assert.equal(builds, 2, 'a clash was not tried again')
+  assert.equal(fake.files.get(MEMORY_INDEX_PATH).bytes.toString('utf8'), '{"v":"mine-2"}')
+  // Every time: it gives up after two tries.
+  let tries = 0
+  await assert.rejects(store.saveIndex(async () => {
+    tries += 1
+    await elsewhere.saveIndex(() => `{"v":"theirs-${tries}"}`)
+    return '{"v":"mine"}'
+  }), (error) => error.status === 409 && /meaning/i.test(error.message))
+  assert.equal(tries, 2)
+})
+
+test('an index file over 8 MB is read as none, and a save that big is refused before it is written', async () => {
+  const { fake, store } = connected()
+  await fake.sdk.put(MEMORY_INDEX_PATH, 'x'.repeat(MEMORY_INDEX_MAX_BYTES + 1), { access: 'private' })
+  const read = await store.readIndex()
+  assert.equal(read.text, null)
+  assert.ok(read.etag, 'the file version is kept, so a rebuild can replace it')
+  const puts = fake.calls.put.length
+  await assert.rejects(store.saveIndex(() => 'x'.repeat(MEMORY_INDEX_MAX_BYTES + 1)), (error) => error.status === 413)
+  assert.equal(fake.calls.put.length, puts)
+  const saved = await store.saveIndex(() => '{"small":true}')
+  assert.ok(saved.etag, 'a rebuild could not replace a file too big to read')
 })

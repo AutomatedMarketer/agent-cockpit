@@ -64,10 +64,10 @@ test('one report is exactly one put, to the meter\'s own private file, and never
   assert.equal(JSON.parse(fake.files.get(SETTINGS_PATH).bytes.toString('utf8')).assistantName, 'Penny')
 })
 
-test('the meter may use only what the picture caps leave of 55 writes a day: 5 at the defaults', () => {
+test('the meter may use only what the picture caps and the meaning index leave of 55 writes a day: 5 at the defaults', () => {
   assert.equal(meterWritesPerDay({}), 5)
   assert.equal(meterWritesPerDay({ WRITE_DAILY_CAP: '25', GENERATE_DAILY_CAP: '5' }), 0)
-  assert.equal(meterWritesPerDay({ WRITE_DAILY_CAP: '10', GENERATE_DAILY_CAP: '10' }), 25)
+  assert.equal(meterWritesPerDay({ WRITE_DAILY_CAP: '10', GENERATE_DAILY_CAP: '10' }), 23)
   assert.equal(meterWritesPerDay({ WRITE_DAILY_CAP: '27', GENERATE_DAILY_CAP: '0' }), 1)
   // Caps asked for past the budget are clamped, and then nothing is left over for the meter.
   assert.equal(meterWritesPerDay({ WRITE_DAILY_CAP: '500', GENERATE_DAILY_CAP: '500' }), 0)
@@ -105,7 +105,7 @@ test('with the meter\'s writes all spent, uploads, renames and Make it still wor
   })
   assert.equal(kept.statusCode, 200, 'an upload was refused after the meter used its writes')
   // And the picture caps are counted exactly as before: the meter took none of them.
-  assert.deepEqual(kept.body.left, { writes: 18, generated: 9 })
+  assert.deepEqual(kept.body.left, { writes: 17, generated: 9 })
 })
 
 test('a report refused at the allowance costs no read that skips the cache when the cached copy already says so', async () => {

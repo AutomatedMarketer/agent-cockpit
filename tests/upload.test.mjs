@@ -50,7 +50,7 @@ test('a portrait is stored under a version the server made, and settings.json po
   assert.match(v, VERSION)
   assert.equal(type, 'image/webp')
   assert.equal(response.body.slot, 'agent-content')
-  assert.deepEqual(response.body.left, { writes: 19, generated: 10 })
+  assert.deepEqual(response.body.left, { writes: 18, generated: 10 })
 
   const path = `agent-cockpit/art/agent-content/${v}.webp`
   assert.deepEqual(fake.files.get(path).bytes, bytes, 'the bytes stored are the bytes sent')

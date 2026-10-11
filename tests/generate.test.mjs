@@ -264,7 +264,7 @@ test('with one change left, two Make it at once pay OpenAI once, and the picture
     await new Promise((resolve) => setTimeout(resolve, 20))
     return imageAnswer(webp(500))()
   })
-  const day = await dayWith(19)
+  const day = await dayWith(18)
   const made = await Promise.all([day.make(), day.make()])
   assert.deepEqual(made.map((answer) => answer.statusCode).sort(), [200, 429])
   assert.match(made.find((answer) => answer.statusCode === 429).body.error, /No changes are left today/)
@@ -275,7 +275,7 @@ test('with one change left, two Make it at once pay OpenAI once, and the picture
 
 test('the change a made picture holds cannot be spent by anything else, and is shown as used', async (t) => {
   stubOpenAI(t, imageAnswer(webp(500)))
-  const day = await dayWith(19)
+  const day = await dayWith(18)
   const made = await day.make()
   assert.equal(made.statusCode, 200)
   assert.equal((await day.left()).writes, 0, 'the held change is offered on the page')
@@ -291,7 +291,7 @@ test('a made picture that is never kept lets its change go after ten minutes', a
   // takes - and then free again, with no extra write needed to let it go.
   stubOpenAI(t, imageAnswer(webp(500)))
   let clock = Date.parse('2026-10-06T12:00:00Z')
-  const day = await dayWith(19, { clock: () => new Date(clock) })
+  const day = await dayWith(18, { clock: () => new Date(clock) })
   assert.equal((await day.make()).statusCode, 200)
   clock += 9 * 60_000
   assert.equal((await day.rename('Penny')).statusCode, 429)

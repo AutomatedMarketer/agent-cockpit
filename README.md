@@ -367,7 +367,7 @@ why **Make it** is missing.
 - **Cost:** about 1 to 2 cents a picture with the default model (`gpt-image-1-mini`, medium quality),
   per [OpenAI's price page](https://developers.openai.com/api/docs/guides/image-generation). It is
   charged to your OpenAI account
-- **Daily caps:** at most 10 pictures from words and 20 changes of any kind a day (names, uploads,
+- **Daily caps:** at most 10 pictures from words and 19 changes of any kind a day (names, uploads,
   resets). The counts start again at **midnight UTC**. You can lower them with `GENERATE_DAILY_CAP`
   and `WRITE_DAILY_CAP` (`0` switches that kind of change off). You can only raise them a little:
   they are held under the picture store's monthly limit, below
@@ -395,9 +395,11 @@ the rest of the 2,000 for retries and for you looking at the store in Vercel:
 
 - A change costs at most **2 writes** (an upload is the picture plus the settings file). A picture
   from words costs **1** (the write that counts it); storing it is then a change
-- The rule is `2 × WRITE_DAILY_CAP + GENERATE_DAILY_CAP ≤ 55`. Ask for more and the board uses less:
-  changes first, up to 27 a day, and pictures from words get whatever is left
-- The defaults, 20 changes and 10 pictures from words, are 50 a day
+- Memory search by meaning saves what it learned at most **2 times a day** (its own file, counted inside it)
+- The rule is `2 × WRITE_DAILY_CAP + GENERATE_DAILY_CAP + 2 ≤ 55`. Ask for more and the board uses less:
+  changes first, up to 26 a day, and pictures from words get whatever is left
+- The defaults, 19 changes and 10 pictures from words, are 48 a day; with meaning search's 2, 50. The
+  voice meter uses the 5 left over
 - The Blob library retries a failed write up to 10 times on its own, and a retry can count. Set
   `VERCEL_BLOB_RETRIES=2` in Vercel to keep that small
 - **The budget does not cover changes from many devices at the same moment.** Vercel may run several
@@ -688,7 +690,7 @@ has no evidence for.
 | `FISH_VOICE_ID` | The 32 letters and numbers in the voice's address on fish.audio | For Fish |
 | `FISH_MODEL` | Leave unset for Fish's free `s2.1-pro-free`. Only `s2.1-pro`, exactly, uses the paid model | No |
 | `EDIT_KEY` | A password for changing names and pictures, sent as `x-edit-key`. **Required if `PUBLIC_DASHBOARD=true`** - for changes, and for voice | If public |
-| `WRITE_DAILY_CAP` | Changes a day (names, uploads, resets). Default `20`, at most `27`. Held under [the store's free limit](#the-picture-stores-free-limit-and-why-the-caps-are-where-they-are) | No |
+| `WRITE_DAILY_CAP` | Changes a day (names, uploads, resets). Default `19`, at most `26`. Held under [the store's free limit](#the-picture-stores-free-limit-and-why-the-caps-are-where-they-are) | No |
 | `GENERATE_DAILY_CAP` | Pictures from words a day. Default `10`. Gets whatever the changes leave of the same limit | No |
 | `VERCEL_BLOB_RETRIES` | How often the Blob library retries a failed write. Its own default is `10`; set `2`, because a retry can count against the store's free limit | Recommended |
 
@@ -802,7 +804,7 @@ Locally:
 npm test
 ```
 
-1977 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+1981 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -
