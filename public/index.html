@@ -1488,12 +1488,15 @@
   .rd-card p, .rd-off-item p, .rd-card dl, .rd-card dd { margin: 0; }
   .rd-card.rd-no-go { border-color: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
   .rd-card.rd-faded { border-style: dashed; }
-  .rd-top { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .55rem; }
-  .rd-light { flex: none; width: .9rem; height: .9rem; border-radius: 50%; box-sizing: border-box; }
+  /* The lights are the wall's whole point, so they are big: 28px reads at a glance on a phone and
+     across a room (Nuno, 2026-10-11). The shapes still differ - filled, hollow ring, dot inside a
+     ring - so the state never rests on colour alone. */
+  .rd-top { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem .7rem; }
+  .rd-light { flex: none; width: 1.75rem; height: 1.75rem; border-radius: 50%; box-sizing: border-box; }
   .rd-go .rd-light { background: var(--ok); }
-  .rd-silent .rd-light { background: transparent; border: .2rem solid var(--warn); }
-  .rd-no-go .rd-light { background: var(--bad); box-shadow: 0 0 0 .15rem var(--panel), 0 0 0 .3rem var(--bad); margin: .15rem; }
-  .rd-word { font-size: .75rem; font-weight: 700; letter-spacing: .1em; }
+  .rd-silent .rd-light { background: transparent; border: .35rem solid var(--warn); }
+  .rd-no-go .rd-light { background: var(--bad); box-shadow: 0 0 0 .22rem var(--panel), 0 0 0 .45rem var(--bad); margin: .45rem; }
+  .rd-word { font-size: .875rem; font-weight: 700; letter-spacing: .1em; }
   .rd-go .rd-word { color: var(--ok); }
   .rd-silent .rd-word { color: var(--warn); }
   .rd-no-go .rd-word { color: var(--bad); }

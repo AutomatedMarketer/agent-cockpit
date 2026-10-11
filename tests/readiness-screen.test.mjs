@@ -434,7 +434,17 @@ test('the three lights differ in shape, not only in colour: a filled dot, a holl
   assert.equal(light('.rd-silent .rd-light').background, 'transparent')
   assert.match(light('.rd-silent .rd-light').border, /var\(--warn\)/)
   assert.equal(light('.rd-no-go .rd-light').background, 'var(--bad)')
-  assert.match(light('.rd-no-go .rd-light')['box-shadow'], /0 0 0 \.3rem var\(--bad\)/)
+  assert.match(light('.rd-no-go .rd-light')['box-shadow'], /0 0 0 \.45rem var\(--bad\)/)
+})
+
+test('the lights are big enough to read at a glance, on a phone and across a room', () => {
+  // Nuno, 2026-10-11: the dots should be bigger so running and not running are easy to tell
+  // apart - for him and for students. 1.75rem is 28px, the size of the lights in his reference.
+  const light = declarationsOf(rules.find((rule) => rule.selector === '.rd-light'))
+  assert.equal(light.width, '1.75rem')
+  assert.equal(light.height, '1.75rem')
+  assert.match(declarationsOf(rules.find((rule) => rule.selector === '.rd-silent .rd-light')).border, /^\.35rem solid/)
+  assert.equal(declarationsOf(rules.find((rule) => rule.selector === '.rd-word'))['font-size'], '.875rem')
 })
 
 test('the Refresh button is a real button and a thumb can hit it', async () => {
