@@ -526,10 +526,11 @@ async function memoryFindLearn() {
 /* --- on the screen ------------------------------------------------------------------------------------- */
 
 // What voice found, shown as the box's own list: the question in the box, the same hits in the same
-// order, numbered, so "open number two" opens what the list calls 2.
-function memoryShowFound(question) {
+// order, numbered, so "open number two" opens what the list calls 2. The list stays exactly what voice
+// was told until the person types: a meaning answer that arrives later does not move it under them.
+function memoryShowFound(question, found = null) {
   memoryQuery = String(question ?? '').trim().toLowerCase()
-  memoryMeaning.voice = { question: String(question ?? '').trim() }
+  memoryMeaning.voice = { question: String(question ?? '').trim(), found: found ?? memoryFind(question) }
   const box = el('memory-search')
   if (box) box.value = memoryMeaning.voice.question
   memoryDrawTree()
@@ -537,8 +538,8 @@ function memoryShowFound(question) {
 
 // The list, built from elements: a title or a heading is somebody's own words.
 function memoryFindNode() {
-  const result = memoryFind(memoryQuery)
   const voice = memoryMeaning.voice && memoryMeaning.voice.question.toLowerCase() === memoryQuery ? memoryMeaning.voice : null
+  const result = voice?.found ?? memoryFind(memoryQuery)
   const inFolder = result.hits.filter((hit) => !memorySource || memoryTopOf(hit.path) === memorySource)
   const shown = inFolder.slice(0, MEMORY_HITS_MAX)
   memoryMeaning.last = { ...result, hits: shown }
@@ -572,4 +573,48 @@ function memoryFindNode() {
     : `${plural(inFolder.length, 'page')} ${inFolder.length === 1 ? 'matches' : 'match'}${result.hits.some((hit) => hit.score > 0) ? ', best first' : ', newest first'}.`
   const heading = voice ? [readinessNode('p', { cls: 'mem-hits-voice small', text: `Found by voice: "${voice.question}"` })] : []
   return readinessNode('div', { cls: 'panel mem-hits' }, ...heading, readinessNode('p', { cls: 'mem-hits-count small muted', text: count }), ...meaningLine, ...rows)
+}
+
+/* --- voice: the same search, the same list ------------------------------------------------------------- */
+
+// How long voice waits for the meaning part before it answers with the words alone, and says so.
+const MEMORY_VOICE_WAIT_MS = 4000
+// The most of a spoken question that is searched (the board's own limit for meaning, api/memory-search.js).
+const MEMORY_VOICE_CHARS = 300
+
+// search_memory: the graph (what word search uses, and each note's day), the meaning part for at most
+// 4 s, then the one search - and Memory opened on that very list, numbered. What it returns is what
+// the voice is told about (api/_voice.js, searchMemoryAnswer), in the list's order.
+async function memoryFindForVoice(question) {
+  const words = String(question ?? '').replace(/\s+/g, ' ').trim().slice(0, MEMORY_VOICE_CHARS)
+  if (!graphState.data) await graphFetch()
+  const parts = memoryQueryParts(words, { now: memoryFindDeps.now(), timeZone: memoryFindDeps.zone(), folders: memoryFindContext().folders })
+  let late = false
+  if (parts.meaningText && memoryMeaning.on !== false) {
+    let timer = null
+    late = await Promise.race([
+      memoryAskMeaning(parts.meaningText).then(() => false),
+      new Promise((resolve) => { timer = memoryFindDeps.wait(() => resolve(true), MEMORY_VOICE_WAIT_MS) })
+    ])
+    memoryFindDeps.stop(timer)
+  }
+  const result = memoryFind(words)
+  const found = {
+    ...result,
+    hits: result.hits.slice(0, MEMORY_HITS_MAX),
+    byMeaning: result.meaning === 'done' ? true : result.meaning === 'off' ? 'off' : false,
+    late
+  }
+  memorySource = ''
+  if (location.hash.slice(1) !== 'memory') location.hash = '#memory'
+  memoryShowFound(words, found)
+  return found
+}
+
+// open_note: number N (1 to 5) of the list voice found, opened in the viewer. False for any other number.
+function memoryOpenFound(n) {
+  const hits = memoryMeaning.voice?.found?.hits ?? []
+  if (!Number.isInteger(n) || n < 1 || n > Math.min(5, hits.length)) return false
+  openFile(hits[n - 1].path)
+  return true
 }

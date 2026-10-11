@@ -1851,3 +1851,59 @@ test('Jev is not asked who when the person named the agent, and a tap can only s
     assert.deepEqual(browser.state.dispatched[0].body, { action: 'task', title: 'Draft it' }, `${tier} was sent though the card never offered it`)
   }
 })
+
+/* ---------- "find my note" in a call ---------- */
+
+const FOUND = {
+  question: 'pricing',
+  parts: { day: null, place: null, placeMissing: null, words: ['pricing'], meaningText: 'pricing' },
+  hits: [
+    { path: 'agents/sales/knowledge/offer-sheet.md', title: 'offer-sheet', folder: 'agents', day: null, why: 'in a heading: Prices', size: 900, opening: 'What we sell.', score: 0.03 },
+    { path: 'shared/business-brain.md', title: 'business-brain', folder: 'shared', day: null, why: 'close in meaning to what you asked', size: 900, opening: 'Roofing.', score: 0.02 }
+  ],
+  said: null,
+  meaning: 'done',
+  byMeaning: true
+}
+
+test('search_memory says it is searching, runs the page\'s search with the person\'s words, and answers what it found', async () => {
+  const browser = await connected({ findNotes: async () => FOUND })
+  propose(browser, 'search_memory', { query: 'my note about pricing' }, 'call_find')
+  assert.equal(browser.ui.shown.at(-1).words, 'Searching your notes…')
+  await flush()
+  assert.deepEqual(browser.state.searches, ['my note about pricing'])
+  const answer = outputOf(browser, 'call_find')
+  assert.deepEqual(answer.found.map((one) => [one.n, one.title]), [[1, 'offer-sheet'], [2, 'business-brain']])
+  assert.equal(answer.byMeaning, true)
+  assert.deepEqual(browser.state.opened, [], 'search_memory opened a screen itself: the page does')
+  assert.equal(browser.state.channel.sent.at(-1).type, 'response.create')
+})
+
+test('a query longer than 300 characters is cut before the page searches it', async () => {
+  const browser = await connected({ findNotes: async () => FOUND })
+  propose(browser, 'search_memory', { query: 'x'.repeat(400) }, 'call_find')
+  await flush()
+  assert.equal(browser.state.searches[0].length, 300)
+})
+
+test('open_note opens number N on the page and tells the model which, never opening a screen by a title', async () => {
+  const browser = await connected({ findNotes: async () => FOUND })
+  propose(browser, 'search_memory', { query: 'pricing' }, 'call_find')
+  await flush()
+  propose(browser, 'open_note', { n: 2 }, 'call_open')
+  await flush()
+  assert.deepEqual(browser.state.notesOpened, [2])
+  assert.deepEqual(outputOf(browser, 'call_open'), { opened: 'business-brain', others: [{ n: 1, title: 'offer-sheet' }] })
+  assert.deepEqual(browser.state.opened, [])
+  propose(browser, 'open_note', { n: 6 }, 'call_six')
+  await flush()
+  assert.match(outputOf(browser, 'call_six').error, /no note with that number/)
+  assert.deepEqual(browser.state.notesOpened, [2], 'a number the search did not find was opened')
+})
+
+test('a search the page could not run is said, never invented', async () => {
+  const browser = await connected({ findNotes: async () => { throw new Error('offline') } })
+  propose(browser, 'search_memory', { query: 'pricing' }, 'call_find')
+  await flush()
+  assert.match(outputOf(browser, 'call_find').error, /could not run/)
+})

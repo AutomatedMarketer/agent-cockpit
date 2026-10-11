@@ -122,10 +122,10 @@ test('the Fish model is the free one unless FISH_MODEL says exactly the paid one
 
 /* ---------- the session OpenAI is asked for ---------- */
 
-test('the session has the six read-only tools, and job_status - nothing that changes anything while orders are off', () => {
+test('the session has the six read-only tools, job_status, and finding and opening a note - nothing that changes anything while orders are off', () => {
   const session = sessionFor(voiceConfig(ON), 'Penny')
   const names = session.tools.map((tool) => tool.name)
-  assert.deepEqual(names, ['open_screen', 'team_status', 'whats_due', 'task_board', 'usage', 'connections_status', 'job_status'])
+  assert.deepEqual(names, ['open_screen', 'team_status', 'whats_due', 'task_board', 'usage', 'connections_status', 'job_status', 'search_memory', 'open_note'])
   assert.deepEqual(VOICE_TOOL_NAMES, names.slice(0, 6))
   for (const tool of session.tools) {
     assert.equal(tool.type, 'function')

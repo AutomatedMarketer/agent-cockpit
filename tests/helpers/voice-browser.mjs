@@ -28,7 +28,7 @@ export async function page(brand = brandAnswer({ voice: VOICE_ON })) {
 // A browser that does what the page asks and writes down every step.
 // `motion` is a device that has not asked for less motion: the orb's glow then follows the reply's
 // loudness, which `state.loudness` sets (0 to 127 either side of silence) and `frame()` moves on.
-export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false, finePointer = false, headphones = false, motion = false, debug = false, dispatch = null, keyHeld = false, data = null, recheck = null, routeTask = null } = {}) {
+export function fakeBrowser({ micError = null, answer = {}, refusal = null, cancelOnBargeIn = false, prices = PRICES, holdDecode = false, finePointer = false, headphones = false, motion = false, debug = false, dispatch = null, keyHeld = false, data = null, recheck = null, routeTask = null, findNotes = null } = {}) {
   const log = []
   const timers = new Map()
   let nextTimer = 1
@@ -36,7 +36,7 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
   const stream = { getTracks: () => tracks, getAudioTracks: () => tracks }
   const audio = { srcObject: undefined, removed: false, remove() { this.removed = true } }
   // `decodes` holds a decode the test finishes itself, when holdDecode is on.
-  const state = { pc: null, channel: null, context: null, constraints: null, saved: [], ended: [], opened: [], calls: [], decodes: [], loudness: 0, dispatched: [], orders: [], rechecks: 0, routed: [] }
+  const state = { pc: null, channel: null, context: null, constraints: null, saved: [], ended: [], opened: [], calls: [], decodes: [], loudness: 0, dispatched: [], orders: [], rechecks: 0, routed: [], searches: [], notesOpened: [], lastFound: null }
   const frames = new Map()
   let nextFrame = 1
   const ticket = answer.ticket ?? ticketFor(answer.mouth ?? 'openai')
@@ -167,6 +167,17 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     recheck: () => {
       state.rechecks += 1
       return recheck ? recheck() : Promise.resolve(true)
+    },
+    // Memory's one search, as the page runs it for search_memory: answered by `findNotes`, or nothing found.
+    findNotes: async (query) => {
+      state.searches.push(query)
+      state.lastFound = findNotes ? await findNotes(query) : null
+      return state.lastFound
+    },
+    lastFound: () => state.lastFound,
+    openNote: (n) => {
+      state.notesOpened.push(n)
+      return true
     },
     requestAnimationFrame: (fn) => { const id = nextFrame++; frames.set(id, fn); return id },
     cancelAnimationFrame: (id) => { frames.delete(id) }

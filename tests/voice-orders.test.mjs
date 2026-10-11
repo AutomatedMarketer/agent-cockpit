@@ -139,7 +139,7 @@ const ON = { OPENAI_API_KEY: OPENAI_KEY }
 const both = KEYED({ 'task-intake': LINK(1), 'morning-intel': LINK(2), 'gone-cold': LINK(3) })
 const session = (fire, extra = {}, options = {}) => sessionFor(voiceConfig({ ...ON, ...extra }), 'Penny', { orders: ordersConfig(fire), ...options })
 const toolNames = (built) => built.tools.map((tool) => tool.name)
-const READ_ONLY = ['open_screen', 'team_status', 'whats_due', 'task_board', 'usage', 'connections_status', 'job_status']
+const READ_ONLY = ['open_screen', 'team_status', 'whats_due', 'task_board', 'usage', 'connections_status', 'job_status', 'search_memory', 'open_note']
 
 test('the order tools are offered exactly as far as fire is set up: add_task with task-intake, run_job with the jobs that have links', () => {
   assert.deepEqual(toolNames(session({})), READ_ONLY)

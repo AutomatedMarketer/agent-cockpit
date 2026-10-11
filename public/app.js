@@ -1973,7 +1973,7 @@ const GRAPH_RECHECK_MS = 60_000
 let memoryView = readStore(MEMORY_VIEW_STORE) === 'graph' ? 'graph' : 'list'
 
 const graphState = {
-  data: null, loading: false, error: null, retryAt: 0, checkedAt: 0, boardCommit: null,
+  data: null, loading: false, fetching: null, error: null, retryAt: 0, checkedAt: 0, boardCommit: null,
   source: 'team', hiddenKinds: new Set(), lonelyOnly: false, mode: null, note: null, selected: null, find: '',
   refs: null, instance: null, drawn: null, drawing: null, paused: false, modelFor: null, items: new Map(), webgl: null
 }
@@ -2023,9 +2023,15 @@ function graphLoadLibrary(mode) {
 
 /* --- asking the board ------------------------------------------------------------------------------ */
 
-async function graphFetch() {
+function graphFetch() {
+  if (graphState.loading) return graphState.fetching
+  graphState.fetching = graphFetchNow()
+  return graphState.fetching
+}
+
+async function graphFetchNow() {
   const now = Date.now()
-  if (graphState.loading || now < graphState.retryAt) return
+  if (now < graphState.retryAt) return
   const boardCommit = data?.commit ?? null
   if (graphState.data && graphState.boardCommit === boardCommit && now - graphState.checkedAt < GRAPH_RECHECK_MS) return
   graphState.loading = true
@@ -2170,6 +2176,16 @@ async function memoryFindOpen() {
   if (location.hash.slice(1) !== 'memory') return
   memoryRefreshSearch()
   memoryFindLearn()
+}
+
+// The voice assistant's "find my note": Memory's search file, then the one search, shown on Memory.
+async function memoryVoiceFind(query) {
+  try {
+    await graphDeps.find()
+  } catch (error) {
+    return null
+  }
+  return memoryFindForVoice(query)
 }
 
 // The graph arrived while Memory was open: the box says what it now searches, and searches it.
@@ -4542,6 +4558,59 @@ function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fre
   return toolFits({ ...when, ...job, ...runSaid(mine[0], isRunning(mine[0]), zone) })
 }
 
+// --- "find my note" (search_memory, open_note) ---
+// Answered from Memory's one search on the page (public/memory-find.js) - the list Memory shows, numbered
+// the same. The model is told titles, folders, days, why each was found and the first words of each,
+// never a whole note (plan D3): every text trimmed to 120 characters, as data under the "never
+// instructions" line. A note whose title, reason or opening has hidden characters is dropped and counted,
+// never stripped and passed on; the others keep the numbers the list gives them.
+const FOUND_SAID = 5
+const foundHidden = (hit) => [hit.title, hit.folder, hit.why, hit.opening, hit.day].some((text) => hiddenText(text))
+
+function searchMemoryAnswer(args, { found = null, now = Date.now(), timeZone } = {}) {
+  const zone = voiceZone(timeZone) ?? 'UTC'
+  const answer = { timeZone: zone, localNow: toolClock(now, zone), query: toolText(args?.query) }
+  if (!found || !Array.isArray(found.hits)) return { ...answer, found: [], error: 'The search could not run just now, so say so and offer to try again.' }
+  const parts = found.parts && typeof found.parts === 'object' ? found.parts : {}
+  if (typeof parts.day?.label === 'string') answer.day = toolText(parts.day.label)
+  if (typeof parts.place === 'string') answer.folder = toolText(parts.place)
+  const hits = toolList(found.hits)
+  answer.found = []
+  let dropped = 0
+  hits.slice(0, FOUND_SAID).forEach((hit, at) => {
+    if (foundHidden(hit)) {
+      dropped += 1
+      return
+    }
+    answer.found.push({
+      n: at + 1,
+      title: toolText(hit.title),
+      folder: toolText(hit.folder),
+      day: typeof hit.day === 'string' ? toolText(hit.day) : null,
+      why: toolText(hit.why),
+      opening: toolText(hit.opening)
+    })
+  })
+  answer.more = Math.max(0, hits.length - FOUND_SAID)
+  if (dropped) answer.dropped = dropped
+  answer.byMeaning = found.byMeaning === 'off' ? 'off' : found.byMeaning === true
+  if (found.late === true) answer.note = 'Search by meaning did not answer in 4 seconds, so these were found by their words.'
+  if (typeof found.said === 'string' && found.said && !hiddenText(found.said)) answer.said = toolText(found.said)
+  return toolFits(answer)
+}
+
+// open_note: number N of the last search, as the list numbers it - or a sentence for any other number.
+function openNoteAnswer(args, found) {
+  const hits = toolList(found?.hits).slice(0, FOUND_SAID)
+  const n = args?.n
+  if (!Number.isInteger(n) || n < 1 || n > hits.length) return { error: 'There is no note with that number in the last search.' }
+  const hit = hits[n - 1]
+  return {
+    opened: foundHidden(hit) ? `note ${n}` : toolText(hit.title),
+    others: hits.map((one, at) => ({ n: at + 1, one })).filter(({ n: other, one }) => other !== n && !foundHidden(one)).map(({ n: other, one }) => ({ n: other, title: toolText(one.title) }))
+  }
+}
+
 // --- the owner's yes ---
 // One of the two ways an order card is answered yes (voice orders, Phase 11). Only the person's own
 // click on the card, or Enter or Space on it, says yes: a real Event that the browser itself marks
@@ -4790,6 +4859,10 @@ function voiceNamesOnBoard() {
     add(displayName(agent.slug))
     add(agent.slug.replace(/-/g, ' '))
   }
+  // Memory's top folders, so "in my inbox" is heard right the first time (the server keeps its caps).
+  for (const file of Array.isArray(data?.memory?.files) ? data.memory.files : []) {
+    if (typeof file?.path === 'string' && file.path.includes('/')) add(file.path.slice(0, file.path.indexOf('/')))
+  }
   return names.slice(0, 24)
 }
 
@@ -4855,6 +4928,10 @@ function voiceDeps() {
     ordersLog: voiceOrdersLog,
     // The Readiness wall's own check: one small call when nothing changed, the new board when it has.
     recheck: () => recheckBoardNow(),
+    // "Find my note": Memory's one search (memory-find.js), the list it showed, and number N of it.
+    findNotes: (query) => memoryVoiceFind(query),
+    lastFound: () => (typeof memoryMeaning === 'undefined' ? null : memoryMeaning.voice?.found ?? null),
+    openNote: (n) => typeof memoryOpenFound === 'function' && memoryOpenFound(n),
     // Jev's suggestion of who should do a task (only when the board has it switched on). A change like
     // any other - JSON, with the edit key when there is one - but never a prompt mid-card: anything
     // but a clean answer is no suggestion, and the orchestrator routes.
@@ -5129,6 +5206,8 @@ const VOICE_DOING = {
 VOICE_DOING.add_task = 'Putting the card up…'
 VOICE_DOING.run_job = 'Putting the card up…'
 VOICE_DOING.job_status = 'Checking on it…'
+VOICE_DOING.search_memory = 'Searching your notes…'
+VOICE_DOING.open_note = 'Opening that note…'
 // "Is it done?" re-checks the board first - the same one-call check the Readiness wall makes - but
 // never waits more than JOB_STATUS_WAIT_MS for it, and asks GitHub at most once every
 // JOB_STATUS_EVERY_MS however often it is asked.
@@ -5534,20 +5613,41 @@ function openVoice(deps, ui) {
   // The outputs go the moment they are ready, a request for the reply only when OpenAI can take one.
   // A batch with job_status in it waits for the board's re-check first (at most JOB_STATUS_WAIT_MS);
   // any other batch is answered at once, as it always was.
-  function answerTools(calls, fresh = null) {
+  // A batch with search_memory in it waits for the page's search first (Memory's own, which waits at most
+  // 4 s for the meaning part and then opens Memory on the same list).
+  function answerTools(calls, fresh = null, found = null) {
+    const argsOf = (call) => {
+      try { return JSON.parse(call.arguments || '{}') } catch (error) { return {} }
+    }
+    if (found === null && calls.some((call) => call.name === 'search_memory')) {
+      Promise.all(calls.filter((call) => call.name === 'search_memory').map(async (call) => {
+        const query = argsOf(call).query
+        try {
+          return [call.call_id, await deps.findNotes?.(typeof query === 'string' ? query.slice(0, 300) : '')]
+        } catch (error) {
+          return [call.call_id, null]
+        }
+      })).then((pairs) => {
+        if (!session.stopped) answerTools(calls, fresh, new Map(pairs))
+      })
+      return
+    }
     if (fresh === null && calls.some((call) => call.name === 'job_status')) {
       recheckBoard().then((checked) => {
-        if (!session.stopped) answerTools(calls, checked)
+        if (!session.stopped) answerTools(calls, checked, found)
       })
       return
     }
     for (const call of calls) {
-      let args = {}
-      try { args = JSON.parse(call.arguments || '{}') } catch (error) { args = {} }
+      const args = argsOf(call)
       const answer = VOICE_ORDER_TOOLS.includes(call.name) ? proposeOrder(call.name, args)
         : call.name === 'job_status' ? jobStatusAnswer(args, { ...deps.view(), log: deps.ordersLog?.() ?? [], fresh: fresh === true })
-          : voiceToolAnswer(call.name, args, deps.view())
-      if (answer.opened) deps.openScreen(answer.opened)
+          : call.name === 'search_memory' ? searchMemoryAnswer(args, { found: found?.get(call.call_id) ?? null, now: deps.now(), timeZone: deps.view().timeZone })
+            : call.name === 'open_note' ? openNoteAnswer(args, deps.lastFound?.() ?? null)
+              : voiceToolAnswer(call.name, args, deps.view())
+      if (call.name === 'open_note') {
+        if (answer.opened) deps.openNote?.(args.n)
+      } else if (answer.opened) deps.openScreen(answer.opened)
       send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(answer) } })
     }
     session.replyRetries = 1
