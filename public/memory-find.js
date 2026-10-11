@@ -575,9 +575,10 @@ function memoryFindNode() {
     row.dataset.path = hit.path
     return row
   })
+  const ranked = result.hits.some((hit) => hit.score > 0)
   const count = shown.length < inFolder.length
-    ? `The best ${shown.length} of ${inFolder.length} pages that match, best first.`
-    : `${plural(inFolder.length, 'page')} ${inFolder.length === 1 ? 'matches' : 'match'}${result.hits.some((hit) => hit.score > 0) ? ', best first' : ', newest first'}.`
+    ? `The ${ranked ? 'best' : 'newest'} ${shown.length} of ${inFolder.length} pages that match, ${ranked ? 'best' : 'newest'} first.`
+    : `${plural(inFolder.length, 'page')} ${inFolder.length === 1 ? 'matches' : 'match'}, ${ranked ? 'best' : 'newest'} first.`
   const heading = voice ? [readinessNode('p', { cls: 'mem-hits-voice small', text: `Found by voice: "${voice.question}"` })] : []
   return readinessNode('div', { cls: 'panel mem-hits' }, ...heading, readinessNode('p', { cls: 'mem-hits-count small muted', text: count }), ...meaningLine, ...rows)
 }
@@ -608,7 +609,6 @@ async function memoryFindForVoice(question) {
   const result = memoryFind(words)
   const found = {
     ...result,
-    hits: result.hits.slice(0, MEMORY_HITS_MAX),
     byMeaning: result.meaning === 'done' ? true : result.meaning === 'off' ? 'off' : false,
     late
   }

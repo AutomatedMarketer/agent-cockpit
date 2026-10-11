@@ -90,14 +90,15 @@ const COMMIT = 'e'.repeat(40)
 const team = { ...buildTeamGraph(Object.entries(NOTES).map(([path, text]) => ({ path, text }))), hidden: 0, more: 0, unread: 0 }
 const reply = (status, body) => ({ ok: status < 300, status, headers: { get: () => null }, json: async () => body })
 
-async function boot({ search = () => reply(200, { on: true, ready: true, commit: COMMIT, indexed: 5, hits: [] }) } = {}) {
+async function boot({ search = () => reply(200, { on: true, ready: true, commit: COMMIT, indexed: 5, hits: [] }), notes = NOTES } = {}) {
+  const team = { ...buildTeamGraph(Object.entries(notes).map(([path, text]) => ({ path, text }))), hidden: 0, more: 0, unread: 0 }
   const asked = { search: 0, files: [], graph: 0 }
   const timers = []
   const page = loadPage({
     fetch: async (url) => {
       if (url.startsWith('/api/graph')) asked.graph += 1
       if (url.startsWith('/api/graph')) return reply(200, { commit: COMMIT, team, vaults: { status: 'none', why: 'none', read: 0, skipped: 0, unreadable: 0, notShown: 0, computers: [] }, generatedAt: 'x' })
-      if (url.startsWith('/api/state')) return reply(200, { ...basePayload(), commit: COMMIT, memory: { files: Object.keys(NOTES).map((path) => ({ path, size: 900 })), indexes: [], truncated: false } })
+      if (url.startsWith('/api/state')) return reply(200, { ...basePayload(), commit: COMMIT, memory: { files: Object.keys(notes).map((path) => ({ path, size: 900 })), indexes: [], truncated: false } })
       if (url === '/api/memory-search') {
         asked.search += 1
         return search()
@@ -109,7 +110,7 @@ async function boot({ search = () => reply(200, { on: true, ready: true, commit:
       return reply(200, {})
     },
     hash: '#today',
-    expose: ['memoryFindForVoice', 'memoryOpenFound', 'memoryMeaning', 'memoryFindDeps', 'voiceDeps', 'voiceNamesOnBoard'],
+    expose: ['memoryFindForVoice', 'memoryFind', 'memoryOpenFound', 'memoryMeaning', 'memoryFindDeps', 'voiceDeps', 'voiceNamesOnBoard'],
     after: `Object.assign(memoryFindDeps, { now: () => ${NOW}, zone: () => 'Europe/London', wait: (fn, ms) => { given.timers.push({ fn, ms }); return given.timers.length }, stop: () => {} })`,
     given: { timers }
   })
@@ -136,6 +137,8 @@ test('the tool\'s order is the Memory list\'s order: the same question, the same
   assert.deepEqual(answer.found.map((one) => one.title), ['evening-notes', 'morning-intel', 'brief'])
   assert.deepEqual(answer.found.map((one) => one.n), [1, 2, 3])
   assert.equal(page.node('memory-search').value, 'something in my inbox')
+  // Every hit is kept, so the list's count and the voice's 'more' are the whole of it, not the first 50.
+  assert.equal(result.hits.length, page.exposed.memoryFind('something in my inbox').hits.length)
 })
 
 test('voice waits at most 4 s for the meaning part; then words only, said so - and the list stays what voice said', async () => {
@@ -199,4 +202,15 @@ test('a search by voice while the graph is still on its way waits for that read,
   assert.equal(asked.graph - before, 1, 'the graph was read twice')
   assert.equal(first.hits.length, 3)
   assert.equal(again.hits.length, 3, 'the second search did not wait for the graph')
+})
+
+test('a search with more than 50 hits keeps them all: the list shows the newest 50 of 55, and voice says how many more', async () => {
+  const many = Object.fromEntries(Array.from({ length: 55 }, (_, at) => [`inbox/2026-10-11/note-${String(at).padStart(2, '0')}.md`, `# Note ${at}\n`]))
+  const { page } = await boot({ notes: many })
+  const result = await page.exposed.memoryFindForVoice('in my inbox')
+  assert.equal(result.hits.length, 55)
+  const tree = page.node('memory-tree')
+  assert.equal(withClass(tree, 'mem-hit').length, 50)
+  assert.equal(withClass(tree, 'mem-hits-count')[0].textContent, 'The newest 50 of 55 pages that match, newest first.')
+  assert.equal(searchMemoryAnswer({ query: 'in my inbox' }, { found: result, now: NOW }).more, 50)
 })

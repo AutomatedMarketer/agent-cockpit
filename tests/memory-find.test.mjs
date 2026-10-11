@@ -314,3 +314,11 @@ test('when the board says search by meaning is off, the box never asks, and says
   assert.match(textOf(page.node('memory-tree')), /Search by meaning is off on this board/)
   assert.deepEqual(pathsOf(page), ['shared/writing-rules.md'])
 })
+
+test('a numbered row keeps its words beside the number: the words take the row\'s free space', async () => {
+  const { readFileSync } = await import('node:fs')
+  const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+  // .file spreads its children apart; with a number as a third child, words without flex: 1 sat mid-row.
+  assert.match(html, /\.mem-hit-words \{[^}]*\bflex: 1;/)
+  assert.match(html, /\.mem-hit-n \{[^}]*\bflex: none;/)
+})
