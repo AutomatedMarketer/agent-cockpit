@@ -770,12 +770,19 @@ export default async function handler(request, response) {
     return
   }
 
-  const trigger = triggerFor(triggers, slug)
+  // A run fires the job's own routine. A pause cannot: firing a routine always starts its saved
+  // prompt, and a job's prompt is to do the job, so a pause sent there would run it. A pause goes to
+  // task-intake instead, like Arm, whose prompt acts on the board's instruction.
+  const pausing = action === 'pause'
+  const label = pausing ? TASK_INTAKE_SLUG : slug
+  const trigger = triggerFor(triggers, label)
   if (!trigger) {
     response.status(404).json({
-      error:
-        `No trigger is registered for "${slug}". Add its routine's URL and token to the FIRE_TRIGGERS ` +
-        'env var in the hosting environment and redeploy.'
+      error: pausing
+        ? `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot pause jobs. ` +
+          'Add its URL and token to the FIRE_TRIGGERS env var and redeploy.'
+        : `No trigger is registered for "${slug}". Add its routine's URL and token to the FIRE_TRIGGERS ` +
+          'env var in the hosting environment and redeploy.'
     })
     return
   }
@@ -814,7 +821,7 @@ export default async function handler(request, response) {
     return
   }
 
-  const result = await dispatchToTrigger(trigger, dispatchPayload(slug, action), slug, response)
+  const result = await dispatchToTrigger(trigger, dispatchPayload(slug, action), label, response)
   if (result === null) return
 
   const sessionUrl = sessionUrlFrom(result)
@@ -825,10 +832,6 @@ export default async function handler(request, response) {
   )
 }
 
-// Dispatch, server-side. Errors come back as plain words — never the trigger URL, never
-// anything the trigger said (its body is not ours to relay), never user text. The label in
-// the message is a validated slug ("monday-brief", "task-intake"), nothing user-typed.
-// Returns the trigger's parsed JSON (or {}), or null after writing the error response.
 // Retry-After as whole seconds from now, from either form the header takes (seconds, or an HTTP
 // date), or null when it is missing, malformed or already past.
 export function retryAfterSeconds(header, now = Date.now()) {
@@ -860,6 +863,10 @@ function routineRefusalWords(label, status) {
   return `The trigger for "${label}" rejected the dispatch (status ${status}).`
 }
 
+// Dispatch, server-side. Errors come back as plain words — never the trigger URL, never
+// anything the trigger said (its body is not ours to relay), never user text. The label in
+// the message is a validated slug ("monday-brief", "task-intake"), nothing user-typed.
+// Returns the trigger's parsed JSON (or {}), or null after writing the error response.
 async function dispatchToTrigger(trigger, payload, label, response) {
   const text = fireText(payload)
   if (text === null) {

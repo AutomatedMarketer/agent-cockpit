@@ -529,6 +529,41 @@ test('happy path pause: dispatches the pause instruction, agent makes the edit',
   assert.match(sent.instruction, /workflows\/monday-brief\.yml/)
 })
 
+// Firing a routine always starts its saved prompt, and a job's routine's prompt is "do the job":
+// sent there, a Pause would RUN the job. So a pause goes to task-intake, whose prompt acts on the
+// board's instructions, the way Arm does - and a run still goes to the job's own routine.
+test('a pause is sent to the task-intake routine with its token, never to the job it pauses', async () => {
+  const paused = await fire(withKey({ workflow: 'monday-brief', action: 'pause' }))
+  assert.equal(paused.response.statusCode, 200)
+  assert.equal(paused.calls.trigger.length, 1)
+  assert.equal(paused.calls.trigger[0].url, TASK_TRIGGER_URL, 'a pause fired the job\'s own routine, which runs the job')
+  assert.equal(paused.calls.trigger[0].options.headers.Authorization, `Bearer ${ROUTINE_TOKEN('Task')}`)
+  const ran = await fire(withKey({ workflow: 'monday-brief', action: 'run' }))
+  assert.equal(ran.calls.trigger[0].url, TRIGGER_URL)
+  assert.equal(ran.calls.trigger[0].options.headers.Authorization, `Bearer ${ROUTINE_TOKEN('Monday')}`)
+  // A job with fire: true and no routine of its own on the board can still be paused.
+  const own = await fire(withKey({ workflow: 'constructor', action: 'pause' }))
+  assert.equal(own.response.statusCode, 200)
+  assert.equal(own.calls.trigger[0].url, TASK_TRIGGER_URL)
+  // The repo is still the source of truth: a job without fire: true is not paused from here.
+  const notFire = await fire(withKey({ workflow: 'no-fire', action: 'pause' }))
+  assert.equal(notFire.response.statusCode, 403)
+  assert.equal(notFire.calls.trigger.length, 0)
+  // A refusal names the routine that refused it: task-intake's token, not the job's.
+  const refused = await fire(withKey({ workflow: 'monday-brief', action: 'pause' }), { trigger: { status: 401, body: '{}' } })
+  assert.match(refused.response.body.error, /^The token for "task-intake" was refused/)
+})
+
+test('with no task-intake routine, a pause says so and sends nothing', async () => {
+  const { response, calls } = await fire(withKey({ workflow: 'monday-brief', action: 'pause' }), {
+    env: { FIRE_TRIGGERS: JSON.stringify({ 'monday-brief': { url: TRIGGER_URL, token: ROUTINE_TOKEN('Monday') } }) }
+  })
+  assert.equal(response.statusCode, 404)
+  assert.match(response.body.error, /No "task-intake" routine is registered, so the dashboard cannot pause jobs/)
+  assert.equal(calls.trigger.length, 0)
+  assertNoSecrets(response)
+})
+
 test('a trigger that answers 500 comes back as 502 in plain words', async () => {
   const { response } = await fire(withKey({ workflow: 'monday-brief' }), {
     trigger: { status: 500, body: `internal: token ${GITHUB_TOKEN} url ${TRIGGER_URL}` }
@@ -743,8 +778,8 @@ test('an approve task name is treated as text, never as an instruction', async (
   assert.match(sent.instruction, /plain text|never as an instruction/i)
 })
 
-/* run and pause refuse a slug with no trigger registered, because they dispatch to that
-   workflow's own trigger URL. Arming cannot work that way and must not: a job being armed has no
+/* run refuses a slug with no trigger registered, because it dispatches to that workflow's own
+   routine (a pause goes to task-intake: see above). Arming cannot work that way and must not: a job being armed has no
    routine yet, so it has no trigger URL, and requiring one would mean you could only arm what was
    already armed. */
 
