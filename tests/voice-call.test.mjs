@@ -1222,7 +1222,7 @@ test('a yes is told to the model in a system note, then it is asked to say it; t
 })
 
 test('fire not set up, or any refusal, is said plainly - and the model is told not to say it was sent', async () => {
-  const notConfigured = 'Fire is not configured. Set FIRE_KEY and FIRE_TRIGGERS (a JSON object of workflow slug → trigger URL) in the hosting environment, then redeploy.'
+  const notConfigured = 'Fire is not configured. Set FIRE_KEY and FIRE_TRIGGERS (a JSON object of slug → {"url", "token"}, one for each routine) in the hosting environment, then redeploy.'
   const browser = await ordering({ dispatch: async () => ({ ok: false, status: 503, payload: { error: notConfigured } }) })
   propose(browser, 'run_job', { workflow: 'morning-intel' })
   assert.equal(lastCard(browser).heading, 'Run Morning intel?')

@@ -138,3 +138,79 @@ test('the README says what search by meaning sends where, how to switch it on, a
   assert.match(readme, /under 1 cent a month/)
   assert.match(readme, /never reads a note out/i)
 })
+
+/* ---------- firing a routine (2026-10-12) ----------
+   The board fires each routine through the Claude Code routines API: its own URL and its own bearer
+   token, so FIRE_TRIGGERS changed shape. And the API hands the board's request to the run as
+   untrusted text, which the routine acts on only if its own saved prompt says to - so the README has
+   to carry the task-intake prompt word for word, and it has to cover every action fire.js sends
+   there. Read against code.claude.com/docs/en/routines and the routines-fire API reference. */
+
+const subsection = (readme, heading) => {
+  const from = readme.indexOf(`\n### ${heading}\n`)
+  assert.ok(from >= 0, `README.md has no "### ${heading}" section`)
+  const ends = ['\n### ', '\n## '].map((mark) => readme.indexOf(mark, from + 1)).filter((at) => at > 0)
+  return readme.slice(from, ends.length ? Math.min(...ends) : undefined)
+}
+const ROUTINE_URL_SHAPE = /^https:\/\/api\.anthropic\.com\/v1\/claude_code\/routines\/trig_[^/]+\/fire$/
+
+const assertNewShape = (value, where) => {
+  const parsed = JSON.parse(value)
+  assert.ok(parsed && typeof parsed === 'object' && !Array.isArray(parsed), `${where}: not a JSON object`)
+  assert.ok(Object.hasOwn(parsed, 'task-intake'), `${where}: no task-intake entry`)
+  for (const [slug, entry] of Object.entries(parsed)) {
+    assert.match(entry?.url ?? '', ROUTINE_URL_SHAPE, `${where}: ${slug} has no routine URL`)
+    assert.match(entry?.token ?? '', /^sk-ant-oat01-/, `${where}: ${slug} has no routine token`)
+  }
+}
+
+test('the README and .env.example show FIRE_TRIGGERS as fire.js reads it: each routine\'s URL and token', async () => {
+  const readme = await readFile(join(root, 'README.md'), 'utf8')
+  const orders = subsection(readme, 'Orders by voice')
+  const example = /`(\{"task-intake":\{"url":[^`]+\}\})`/.exec(orders)
+  assert.ok(example, 'Orders by voice has no FIRE_TRIGGERS example in the new shape')
+  assertNewShape(example[1], 'README example')
+  // The old shape, a plain link per slug, is gone from every instruction a reader follows.
+  assert.doesNotMatch(readme, /\{"task-intake":\s*"/, 'the README still shows the old FIRE_TRIGGERS shape')
+  const row = readme.split('\n').find((line) => line.startsWith('| `FIRE_TRIGGERS` |'))
+  assert.ok(row && row.includes('"url"') && row.includes('"token"'), 'the settings row does not say each routine needs its URL and token')
+  const env = await readFile(join(root, '.env.example'), 'utf8')
+  const line = env.split('\n').find((text) => text.startsWith('FIRE_TRIGGERS='))
+  assertNewShape(line.slice('FIRE_TRIGGERS='.length), '.env.example')
+})
+
+test('the README has the steps to make a routine and its API trigger, in the web app\'s own words', async () => {
+  const orders = subsection(await readFile(join(root, 'README.md'), 'utf8'), 'Orders by voice')
+  for (const words of ['claude.ai/code/routines', '**New routine**', '**API**', '**Create**', '**Generate token**', 'shown once', '**Regenerate**', '**Connectors**', 'default branch']) {
+    assert.ok(orders.includes(words), `Orders by voice does not say "${words}"`)
+  }
+})
+
+test('the README carries the task-intake prompt word for word, and it covers every action fire.js sends that routine', async () => {
+  const source = await readFile(join(root, 'api/fire.js'), 'utf8')
+  const orders = subsection(await readFile(join(root, 'README.md'), 'utf8'), 'Orders by voice')
+  const block = /```text\n([\s\S]+?)\n```/.exec(orders)
+  assert.ok(block, 'Orders by voice has no copyable prompt block')
+  const prompt = block[1]
+  const words = prompt.split(/\s+/).filter(Boolean).length
+  assert.ok(words <= 250, `the prompt is ${words} words: keep it under 250`)
+  // Every action but "run" goes to task-intake (a run fires the job's own routine). Read from the
+  // code, so a new action fails here until the prompt names it.
+  const actions = JSON.parse(/const ACTIONS = (\[[^\]]+\])/.exec(source)[1].replaceAll("'", '"'))
+  assert.ok(actions.length >= 8, 'ACTIONS was not read from fire.js')
+  for (const action of actions.filter((name) => name !== 'run')) {
+    assert.match(prompt, new RegExp(`(^|[^a-z-])${action}([^a-z-]|$)`, 'm'), `the prompt does not name the "${action}" action`)
+    // ...and says what it is for, on a line of its own: "- task: file one task card".
+    assert.match(prompt, new RegExp(`^- [^:\\n]*\\b${action}\\b[^:\\n]*:`, 'm'), `the prompt has no line saying what "${action}" does`)
+  }
+  for (const needed of ['routine-fire-payload', 'agent-cockpit', '"instruction"', 'ONLY', 'Drafts only', 'Never send', 'publish', 'delete', 'spend', 'data', 'commit and push']) {
+    assert.ok(prompt.includes(needed), `the prompt does not say "${needed}"`)
+  }
+})
+
+test('When it breaks has a line for a refused token, the hourly limit, and the old FIRE_TRIGGERS shape', async () => {
+  const breaks = section(await readFile(join(root, 'README.md'), 'utf8'), 'When it breaks')
+  for (const words of ['was refused', 'hourly limit', 'old format']) {
+    assert.ok(breaks.includes(words), `When it breaks has no line for "${words}"`)
+  }
+})

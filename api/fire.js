@@ -1,16 +1,16 @@
 // The buttons. Tap → agent runs in the cloud → returns a live session URL.
 //
 // This is the one endpoint that DISPATCHES. It still never writes to the repo: "run" fires
-// the workflow's registered trigger URL, "pause" fires the same trigger with an
-// instruction for the agent session to make the edit itself, and "task" fires the dedicated
-// task-intake routine with an instruction to create the card in tasks/ and commit it. The
-// dashboard reads git and dispatches through fire triggers — nothing more (spec B.2).
+// the workflow's own routine, and every other action fires the dedicated task-intake routine
+// with an instruction for its session to make the edit itself ("pause" too: firing a job's own
+// routine always runs the job). The dashboard reads git and fires Claude Code routines through
+// the routines API — nothing more (spec B.2).
 //
 // Secrets discipline, same as everywhere else in this cockpit:
 // - FIRE_KEY authorises the caller; compared constant-time; never echoed.
-// - FIRE_TRIGGERS maps workflow slug → trigger URL. Trigger URLs are secret-adjacent
-//   (anyone holding one can start a session), so they live in an env var, never the repo,
-//   and never appear in a response or error.
+// - FIRE_TRIGGERS maps slug → { url, token }: each routine's fire URL and its bearer token.
+//   Anyone holding a token can start that routine, so both live in an env var, never the repo,
+//   and never appear in a response, a log, an error or anything said to the voice model.
 // - GITHUB_TOKEN stays on the server, as in api/state.js and api/file.js.
 
 import { parseSimpleYaml } from './_yaml-lite.js'
@@ -137,8 +137,8 @@ export function dispatchPayload(slug, action) {
 
 // --- arming a job -------------------------------------------------------------------------
 //
-// Deliberately NOT down the run/pause path. Those dispatch to the workflow's own trigger URL,
-// which exists only because a routine exists. A job being armed has, by definition, no routine
+// Deliberately NOT down the run path. A run fires the workflow's own routine, which exists only
+// because a routine exists. A job being armed has, by definition, no routine
 // yet - so there is nothing of its own to dispatch to, and it goes through the general intake
 // the way task cards and approvals do.
 
@@ -558,9 +558,8 @@ export default async function handler(request, response) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot file ` +
-          'task cards. Create a routine whose prompt acts on dispatch payloads (create ' +
-          `task cards as instructed, commit, push), then add "${TASK_INTAKE_SLUG}" and its ` +
-          'trigger URL to the FIRE_TRIGGERS env var and redeploy.'
+          'task cards. Create it with the prompt in the README\'s "Orders by voice", then add ' +
+          'its URL and token to the FIRE_TRIGGERS env var and redeploy.'
       })
       return
     }
@@ -621,7 +620,7 @@ export default async function handler(request, response) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot create a ` +
-          `${action}. Add it and its trigger URL to the FIRE_TRIGGERS env var and redeploy.`
+          `${action}. Add its URL and token to the FIRE_TRIGGERS env var and redeploy.`
       })
       return
     }
@@ -661,7 +660,7 @@ export default async function handler(request, response) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot change a ` +
-          'card. Add it and its trigger URL to the FIRE_TRIGGERS env var and redeploy.'
+          'card. Add its URL and token to the FIRE_TRIGGERS env var and redeploy.'
       })
       return
     }
@@ -712,7 +711,7 @@ export default async function handler(request, response) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot arm jobs. ` +
-          'Add it and its trigger URL to the FIRE_TRIGGERS env var and redeploy.'
+          'Add its URL and token to the FIRE_TRIGGERS env var and redeploy.'
       })
       return
     }
@@ -743,7 +742,7 @@ export default async function handler(request, response) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot record ` +
-          'approvals. Add it and its trigger URL to the FIRE_TRIGGERS env var and redeploy.'
+          'approvals. Add its URL and token to the FIRE_TRIGGERS env var and redeploy.'
       })
       return
     }
@@ -844,7 +843,7 @@ export function retryAfterSeconds(header, now = Date.now()) {
 function routineLimitWords(label, wait) {
   const minutes = wait === null ? 0 : Math.max(1, Math.round(wait / 60))
   const when = minutes ? `Try again in about ${minutes} minute${minutes === 1 ? '' : 's'}.` : 'Try again later.'
-  return `The routine "${label}" has reached its hourly limit (30 an hour for each routine, 100 for the account, Run now in claude.ai included). Nothing was started. ${when}`
+  return `The routine "${label}" has reached its hourly limit (30 an hour for each routine, counting Run now in claude.ai, and 100 an hour for the account). Nothing was started. ${when}`
 }
 
 function routineRefusalWords(label, status) {

@@ -1199,7 +1199,7 @@ test('the hourly limit says when to try again, from Retry-After, and is never re
   const seconds = await fire(withKey({ action: 'task', title: 'Chase the invoice' }), { trigger: { status: 429, body: VENDOR, headers: { 'Retry-After': '720' } } })
   assert.equal(seconds.response.statusCode, 429)
   assert.match(seconds.response.body.error, /"task-intake" has reached its hourly limit/)
-  assert.match(seconds.response.body.error, /30 an hour for each routine, 100 for the account/)
+  assert.match(seconds.response.body.error, /30 an hour for each routine, counting Run now in claude\.ai, and 100 an hour for the account/)
   assert.match(seconds.response.body.error, /Try again in about 12 minutes\./)
   assert.equal(seconds.response.headers['Retry-After'], '720')
   assert.equal(seconds.calls.trigger.length, 1, 'a refused run was sent again, which would start it twice')
@@ -1237,5 +1237,24 @@ test('a paused, missing or not-allowed routine, or the service failing, each has
     const response = await said(status)
     assert.equal(response.statusCode, 502)
     assert.match(response.body.error, /rejected the dispatch \(status \d+\)/)
+  }
+})
+
+test('every "no task-intake routine" refusal says to add its URL and token, not a link', async () => {
+  const only = { env: { FIRE_TRIGGERS: JSON.stringify({ 'monday-brief': { url: TRIGGER_URL, token: ROUTINE_TOKEN('Monday') } }) } }
+  for (const body of [
+    { action: 'task', title: 'Chase the invoice' },
+    { action: 'skill', title: 'Summarise a call' },
+    { action: 'move', task: '2026-08-18-call-supplier', status: 'doing' },
+    { action: 'arm', workflow: 'monday-brief' },
+    { action: 'approve', task: 'Weekly brief' },
+    { action: 'pause', workflow: 'monday-brief' }
+  ]) {
+    const { response, calls } = await fire(withKey(body), only)
+    assert.equal(response.statusCode, 404, body.action)
+    assert.match(response.body.error, /No "task-intake" routine is registered/, body.action)
+    assert.match(response.body.error, /its URL and token to the FIRE_TRIGGERS env var/, body.action)
+    assert.equal(calls.trigger.length, 0)
+    assertNoSecrets(response)
   }
 })
