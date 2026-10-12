@@ -1110,9 +1110,10 @@ test('fire refuses hidden text in a task or a creation - from voice and from the
 })
 
 /* ---------- the model a task card asks for ---------- */
-// Jev (or the owner) can say which model tier should do a task. Nothing downstream reads it yet:
-// the task-intake routine writes it into the card's frontmatter as `model:`, and the task sweep
-// (work-the-tasks) does not read that field today - so it is a recommendation until it does.
+// Jev (or the owner) can say which model tier should do a task. The task-intake routine writes it
+// into the card's frontmatter as `model:`. It counts only where the team's task sweep
+// (work-the-tasks) reads it: the owner's team repo does since 2026-10-11; the README gives the lines
+// for a repo made from the template.
 
 test('a task may name a model tier - only opus, sonnet or haiku, exactly - and it rides in the payload', async () => {
   assert.deepEqual(validateTask({ title: 'Draft it', model: 'sonnet' }), { task: { title: 'Draft it', model: 'sonnet' } })

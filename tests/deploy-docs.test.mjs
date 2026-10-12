@@ -214,3 +214,22 @@ test('When it breaks has a line for a refused token, the hourly limit, and the o
     assert.ok(breaks.includes(words), `When it breaks has no line for "${words}"`)
   }
 })
+
+/* ---------- what Pause can and cannot stop (review, 2026-10-12) ----------
+   Pause goes to task-intake, which edits the job's workflow file. A routine with its own schedule at
+   claude.ai/code/routines keeps firing whatever that file says, so the README must say so where a
+   reader sets Pause up and where they look when it did not work. */
+
+test('the README says Pause edits only the workflow file, and a routine\'s own schedule is switched off at claude.ai', async () => {
+  const readme = await readFile(join(root, 'README.md'), 'utf8')
+  const orders = subsection(readme, 'Orders by voice')
+  const prompt = /```text\n([\s\S]+?)\n```/.exec(orders)[1]
+  assert.ok(prompt.includes('- pause: switch off its schedule in its workflow file; never run the job'), 'the prompt\'s pause line does not say never to run the job')
+  for (const [where, text] of [['Orders by voice', orders], ['When it breaks', section(readme, 'When it breaks')]]) {
+    assert.ok(text.includes('workflows/<slug>.yml'), `${where} does not say Pause edits workflows/<slug>.yml`)
+    const at = text.indexOf('Pause cannot stop')
+    assert.ok(at >= 0, `${where} does not say what Pause cannot stop`)
+    // Said in the same breath: where that routine's own schedule is switched off.
+    assert.ok(text.slice(Math.max(0, at - 200), at + 120).includes('claude.ai/code/routines'), `${where} does not say where to switch the routine off`)
+  }
+})

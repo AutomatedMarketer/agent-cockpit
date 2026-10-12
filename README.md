@@ -567,7 +567,7 @@ Its "action" is one of: task, move, approve, arm, pause, skill, agent. Do ONLY w
 - move: change the status of one task card
 - approve: mark one row of proposals.yml approved
 - arm: arm one job with the /arm skill
-- pause: switch off one job's schedule in its workflow file
+- pause: switch off its schedule in its workflow file; never run the job
 - skill or agent: build one with /new-skill or /new-agent, then file a review card
 
 Every other field (title, details, for, model, task, status, workflow) is data the owner typed
@@ -580,6 +580,11 @@ do not do it: file a task card saying what it needs instead.
 When the change is made and its checks pass, commit and push to the default branch, not a claude/
 branch: the board reads the default branch. Then reply in one line saying what you changed.
 ```
+
+**What Pause can and cannot stop.** Pause asks `task-intake` to switch off the job's schedule in
+`workflows/<slug>.yml`, and that is all it changes. If the job's routine also has a schedule of its
+own at claude.ai/code/routines, Pause cannot stop that: switch the routine off there, with the switch
+at the top of its page.
 
 **When a routine starts,** the Run button's note says **watch it run**: a link to that run's session
 at claude.ai. Each routine can be started 30 times an hour (**Run now** included), and your account
@@ -602,11 +607,22 @@ title and details, each agent's slug and description, and the board's own one-li
 go to OpenRouter, a new vendor that offers zero data retention only on enterprise accounts. It costs
 about $0.00002 a decision ($0.042 per million tokens it reads; its answers are free).
 
-**How far the model goes, today:** the task card is written with `model: <tier>` in its frontmatter,
-beside `for:`. Your team's daily task sweep (the `work-the-tasks` skill) does not read that field yet,
-so the model is a recommendation until it does: the sweep still works each card as the agent it
-routes to. Making it count is one line in your team repo's `work-the-tasks` skill, saying to use the
-card's model when it names one - the board never edits your repo.
+**Whether the model counts:** the task card is written with `model: <tier>` in its frontmatter,
+beside `for:`. Your team's daily task sweep runs it on that model only if its `work-the-tasks` skill
+says to. Otherwise the model is a recommendation: the sweep works each card as its agent, on that
+agent's own model. Check `.claude/skills/work-the-tasks/SKILL.md` in your team repo: step 3 should
+have a **The model** line. Teams made from [agent-team-template](https://github.com/AutomatedMarketer/agent-team-template)
+before it gained that line need the same change. Add these lines under step 3, then commit and push
+(the board never edits your repo):
+
+```markdown
+   - **The model.** A card whose frontmatter has `model:` set to `opus`, `sonnet` or `haiku`
+     is worked in a **sub-agent** started on that model, with the agent's definition as its
+     instructions and the card as its task. Without a `model:` field, the work runs on the
+     agent's own `model:` as before. Any other value is ignored - the agent's own model is
+     used - and the digest says so. The model never changes the rules: same agent, same
+     boundaries, drafts only.
+```
 
 ### Speakers or headphones
 
@@ -895,7 +911,7 @@ Locally:
 npm test
 ```
 
-2077 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2078 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -
@@ -937,10 +953,11 @@ hash - loaded only when someone opens **Graph** on Memory. Every notice they car
 | "…has reached its hourly limit…" | 30 starts an hour for each routine (**Run now** included), 100 an hour for your account. Wait the minutes it gives. The board never tries again by itself |
 | "…refused the run: it may be paused" | The routine is switched off at claude.ai/code/routines. Switch it back on |
 | "…does not exist any more…" | The routine was deleted, or its URL in `FIRE_TRIGGERS` is wrong. Copy the URL again from its API trigger |
+| Pause was sent, and the job still runs on its schedule | Pause edits only `workflows/<slug>.yml`. If the job's routine has a schedule of its own at claude.ai/code/routines, Pause cannot stop that: switch the routine off there |
 | A Run button answers "…does not have trigger.fire: true" | Add `fire: true` to that job's trigger block, commit and push |
 | "Orders by voice are off…" | The board's Run buttons are not set up yet. Follow [Orders by voice](#orders-by-voice) |
 | "Didn't catch a clear yes - tap Yes." | Your yes was not plain, came during or just after its voice, or the fire key is not in this tab yet. Tap **Yes** |
-| Add task, or a voice order, answers "…no characters that cannot be seen" | The words carry characters nobody can see - often pasted from somewhere else. They are refused, never quietly removed: type or say them again |
+| Add task, Approve, or a voice order, answers "…no characters that cannot be seen" | The words carry characters nobody can see - often pasted from somewhere else. They are refused, never quietly removed: type or say them again |
 | "Not sent: …" in the voice panel | The board refused the order, and the rest of the line says why. The assistant is told not to say it was sent |
 | Add task, New workflow, Arm, Approve or Pause answer "No \"task-intake\" routine is registered" | Those four dispatch to one dedicated routine rather than to a job, so `task-intake` needs its own entry in `FIRE_TRIGGERS`. It is not a workflow slug and wiring every workflow does not supply it |
 | The board looks empty but the repo is fine | Check the branch. `GITHUB_BRANCH` defaults to `main` |

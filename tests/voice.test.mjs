@@ -394,8 +394,15 @@ test('the README says what orders by voice do, the yes rule word for word, and h
   assert.match(section, /title and details, each agent's slug and description, and the board's own one-line note on each model tier/i)
   assert.match(section, /about \$0\.00002 a decision/)
   assert.match(section, /model: <tier>/)
-  assert.match(section, /a recommendation until/i)
-  assert.match(section, /work-the-tasks/)
+  // Whether the model counts depends on the team's own work-the-tasks skill. A team repo can already
+  // read it (the owner's does, since 2026-10-11); one made from the template needs the same change.
+  // So the README says what to check, where, and gives the lines - not "does not read it yet".
+  assert.doesNotMatch(section, /does not read that field yet/)
+  assert.match(section, /\.claude\/skills\/work-the-tasks\/SKILL\.md/)
+  assert.match(section, /agent-team-template/)
+  assert.match(section, /step 3/)
+  assert.match(section, /```markdown\n[\s\S]*`model:` set to `opus`, `sonnet` or `haiku`[\s\S]*\*\*sub-agent\*\*[\s\S]*drafts only\.\n```/)
+  assert.match(section, /a recommendation/i)
   // Every new setting is in the settings table.
   for (const name of ['VOICE_SPOKEN_YES', 'JEV_ROUTING', 'OPENROUTER_API_KEY']) {
     assert.ok(lines.some((line) => line.startsWith(`| \`${name}\``)), `${name} is not in the settings table`)
