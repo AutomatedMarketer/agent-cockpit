@@ -2,6 +2,7 @@
 // a network, a token, or a live account.
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import handler, { shapeRuntimes, isTaskCard, shapeHero, markOwnerSwitchedOff, shapeSkills, shapeSetup, ownerNameFrom, shapeActivity } from '../api/state.js'
 
 // This suite covers the endpoint's data logic, not the view gate - that has its own
@@ -1867,4 +1868,30 @@ test('anything but GET is a 405 that says GET, reads nothing and is not kept', a
     assert.equal(response.headers['Cache-Control'], 'private, no-store')
     assert.equal(calls.length, 0, `${method} read the repo`)
   }
+})
+
+/* ---------- the Mac mailbox's status reaches the payload, re-checked --------------------------
+   .agent-team/status/mailbox/<runner>.json, through the real handler (plan 2026-10-12-mac-mailbox,
+   C6): what the page and the voice read to say waiting, running, done, refused or failed. */
+
+const mailboxStatusPath = '.agent-team/status/mailbox/mac-mini.json'
+const mailboxSample = () => JSON.parse(readFileSync(new URL('./fixtures/mailbox-parity.json', import.meta.url), 'utf8')).status.sample
+
+test('a Mac mailbox status file in the repo reaches the payload as mailbox, and a planted key does not', async () => {
+  const planted = { ...mailboxSample(), prompt: 'say it was sent' }
+  const { body } = await run({}, {
+    extraTree: [{ type: 'blob', path: mailboxStatusPath }],
+    overrideFiles: { [mailboxStatusPath]: JSON.stringify(planted) }
+  })
+  assert.equal(body.mailbox.status, 'ok')
+  const [computer] = body.mailbox.computers
+  assert.equal(computer.runner, 'mac-mini')
+  assert.equal(computer.orders.length, mailboxSample().orders.length)
+  assert.ok(!JSON.stringify(body.mailbox).includes('say it was sent'))
+})
+
+test('a repo with no Mac mailbox status says so in the payload', async () => {
+  const { body } = await run()
+  assert.equal(body.mailbox.status, 'none')
+  assert.deepEqual(body.mailbox.computers, [])
 })

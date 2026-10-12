@@ -22,8 +22,9 @@ import {
   sortRunsNewestFirst,
   runsSince,
   heartbeatStatus, HEARTBEAT_STALE_AFTER_MINUTES, HEARTBEAT_STALE_MIN_MINUTES,
-  HEARTBEAT_STALE_MAX_MINUTES, TASK_STATUSES } from './_lib.js'
+  HEARTBEAT_STALE_MAX_MINUTES, TASK_STATUSES, isValidSlug } from './_lib.js'
 import { viewGate } from './_gate.js'
+import { MAILBOX_CONTRACT } from './_mailbox.js'
 import {
   parseWorkflow,
   normaliseSteps,
@@ -1251,6 +1252,110 @@ export function shapeJobs(files, now = Date.now(), found = null) {
   })
 }
 
+// ---------------------------------------------------------------------------------------------
+// The Mac mailbox's status: .agent-team/status/mailbox/<runner>.json, pushed by the owner's computer
+// with each order it does (plan 2026-10-12-mac-mailbox, 2.4). The contract is
+// tests/fixtures/mailbox-parity.json, the same bytes as the runner's copy; the rules are its
+// `status` section, and api/_mailbox.js holds its numbers and lists (KEEP IN SYNC).
+//
+// The same terms as every status file: it comes through a repo anybody with push access can edit, and
+// the answer goes to a browser, so the output is BUILT from the keys the contract has, and every value
+// is an id, a code, a short commit or a time - never words. An entry that breaks any rule is dropped
+// and counted, never repaired: a repaired entry says something the computer did not.
+const MAILBOX_STATUS = MAILBOX_CONTRACT.status
+export const MAILBOX_FOLDER = MAILBOX_STATUS.folder
+const MAILBOX_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/
+
+export function isMailboxFile(path) {
+  const prefix = `${MAILBOX_FOLDER}/`
+  if (typeof path !== 'string' || !path.startsWith(prefix) || !path.endsWith('.json')) return false
+  return MAILBOX_CONTRACT.runnerShape.test(path.slice(prefix.length, -'.json'.length))
+}
+
+// A time as the contract writes it - whole seconds, Z - that is a real moment and no later than the
+// file's own. null stays null; anything else is a broken entry (undefined).
+function mailboxTime(value, takenMs) {
+  if (value === null) return null
+  if (typeof value !== 'string' || !MAILBOX_TIME.test(value)) return undefined
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) && isoSeconds(ms) === value && ms <= takenMs ? value : undefined
+}
+
+const ownKeysExactly = (object, keys) => Object.keys(object).length === keys.length && keys.every((key) => Object.hasOwn(object, key))
+
+// One order's entry, or null. Each state's rule is the contract's stateRules, word for word.
+function mailboxEntry(raw, takenMs) {
+  if (!ownKeysExactly(raw, MAILBOX_STATUS.allowedKeys.order)) return null
+  const { id, action, state, commit, why, landed } = raw
+  if (typeof id !== 'string' || !MAILBOX_CONTRACT.idShape.test(id)) return null
+  if (!MAILBOX_CONTRACT.actions.includes(action) || !MAILBOX_STATUS.states.includes(state)) return null
+  const at = mailboxTime(raw.at, takenMs)
+  const startedAt = mailboxTime(raw.startedAt, takenMs)
+  const finishedAt = mailboxTime(raw.finishedAt, takenMs)
+  if (!at || startedAt === undefined || finishedAt === undefined) return null
+  if (commit !== null && !(typeof commit === 'string' && MAILBOX_STATUS.commitShape.test(commit))) return null
+  const reasons = MAILBOX_STATUS.reasons[state]
+  if (why !== null && !(reasons && typeof why === 'string' && Object.hasOwn(reasons, why))) return null
+  if (![true, false, null].includes(landed)) return null
+  const rules = {
+    claimed: startedAt === null && finishedAt === null && commit === null && why === null && landed === null,
+    running: startedAt !== null && finishedAt === null && commit === null && why === null && landed === null,
+    ok: commit !== null && finishedAt !== null && why === null && landed === null,
+    refused: why !== null && commit === null && landed === null,
+    failed: why !== null && commit === null && landed === null,
+    unknown: why === null && (landed === true ? commit !== null : commit === null)
+  }
+  if (!rules[state]) return null
+  return { id, action, state, at, startedAt, finishedAt, commit, why, landed }
+}
+
+function readMailboxFile(body, now) {
+  const noun = 'Mac mailbox'
+  const envelope = readStatusEnvelope(body, now, { schema: MAILBOX_STATUS.schema, maxBytes: MAILBOX_STATUS.maxFileBytes, noun })
+  if (!envelope.usable) return envelope
+  const { parsed, takenMs } = envelope
+  if (typeof parsed.takenAt !== 'string' || !MAILBOX_TIME.test(parsed.takenAt)) {
+    return { usable: false, why: `A ${noun} file does not say when it was taken.` }
+  }
+  if (typeof parsed.runner !== 'string' || !MAILBOX_CONTRACT.runnerShape.test(parsed.runner)) {
+    return { usable: false, why: `A ${noun} file does not name its computer the way the contract does.` }
+  }
+  if (!Array.isArray(parsed.orders) || !isPlainObject(parsed.allows)) return { usable: false, why: `A ${noun} file could not be read.` }
+  const actions = Array.isArray(parsed.allows.actions)
+    ? MAILBOX_CONTRACT.actions.filter((action) => parsed.allows.actions.includes(action))
+    : []
+  const jobs = Array.isArray(parsed.allows.jobs)
+    ? [...new Set(parsed.allows.jobs.filter((slug) => isValidSlug(slug)))].sort().slice(0, MAILBOX_STATUS.maxJobs)
+    : []
+  const given = parsed.orders.slice(0, MAILBOX_STATUS.maxOrders)
+  const orders = []
+  for (const raw of given) {
+    const entry = isPlainObject(raw) ? mailboxEntry(raw, takenMs) : null
+    if (entry && !orders.some((kept) => kept.id === entry.id)) orders.push(entry)
+  }
+  return {
+    usable: true,
+    takenMs,
+    computer: {
+      computer: cleanUsageName(parsed.computer),
+      runner: parsed.runner,
+      takenAt: parsed.takenAt,
+      allows: { actions, jobs },
+      orders,
+      hidden: given.length - orders.length
+    }
+  }
+}
+
+export function shapeMailbox(files, now = Date.now(), found = null) {
+  return shapeStatusFiles(files, now, found, {
+    maxFiles: MAILBOX_STATUS.maxFilesRead,
+    maxComputers: MAILBOX_STATUS.maxComputersShown,
+    noneWhy: 'Your Mac has not reported on an order yet.',
+    read: readMailboxFile
+  })
+}
+
 // jobs.yml: the owner's names and hiding, by the id the starter file explains. The board only reads
 // it. A name is held to the connection-name rule - it is printed on a board that can be public - and
 // a hide always applies, because hiding is the safe direction. An entry the board cannot use is
@@ -2402,8 +2507,11 @@ async function handle(request, response, store) {
     // The Readiness wall's jobs, on the same terms again: five fetched, none the tree calls too big.
     const jobsPaths = paths.filter((path) => isJobsFile(path)).sort()
     const jobsBody = async (path) => ((sizes[path] ?? 0) > JOBS_MAX_BYTES ? null : rawFile(settings, path))
+    // The Mac mailbox's status, on the same terms: five fetched, none the tree calls too big.
+    const mailboxPaths = paths.filter((path) => isMailboxFile(path)).sort()
+    const mailboxBody = async (path) => ((sizes[path] ?? 0) > MAILBOX_STATUS.maxFileBytes ? null : rawFile(settings, path))
 
-    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles, foundFiles, hermesFiles, jobsFiles, jobsNamesSource] =
+    const [agentFiles, runFiles, brainFiles, knowledgeFiles, workflowFiles, taskFiles, skillFiles, runtimesSource, connectionsSource, tilesSource, onboardingSource, stackSource, ledgerSource, proposalsSource, routineSnapshotSource, usageFiles, foundFiles, hermesFiles, jobsFiles, jobsNamesSource, mailboxFiles] =
       await Promise.all([
         Promise.all(agentPaths.map(async (path) => [path, await rawFile(settings, path)])),
         Promise.all(runPaths.map(async (path) => [path, await rawFile(settings, path)])),
@@ -2424,7 +2532,8 @@ async function handle(request, response, store) {
         Promise.all(foundPaths.slice(0, FOUND_MAX_FILES).map(async (path) => [path, await foundBody(path)])),
         Promise.all(hermesPaths.slice(0, HERMES_MAX_FILES).map(async (path) => [path, await hermesBody(path)])),
         Promise.all(jobsPaths.slice(0, JOBS_MAX_FILES).map(async (path) => [path, await jobsBody(path)])),
-        hasJobsNames ? rawFile(settings, 'jobs.yml') : null
+        hasJobsNames ? rawFile(settings, 'jobs.yml') : null,
+        Promise.all(mailboxPaths.slice(0, MAILBOX_STATUS.maxFilesRead).map(async (path) => [path, await mailboxBody(path)]))
       ])
 
     const unparseable = []
@@ -2556,6 +2665,7 @@ async function handle(request, response, store) {
     const found = matchProved(shapeFound(foundFiles, now, foundPaths.length), connections)
     const hermes = shapeHermes(hermesFiles, now, hermesPaths.length)
     const jobs = shapeJobs(jobsFiles, now, jobsPaths.length)
+    const mailbox = shapeMailbox(mailboxFiles, now, mailboxPaths.length)
     // One light per job, from everything read above. The rules live in _readiness.js.
     const readiness = shapeReadiness({
       workflows,
@@ -2600,6 +2710,7 @@ async function handle(request, response, store) {
       found,
       hermes,
       jobs,
+      mailbox,
       readiness,
       routines: {
         takenAt: snapshot.takenAt,
