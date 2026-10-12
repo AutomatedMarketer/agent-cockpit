@@ -64,9 +64,12 @@ function triggersObject(raw) {
 
 function routineEntry(value) {
   if (!value || typeof value !== 'object') return null
+  // Trimmed at the ends: a value pasted from the routine's modal often brings a space or a line
+  // break with it. Anything inside still has to match exactly.
+  const url = typeof value.url === 'string' ? value.url.trim() : ''
   const token = typeof value.token === 'string' ? value.token.trim() : ''
-  if (typeof value.url !== 'string' || !ROUTINE_FIRE_URL.test(value.url) || !ROUTINE_TOKEN.test(token)) return null
-  return { url: value.url, token }
+  if (!ROUTINE_FIRE_URL.test(url) || !ROUTINE_TOKEN.test(token)) return null
+  return { url, token }
 }
 
 // FIRE_TRIGGERS: a JSON object of slug → { url, token }. Only entries in that shape are kept; any

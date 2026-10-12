@@ -1301,3 +1301,19 @@ test('approve refuses a task name with characters nobody can see, or control cha
   assert.equal(calls.trigger.length, 0)
   assertNoSecrets(response)
 })
+
+/* ---------- a pasted URL or token with spaces around it (review gap F17, 2026-10-12) ---------- */
+
+test('a routine URL or token pasted with spaces or a line break around it is trimmed, then used exactly', async () => {
+  const padded = { url: `  ${TRIGGER_URL}\n`, token: ` ${ROUTINE_TOKEN('Monday')}\r\n ` }
+  assert.deepEqual(parseTriggers(JSON.stringify({ 'monday-brief': padded })), { 'monday-brief': { url: TRIGGER_URL, token: ROUTINE_TOKEN('Monday') } })
+  const { response, calls } = await fire(withKey({ workflow: 'monday-brief' }), {
+    env: { FIRE_TRIGGERS: JSON.stringify({ 'monday-brief': padded, 'task-intake': { url: TASK_TRIGGER_URL, token: ROUTINE_TOKEN('Task') } }) }
+  })
+  assert.equal(response.statusCode, 200)
+  assert.equal(calls.trigger[0].url, TRIGGER_URL)
+  assert.equal(calls.trigger[0].options.headers.Authorization, `Bearer ${ROUTINE_TOKEN('Monday')}`)
+  // Trimmed only at the ends: a space or line break inside is still refused.
+  const inside = parseTriggers(JSON.stringify({ a: { url: TRIGGER_URL, token: 'sk-ant oat01' }, b: { url: ROUTINE('01 Inside'), token: ROUTINE_TOKEN('B') } }))
+  assert.deepEqual(inside, {})
+})
