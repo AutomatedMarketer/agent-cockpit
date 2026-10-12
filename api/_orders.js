@@ -11,9 +11,11 @@
 // that have a trigger link. Never a link, or any part of one: a trigger link starts a session by
 // itself, so it stays in the env var, as fire.js keeps it. Pure: it reads the env it is handed.
 
-import { parseTriggers, triggerFor, TASK_INTAKE_SLUG } from './fire.js'
+import { parseTriggers, triggerFor, TASK_INTAKE_SLUG, MAILBOX_FIRE_KEY_MIN } from './fire.js'
 import { isValidSlug } from './_lib.js'
-import { ORDERS_OFF } from './_voice.js'
+import { ORDERS_OFF, MAILBOX_ORDERS_OFF } from './_voice.js'
+import { mailboxConfig, MAILBOX_CONTRACT } from './_mailbox.js'
+import { shapeMailbox, MAILBOX_FOLDER } from './state.js'
 
 // The jobs the assistant is offered by name. A list it can be shown in one tool, sorted so the
 // session is the same every call.
@@ -22,13 +24,41 @@ export const MAX_ORDER_JOBS = 40
 const switchedOff = (value) => /^(off|false|0)$/i.test(typeof value === 'string' ? value.trim() : '')
 const switchedOn = (value) => /^(on|true|1)$/i.test(typeof value === 'string' ? value.trim() : '')
 
-const off = () => ({ on: false, why: ORDERS_OFF, tasks: false, jobs: [], key: null, spokenYes: false, jev: false })
+const off = (why = ORDERS_OFF) => ({ on: false, why, tasks: false, jobs: [], key: null, spokenYes: false, jev: false })
 
-export function ordersConfig(env = {}) {
-  const triggers = parseTriggers(env.FIRE_TRIGGERS)
+// What the voice is offered beyond on and off: the spoken yes, and Jev.
+const extras = (env, tasks) => ({
+  // The owner's spoken yes, as well as a tap. On unless VOICE_SPOKEN_YES says off.
+  spokenYes: !switchedOff(env.VOICE_SPOKEN_YES),
+  // Jev, on OpenRouter, suggests which agent gets a task. Off unless switched on AND keyed: the
+  // order's words go to OpenRouter when it is on, which the README says where the switch is.
+  jev: tasks && switchedOn(env.JEV_ROUTING) && Boolean(typeof env.OPENROUTER_API_KEY === 'string' && env.OPENROUTER_API_KEY.trim())
+})
+
+// In mailbox mode (FIRE_MODE=mailbox) the orders go to the owner's computer, so they are on as far as
+// fire is there: the mailbox set up, and a fire key of 24 characters or more (or PUBLIC_FIRE). Which
+// jobs are offered is the computer's to say, in the status file it pushes (`mac`, shaped by
+// state.js); until it has pushed one, task cards are on and no job is offered. fire.js still checks
+// fire: true, and the computer its own list, on every order.
+function mailboxOrders(env, mac, publicFire) {
+  const settings = mailboxConfig(env)
+  const keyed = publicFire || (typeof env.FIRE_KEY === 'string' && env.FIRE_KEY.length >= MAILBOX_FIRE_KEY_MIN)
+  if (!settings.ready || !keyed) return off(MAILBOX_ORDERS_OFF)
+  const actions = mac?.allows?.actions ?? null
+  const tasks = actions ? actions.includes('task') : true
+  const jobs = actions && actions.includes('run')
+    ? [...new Set((mac.allows.jobs ?? []).filter((slug) => isValidSlug(slug)))].sort().slice(0, MAX_ORDER_JOBS)
+    : []
+  if (!tasks && !jobs.length) return off(MAILBOX_ORDERS_OFF)
+  return { on: true, tasks, jobs, key: publicFire ? 'public' : 'fire-key', via: 'mac', ...extras(env, tasks) }
+}
+
+export function ordersConfig(env = {}, mac = null) {
   // The same two rules fire.js applies, in the same words: PUBLIC_FIRE waives the fire key, except on
   // a board open to everyone, where there is no first key and so the fire key is required.
   const publicFire = env.PUBLIC_FIRE === 'true' && env.PUBLIC_DASHBOARD !== 'true'
+  if (mailboxConfig(env).mode !== 'cloud') return mailboxOrders(env, mac, publicFire)
+  const triggers = parseTriggers(env.FIRE_TRIGGERS)
   if (!triggers || (!env.FIRE_KEY && !publicFire)) return off()
   // A routine's URL and token, in the shape fire.js keeps (parseTriggers drops any other).
   const linked = (slug) => Boolean(triggerFor(triggers, slug))
@@ -44,11 +74,7 @@ export function ordersConfig(env = {}) {
     jobs,
     // How the page sends: with the fire key it asks for once and keeps in the tab, or with none.
     key: publicFire ? 'public' : 'fire-key',
-    // The owner's spoken yes, as well as a tap. On unless VOICE_SPOKEN_YES says off.
-    spokenYes: !switchedOff(env.VOICE_SPOKEN_YES),
-    // Jev, on OpenRouter, suggests which agent gets a task. Off unless switched on AND keyed: the
-    // order's words go to OpenRouter when it is on, which the README says where the switch is.
-    jev: tasks && switchedOn(env.JEV_ROUTING) && Boolean(typeof env.OPENROUTER_API_KEY === 'string' && env.OPENROUTER_API_KEY.trim())
+    ...extras(env, tasks)
   }
 }
 
@@ -56,5 +82,32 @@ export function ordersConfig(env = {}) {
 export function ordersView(config) {
   if (!config?.on) return { on: false }
   const { on, tasks, jobs, key, spokenYes, jev } = config
-  return { on, tasks, jobs: [...jobs], key, spokenYes, jev }
+  return { on, tasks, jobs: [...jobs], key, spokenYes, jev, ...(config.via === 'mac' ? { via: 'mac' } : {}) }
+}
+
+// The computer's own status file, read once when a call starts: which jobs it will run. One GitHub
+// read with the board's read-only token, three seconds at most; anything wrong - no file, not the
+// contract's, too big, GitHub slow or down - reads as no status, never as a guess.
+const MAC_STATUS_WAIT_MS = 3000
+export async function readMacStatus(env, runner, now = Date.now()) {
+  if (typeof runner !== 'string' || !MAILBOX_CONTRACT.runnerShape.test(runner)) return null
+  const owner = typeof env.GITHUB_OWNER === 'string' ? env.GITHUB_OWNER.trim() : ''
+  const repo = typeof env.GITHUB_REPO === 'string' ? env.GITHUB_REPO.trim() : ''
+  if (!MAILBOX_CONTRACT.repoShape.test(`${owner}/${repo}`)) return null
+  const branch = (typeof env.GITHUB_BRANCH === 'string' && env.GITHUB_BRANCH.trim()) || 'main'
+  const path = `${MAILBOX_FOLDER}/${runner}.json`
+  const headers = { Accept: 'application/vnd.github.raw', 'User-Agent': 'agent-cockpit' }
+  if (env.GITHUB_TOKEN) headers.Authorization = `Bearer ${env.GITHUB_TOKEN}`
+  try {
+    const answer = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`, {
+      headers,
+      signal: AbortSignal.timeout(MAC_STATUS_WAIT_MS)
+    })
+    if (!answer.ok) return null
+    const body = await answer.text()
+    const shaped = shapeMailbox([[path, body]], now, 1)
+    return shaped.status === 'ok' ? shaped.computers[0] : null
+  } catch {
+    return null
+  }
 }

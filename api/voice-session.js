@@ -22,7 +22,8 @@ import { readJsonBody, readCapped } from './_lib.js'
 import { writeGate } from './_gate.js'
 import { pictureStore } from './_picture-store.js'
 import { voiceConfig, sessionFor, assistantLabel, signTicket, newSessionId } from './_voice.js'
-import { ordersConfig, ordersView } from './_orders.js'
+import { ordersConfig, ordersView, readMacStatus } from './_orders.js'
+import { mailboxConfig } from './_mailbox.js'
 
 export const CALLS_URL = 'https://api.openai.com/v1/realtime/calls'
 // A browser's offer is 5 to 10 KB. Twice the largest, and nothing like room for anything else.
@@ -152,7 +153,10 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
     const form = new FormData()
     form.set('sdp', read.offer)
     // Orders by voice: offered only as far as the board's fire is set up (api/_orders.js).
-    const orders = ordersConfig(environment)
+    // In mailbox mode the jobs offered are the ones the owner's computer says it runs.
+    const fireSettings = mailboxConfig(environment)
+    const mac = fireSettings.ready ? await readMacStatus(environment, fireSettings.runner) : null
+    const orders = ordersConfig(environment, mac)
     form.set('session', JSON.stringify(sessionFor(config, name, { echoGuardHere: read.echoGuardHere, names: read.names, micDistance: read.micDistance, timeZone: read.timeZone, orders })))
     let upstream
     try {

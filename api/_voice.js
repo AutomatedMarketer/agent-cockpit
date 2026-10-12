@@ -115,6 +115,11 @@ export const ORDERS_OFF =
   "follow the README's \"Orders by voice\" steps: a task-intake routine, then FIRE_KEY and FIRE_TRIGGERS " +
   'in Vercel, then redeploy.'
 
+// The same, on a board that sends its orders to the owner's own computer (FIRE_MODE=mailbox).
+export const MAILBOX_ORDERS_OFF =
+  'Orders by voice are off, because this board sends its orders to your Mac and the Mac mailbox is not ' +
+  'set up yet. The README\'s "Orders on your own computer" steps switch it on.'
+
 const setting = (value) => (typeof value === 'string' ? value.trim() : '')
 
 // Fish is the mouth only when it can actually speak: a key AND a voice id that is shaped like one.
