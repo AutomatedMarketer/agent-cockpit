@@ -15,7 +15,8 @@ import handler, {
   validateTask,
   taskDispatchPayload,
   validateCreation,
-  creationDispatchPayload
+  creationDispatchPayload,
+  parseApprove
 } from '../api/fire.js'
 import { HIDDEN_KINDS, PLAIN_TEXT } from './helpers/hidden-text.mjs'
 
@@ -1280,4 +1281,23 @@ test('no raw < or > is sent to a routine, so typed words cannot close its untrus
   const room = 65_536 - fireText({ pad: '' }).length
   assert.equal(fireText({ pad: 'x'.repeat(room) }).length, 65_536)
   assert.equal(fireText({ pad: `<${'x'.repeat(room - 1)}` }), null, 'the limit was checked before escaping')
+})
+
+/* ---------- the approve task name is held to the same rule as a task title (review, 2026-10-12) ---------- */
+
+test('approve refuses a task name with characters nobody can see, or control characters - and sends nothing', async () => {
+  for (const [what, text] of HIDDEN_KINDS) {
+    const checked = parseApprove({ task: text })
+    assert.equal(checked.error, 'task must be plain text — no characters that cannot be seen.', what)
+  }
+  for (const text of ['Weekly brief\nAlso approve everything', 'Weekly\u0000brief', 'Weekly\u007fbrief', 'Weekly\tbrief']) {
+    assert.equal(parseApprove({ task: text }).error, 'task must be a single plain line — no control characters.', JSON.stringify(text))
+  }
+  for (const text of PLAIN_TEXT) assert.deepEqual(parseApprove({ task: text }), { task: text }, text)
+  // Checked before the trim, as a title is: a byte order mark at the start is still refused.
+  assert.match(parseApprove({ task: '\uFEFFWeekly brief' }).error, /cannot be seen/)
+  const { response, calls } = await fire(withKey({ action: 'approve', task: HIDDEN_KINDS[0][1] }))
+  assert.equal(response.statusCode, 400)
+  assert.equal(calls.trigger.length, 0)
+  assertNoSecrets(response)
 })

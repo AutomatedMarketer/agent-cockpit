@@ -179,6 +179,13 @@ export function parseApprove(body) {
   if (task.length > 200) {
     return { error: 'task is too long to be a task name from a ledger.' }
   }
+  // The same rule as a task title (validateTask): it is relayed word for word to a routine.
+  if (CONTROL_CHARS.test(task)) {
+    return { error: 'task must be a single plain line — no control characters.' }
+  }
+  if (hiddenText(body.task)) {
+    return { error: 'task must be plain text — no characters that cannot be seen.' }
+  }
   return { task }
 }
 
