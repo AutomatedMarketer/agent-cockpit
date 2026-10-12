@@ -41,6 +41,8 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 // too, and a second copy of either is a second place to get it wrong.
 import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest } from './_lib.js'
 import { viewGate } from './_gate.js'
+import { mailboxConfig, queueOrder } from './_mailbox.js'
+import { pictureStore, failureAnswer } from './_picture-store.js'
 export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
 
 // A routine is fired at its own address on the Claude Code routines API, with its own bearer token
@@ -491,7 +493,35 @@ function readBody(request) {
   return {}
 }
 
-export default async function handler(request, response) {
+// In mailbox mode (FIRE_MODE=mailbox, api/_mailbox.js) every check below still runs, and then the
+// order goes into the board's own queue for the owner's computer instead of to a cloud routine. The
+// fire key must then be 24 characters or more: FIRE_TRIGGERS, whose absence used to keep a
+// placeholder fire key harmless, is not needed in that mode.
+export const MAILBOX_FIRE_KEY_MIN = 24
+const SHORT_FIRE_KEY =
+  `Fire is not configured: in mailbox mode FIRE_KEY must be ${MAILBOX_FIRE_KEY_MIN} characters or more - a long ` +
+  'passphrase you make up - or PUBLIC_FIRE=true. Set it in the hosting environment, then redeploy.'
+
+// The answer to an order the queue took: the same echo the cloud gives, and where it went. Never the
+// signed order itself.
+async function queueAndAnswer(response, mailbox, payload, echo) {
+  try {
+    const sent = await queueOrder(mailbox.store, mailbox.config, payload)
+    response.status(200).json({ ok: true, accepted: true, ...echo, via: 'mac', orderId: sent.id, expiresAt: sent.expiresAt })
+  } catch (error) {
+    const { status, error: sentence } = failureAnswer(error)
+    response.status(status).json({ error: sentence })
+  }
+}
+
+// `loadSdk` reaches the picture store, so tests hand in a fake; in production it is the real one.
+export function makeHandler({ loadSdk } = {}) {
+  return (request, response) => handle(request, response, { loadSdk })
+}
+
+export default makeHandler()
+
+async function handle(request, response, { loadSdk }) {
   // Kept by nobody, every answer: a dispatch is a one-off, and a refusal kept by a shared cache
   // would be handed to the next person to ask.
   response.setHeader('Cache-Control', 'private, no-store')
@@ -517,9 +547,22 @@ export default async function handler(request, response) {
   const openBoard = process.env.PUBLIC_DASHBOARD === 'true'
   const publicFire = process.env.PUBLIC_FIRE === 'true' && !openBoard
   const fireKey = process.env.FIRE_KEY
-  const triggers = parseTriggers(process.env.FIRE_TRIGGERS)
+  const settings = mailboxConfig(process.env)
+  if (settings.mode !== 'cloud') {
+    // Mailbox mode, or a FIRE_MODE that is neither: closed until every setting is right, and the
+    // sentence names the setting, never its value.
+    const why = !settings.ready
+      ? settings.why
+      : !publicFire && !(typeof fireKey === 'string' && fireKey.length >= MAILBOX_FIRE_KEY_MIN) ? SHORT_FIRE_KEY : null
+    if (why) {
+      response.status(503).json({ error: why })
+      return
+    }
+  }
+  const mailbox = settings.ready ? { config: settings, store: pictureStore(process.env, loadSdk) } : null
+  const triggers = mailbox ? {} : parseTriggers(process.env.FIRE_TRIGGERS)
   // Nothing usable, and links in the old form: the format changed, and the sentence says so.
-  const oldForm = Boolean(triggers) && !Object.keys(triggers).length && triggersInOldForm(process.env.FIRE_TRIGGERS)
+  const oldForm = !mailbox && Boolean(triggers) && !Object.keys(triggers).length && triggersInOldForm(process.env.FIRE_TRIGGERS)
 
   if (!triggers || oldForm || (!fireKey && !publicFire)) {
     // Unconfigured is closed, never open — and the message says how to fix it without
@@ -567,7 +610,7 @@ export default async function handler(request, response) {
     const task = checked.task
 
     const taskTrigger = triggerFor(triggers, TASK_INTAKE_SLUG)
-    if (!taskTrigger) {
+    if (!taskTrigger && !mailbox) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot file ` +
@@ -604,6 +647,7 @@ export default async function handler(request, response) {
       }
     }
 
+    if (mailbox) return queueAndAnswer(response, mailbox, taskDispatchPayload(task), { title: task.title })
     const result = await dispatchToTrigger(taskTrigger, taskDispatchPayload(task), TASK_INTAKE_SLUG, response)
     if (result === null) return
     const taskSessionUrl = sessionUrlFrom(result)
@@ -629,7 +673,7 @@ export default async function handler(request, response) {
     }
 
     const creationTrigger = triggerFor(triggers, TASK_INTAKE_SLUG)
-    if (!creationTrigger) {
+    if (!creationTrigger && !mailbox) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot create a ` +
@@ -638,6 +682,7 @@ export default async function handler(request, response) {
       return
     }
 
+    if (mailbox) return queueAndAnswer(response, mailbox, creationDispatchPayload(action, checked.item), { title: checked.item.title })
     const creationResult = await dispatchToTrigger(
       creationTrigger,
       creationDispatchPayload(action, checked.item),
@@ -669,7 +714,7 @@ export default async function handler(request, response) {
     const move = checked.move
 
     const moveTrigger = triggerFor(triggers, TASK_INTAKE_SLUG)
-    if (!moveTrigger) {
+    if (!moveTrigger && !mailbox) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot change a ` +
@@ -699,6 +744,7 @@ export default async function handler(request, response) {
       return
     }
 
+    if (mailbox) return queueAndAnswer(response, mailbox, moveDispatchPayload(move), { task: move.task, status: move.status })
     const moveResult = await dispatchToTrigger(moveTrigger, moveDispatchPayload(move), TASK_INTAKE_SLUG, response)
     if (moveResult === null) return
     const moveSessionUrl = sessionUrlFrom(moveResult)
@@ -720,7 +766,7 @@ export default async function handler(request, response) {
     }
 
     const armTrigger = triggerFor(triggers, TASK_INTAKE_SLUG)
-    if (!armTrigger) {
+    if (!armTrigger && !mailbox) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot arm jobs. ` +
@@ -729,6 +775,9 @@ export default async function handler(request, response) {
       return
     }
 
+    // On the Mac an arm files a card for the owner to finish in a session (decision D3): a new
+    // schedule needs a reviewed record, so it is never made unattended.
+    if (mailbox) return queueAndAnswer(response, mailbox, armDispatchPayload(armSlug), { workflow: armSlug, action: 'arm' })
     const armResult = await dispatchToTrigger(armTrigger, armDispatchPayload(armSlug), TASK_INTAKE_SLUG, response)
     if (armResult === null) return
     const armSessionUrl = sessionUrlFrom(armResult)
@@ -751,7 +800,7 @@ export default async function handler(request, response) {
     }
 
     const approveTrigger = triggerFor(triggers, TASK_INTAKE_SLUG)
-    if (!approveTrigger) {
+    if (!approveTrigger && !mailbox) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot record ` +
@@ -760,6 +809,7 @@ export default async function handler(request, response) {
       return
     }
 
+    if (mailbox) return queueAndAnswer(response, mailbox, approveDispatchPayload(checked.task), { task: checked.task })
     const result = await dispatchToTrigger(
       approveTrigger,
       approveDispatchPayload(checked.task),
@@ -788,7 +838,7 @@ export default async function handler(request, response) {
   const pausing = action === 'pause'
   const label = pausing ? TASK_INTAKE_SLUG : slug
   const trigger = triggerFor(triggers, label)
-  if (!trigger) {
+  if (!trigger && !mailbox) {
     response.status(404).json({
       error: pausing
         ? `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot pause jobs. ` +
@@ -833,6 +883,7 @@ export default async function handler(request, response) {
     return
   }
 
+  if (mailbox) return queueAndAnswer(response, mailbox, dispatchPayload(slug, action), { workflow: slug, action })
   const result = await dispatchToTrigger(trigger, dispatchPayload(slug, action), label, response)
   if (result === null) return
 
