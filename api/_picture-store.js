@@ -223,6 +223,11 @@ export function failureAnswer(error) {
 // The index's 2 were taken from the changes, 20 -> 19 a day, so the voice meter keeps its 5:
 // 2 x 19 + 10 + 2 + 5 = 55 (meaning search plan, T3).
 //
+// In mailbox mode (FIRE_MODE=mailbox) every order is one put to the mailbox queue, at most
+// MAILBOX_ORDERS_PER_DAY = 8 a day, counted inside the queue file (api/_mailbox.js). They are taken
+// from the changes, 19 -> 15, so pictures and the meter keep theirs: 2 x 15 + 10 + 2 + 8 + 5 = 55
+// (Mac mailbox plan, 2.1).
+//
 // 55 a day is 1,705 in a 31-day month, which keeps 295 of the 2,000 for the SDK retrying a failed
 // put (up to VERCEL_BLOB_RETRIES times, 10 unless set), a slot pointed back after a failed upload,
 // and the owner browsing the store in Vercel's dashboard, which Vercel counts too.
@@ -245,8 +250,11 @@ const PUTS_PER_CHANGE = 2
 const PUTS_PER_PICTURE_MADE = 1
 const DEFAULT_CAPS = { writes: 19, generated: 10 }
 export const INDEX_SAVES_PER_DAY = 2
-// What the caps may share: the budget less the index's saves.
-const CAPS_BUDGET = ADVANCED_OPS_PER_DAY - INDEX_SAVES_PER_DAY
+export const MAILBOX_ORDERS_PER_DAY = 8
+const MAILBOX_DEFAULT_WRITES = 15
+const mailboxMode = (env) => String(env.FIRE_MODE ?? '').trim() === 'mailbox'
+// What the caps may share: the budget less the index's saves, and the orders' in mailbox mode.
+const capsBudget = (env) => ADVANCED_OPS_PER_DAY - INDEX_SAVES_PER_DAY - (mailboxMode(env) ? MAILBOX_ORDERS_PER_DAY : 0)
 
 const WHY_THE_LIMIT =
   'the limit keeps the picture store inside Vercel\'s free monthly allowance, which locks the ' +
@@ -267,13 +275,14 @@ const CAP_SENTENCES = {
 // a made picture is no use without a change to store it with.
 export function dailyCaps(env = process.env) {
   const read = (value, fallback) => (/^\d+$/.test(String(value ?? '').trim()) ? Number(value) : fallback)
+  const budget = capsBudget(env)
   const writes = Math.min(
-    read(env.WRITE_DAILY_CAP, DEFAULT_CAPS.writes),
-    Math.floor(CAPS_BUDGET / PUTS_PER_CHANGE)
+    read(env.WRITE_DAILY_CAP, mailboxMode(env) ? MAILBOX_DEFAULT_WRITES : DEFAULT_CAPS.writes),
+    Math.floor(budget / PUTS_PER_CHANGE)
   )
   const generated = Math.min(
     read(env.GENERATE_DAILY_CAP, DEFAULT_CAPS.generated),
-    Math.floor((CAPS_BUDGET - writes * PUTS_PER_CHANGE) / PUTS_PER_PICTURE_MADE)
+    Math.floor((budget - writes * PUTS_PER_CHANGE) / PUTS_PER_PICTURE_MADE)
   )
   return { writes, generated }
 }
@@ -441,7 +450,7 @@ export function normaliseMeter(raw) {
 // How many meter writes a day the picture caps leave over. Zero when they use the whole budget.
 export function meterWritesPerDay(env = process.env) {
   const caps = dailyCaps(env)
-  return Math.max(0, CAPS_BUDGET - (PUTS_PER_CHANGE * caps.writes + PUTS_PER_PICTURE_MADE * caps.generated))
+  return Math.max(0, capsBudget(env) - (PUTS_PER_CHANGE * caps.writes + PUTS_PER_PICTURE_MADE * caps.generated))
 }
 
 // The day only moves forward, as with the picture caps: a request whose clock still says yesterday
@@ -480,6 +489,22 @@ export function spendIndexSave(saves, day) {
   const used = sameDay ? saves.count : 0
   if (used >= INDEX_SAVES_PER_DAY) return null
   return { day: sameDay ? saves.day : day, count: used + 1 }
+}
+
+// --- the mailbox queue's file ------------------------------------------------------------------
+// agent-cockpit/mailbox/queue.json: the orders waiting for the owner's computer (api/_mailbox.js says
+// what is in it and counts its saves inside it). Its own file and its own turns, so an order never
+// fights a picture change or the meter for a file. Read fresh every time, the Mac's polls included:
+// one simple operation each, countable, and never a minute-old copy.
+export const MAILBOX_QUEUE_PATH = `${ROOT}/mailbox/queue.json`
+// 20 orders at the most, each at most 16 KB.
+export const MAILBOX_QUEUE_MAX_BYTES = 512 * 1024
+const QUEUE_CLASH = 'Another order was sent at the same moment, so this one was not: try again.'
+const QUEUE_TOO_BIG = 'The mailbox queue grew too big to save, so this order was not sent.'
+const mailboxTurnKeys = new WeakMap()
+const mailboxTurnKey = (loadSdk) => {
+  if (!mailboxTurnKeys.has(loadSdk)) mailboxTurnKeys.set(loadSdk, {})
+  return mailboxTurnKeys.get(loadSdk)
 }
 
 const indexTurnKeys = new WeakMap()
@@ -792,5 +817,50 @@ export function pictureStore(env = process.env, loadSdk = loadRealSdk, { pause =
     throw new PictureStoreError(409, INDEX_CLASH)
   }
 
-  return { readSettings, saveSettings, putPicture, getPicture, dropPicture, readMeter, saveMeter, readIndex, saveIndex }
+  // --- the mailbox queue: its own file and its own turns -------------------------------------------
+
+  // { text, etag }: the queue's text (null for none, or too big to read), always the latest copy.
+  async function readMailbox() {
+    const found = await attempt((blob) => blob.get(MAILBOX_QUEUE_PATH, { access: 'private', useCache: false }))
+    if (!found || found.statusCode !== 200 || !found.stream) return { text: null, etag: null }
+    const etag = found.blob?.etag || null
+    const bytes = await readCapped(found.stream, MAILBOX_QUEUE_MAX_BYTES)
+    return { text: bytes ? bytes.toString('utf8') : null, etag }
+  }
+
+  // `build` gets the queue's text as it is now (null for none) and returns the text to save, or
+  // throws to save nothing (a day's orders used, the queue full). Tried once more against the latest
+  // queue if another instance saved in between.
+  const saveMailbox = (build) => takeTurn(mailboxTurnKey(loadSdk), () => saveMailboxNow(build))
+
+  async function saveMailboxNow(build) {
+    for (let tries = 1; tries <= SAVE_TRIES; tries += 1) {
+      if (tries > 1) await pause(RETRY_PAUSE_MS.least + random() * (RETRY_PAUSE_MS.most - RETRY_PAUSE_MS.least))
+      const { text, etag } = await readMailbox()
+      const next = await build(text)
+      if (Buffer.byteLength(next, 'utf8') > MAILBOX_QUEUE_MAX_BYTES) throw new PictureStoreError(413, QUEUE_TOO_BIG)
+      const guard = etag ? { allowOverwrite: true, ifMatch: etag } : { allowOverwrite: false }
+      const blob = await sdk()
+      try {
+        await blob.put(MAILBOX_QUEUE_PATH, next, {
+          access: 'private',
+          contentType: 'application/json',
+          addRandomSuffix: false,
+          cacheControlMaxAge: 60,
+          ...guard
+        })
+        return next
+      } catch (error) {
+        const lostRace = etag
+          ? typeof blob.BlobPreconditionFailedError === 'function' && error instanceof blob.BlobPreconditionFailedError
+          : (await readMailbox()).etag !== null
+        if (lostRace) continue
+        const { status, error: sentence } = storeFailure(error, blob)
+        throw new PictureStoreError(status, sentence)
+      }
+    }
+    throw new PictureStoreError(409, QUEUE_CLASH)
+  }
+
+  return { readSettings, saveSettings, putPicture, getPicture, dropPicture, readMeter, saveMeter, readIndex, saveIndex, readMailbox, saveMailbox }
 }

@@ -15,7 +15,14 @@
 // refused on the Mac. It does not stop a fully taken-over board, which holds the secret too: the
 // Mac's own allowlist, daily caps and changed-file check bound that.
 
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import {
+  storeConnected,
+  NOT_CONNECTED,
+  PictureStoreError,
+  MAILBOX_ORDERS_PER_DAY,
+  usageDay
+} from './_picture-store.js'
 
 const plainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -149,4 +156,126 @@ export function verifyOrder(envelope, { keys, repo, runner, now }) {
   if (life <= 0 || life > C.life.maxSeconds * 1000) return refuse('bad-life')
   if (typeof order.id !== 'string' || !C.idShape.test(order.id)) return refuse('bad-id')
   return { verdict: 'ok', order }
+}
+
+// --- the switch and its settings -----------------------------------------------------------------
+//
+// FIRE_MODE=cloud (or unset) is the cloud routines, as before; FIRE_MODE=mailbox is this file. Any
+// other value is neither: fire reads as not configured rather than quietly picking one.
+//
+// The settings a mailbox board needs, every one checked here and none ever echoed in a sentence:
+//   MAILBOX_SECRET        the signing secret, made on the Mac (openssl rand), 32+ printable characters
+//   MAILBOX_SECRET_ID     which key signed it, default k1 (k2 during a rotation)
+//   MAILBOX_KEY           the Mac's own key for GET /api/mailbox, 32+ printable characters, and never
+//                         the secret: whoever holds the poll key must not be able to sign
+//   MAILBOX_POLL_SECONDS  how often the Mac asks, clamped 60 to 3,600, default 600
+//   MAILBOX_RUNNER        the computer the orders are for, default mac-mini
+// and GITHUB_OWNER / GITHUB_REPO (the repo every order names) and a connected picture store.
+// A value someone left as a placeholder - FILL-ME-IN, "your-...", "replace me" - is not a value.
+const PLACEHOLDER = /fill[-_ ]?me|your[-_ ]|replace[-_ ]?me|change[-_ ]?me|placeholder|example|xxxxxx|[<>]/i
+const MODE_UNKNOWN = 'Fire is not configured: FIRE_MODE must be cloud or mailbox. Fix it in the hosting environment, then redeploy.'
+const notSet = (name, what) =>
+  `The Mac mailbox is not configured: ${name} must be ${what}. Set it in the hosting environment (the README's "Orders on your own computer" says how), then redeploy.`
+
+const trimmed = (value) => (typeof value === 'string' ? value.trim() : '')
+const secretValue = (value, shape) => {
+  const text = trimmed(value)
+  return shape.test(text) && !PLACEHOLDER.test(text) ? text : null
+}
+
+export function mailboxConfig(env = process.env) {
+  const mode = trimmed(env.FIRE_MODE) || 'cloud'
+  if (mode === 'cloud') return { mode: 'cloud', ready: false, why: null }
+  if (mode !== 'mailbox') return { mode: 'unknown', ready: false, why: MODE_UNKNOWN }
+  const refuse = (why) => ({ mode: 'mailbox', ready: false, why })
+  const secret = secretValue(env.MAILBOX_SECRET, C.secretShape)
+  if (!secret) return refuse(notSet('MAILBOX_SECRET', 'the signing secret made on your Mac: 32 characters or more, no spaces'))
+  const kid = trimmed(env.MAILBOX_SECRET_ID) || 'k1'
+  if (!C.kidShape.test(kid)) return refuse(notSet('MAILBOX_SECRET_ID', 'a short key name in lowercase, like k1'))
+  const key = secretValue(env.MAILBOX_KEY, C.keyShape)
+  if (!key) return refuse(notSet('MAILBOX_KEY', 'your Mac\'s own key: 32 characters or more, no spaces'))
+  if (key === secret) return refuse(notSet('MAILBOX_KEY', 'a different value from MAILBOX_SECRET, so the key that collects orders cannot sign one'))
+  const runner = trimmed(env.MAILBOX_RUNNER) || 'mac-mini'
+  if (!C.runnerShape.test(runner)) return refuse(notSet('MAILBOX_RUNNER', 'the computer\'s name in lowercase with dashes, like mac-mini'))
+  const repo = `${trimmed(env.GITHUB_OWNER)}/${trimmed(env.GITHUB_REPO)}`
+  if (!C.repoShape.test(repo)) return refuse(notSet('GITHUB_OWNER and GITHUB_REPO', 'your team repo\'s owner and name'))
+  if (!storeConnected(env)) return refuse(NOT_CONNECTED)
+  const asked = trimmed(env.MAILBOX_POLL_SECONDS)
+  const { min, max, default: fallback } = C.pollSeconds
+  const pollSeconds = /^\d+$/.test(asked) ? Math.min(max, Math.max(min, Number(asked))) : fallback
+  return { mode: 'mailbox', ready: true, why: null, secret, kid, key, pollSeconds, runner, repo }
+}
+
+// The checks the board holds its own queue to: its own key, repo and computer.
+const ownChecks = (config, nowMs) => ({ keys: { [config.kid]: config.secret }, repo: config.repo, runner: config.runner, now: nowMs })
+
+// --- one order ------------------------------------------------------------------------------------
+
+// `payload` is exactly what fire.js would send the cloud routine, so both modes send the same request.
+export function makeOrder(payload, config, now = new Date(), random = randomBytes) {
+  const id = random(16).toString('hex')
+  const issuedAt = now.toISOString()
+  const expiresAt = new Date(now.getTime() + orderLifeSeconds(config.pollSeconds) * 1000).toISOString()
+  const body = JSON.stringify({ v: C.version, id, repo: config.repo, runner: config.runner, issuedAt, expiresAt, payload })
+  return { id, expiresAt, envelope: { kid: config.kid, body, sig: signBody(config.secret, body) } }
+}
+
+// --- the queue ------------------------------------------------------------------------------------
+//
+// { version: 1, day, count, orders: [envelope, ...] }, in the picture store (api/_picture-store.js).
+// Orders leave it only by expiring: the Mac writes nothing to the store, and remembers what it took
+// in its own claim folders. `count` is the day's orders, so the eight a day cost no extra write.
+//
+// Read as if a stranger wrote it: only orders this board signed - its key, its repo, its computer -
+// that are still alive are kept, and anything else in the file is dropped, never served or saved.
+
+const QUEUE_DAY = /^\d{4}-\d{2}-\d{2}$/
+const ORDERS_SPENT =
+  `Your board has sent all ${MAILBOX_ORDERS_PER_DAY} orders it allows today, so nothing was sent: try again ` +
+  'tomorrow (the count starts again at midnight UTC). The limit keeps the picture store inside Vercel\'s ' +
+  'free monthly allowance, which locks the store for 30 days if it is passed.'
+const QUEUE_FULL =
+  `${C.maxOrders} orders are already waiting for your Mac, so nothing was sent: check that your Mac is on ` +
+  'and awake, then try again.'
+
+export function parseQueue(text, config, nowMs) {
+  const empty = { day: '', count: 0, orders: [] }
+  let parsed
+  try {
+    parsed = typeof text === 'string' && text ? JSON.parse(text) : null
+  } catch {
+    return empty
+  }
+  if (!plainObject(parsed) || !Array.isArray(parsed.orders)) return empty
+  const day = typeof parsed.day === 'string' && QUEUE_DAY.test(parsed.day) ? parsed.day : ''
+  const count = day && Number.isInteger(parsed.count) && parsed.count >= 0 ? parsed.count : 0
+  const checks = ownChecks(config, nowMs)
+  const orders = parsed.orders
+    .filter((envelope) => verifyOrder(envelope, checks).verdict === 'ok')
+    .slice(-C.maxOrders)
+  return { day, count, orders }
+}
+
+// One order into the queue: { id, expiresAt }. Throws a PictureStoreError (with its status and a
+// sentence) when the day's orders are used or the queue is full, and nothing is saved.
+export async function queueOrder(store, config, payload, now = new Date()) {
+  let made = null
+  await store.saveMailbox((text) => {
+    const queue = parseQueue(text, config, now.getTime())
+    const day = usageDay(now)
+    // The day only moves forward: a request whose clock still says yesterday is held to the file's count.
+    const sameDay = queue.day >= day
+    const used = sameDay ? queue.count : 0
+    if (used >= MAILBOX_ORDERS_PER_DAY) throw new PictureStoreError(429, ORDERS_SPENT)
+    if (queue.orders.length >= C.maxOrders) throw new PictureStoreError(429, QUEUE_FULL)
+    made = makeOrder(payload, config, now)
+    return JSON.stringify({ version: 1, day: sameDay ? queue.day : day, count: used + 1, orders: [...queue.orders, made.envelope] })
+  })
+  return { id: made.id, expiresAt: made.expiresAt }
+}
+
+// What the Mac is shown: the queue's good, unexpired orders, oldest first, as they were stored.
+export async function pendingOrders(store, config, now = new Date()) {
+  const { text } = await store.readMailbox()
+  return parseQueue(text, config, now.getTime()).orders
 }
