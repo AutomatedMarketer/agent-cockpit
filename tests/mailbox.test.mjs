@@ -20,7 +20,8 @@ const fixtureUrl = new URL('./fixtures/mailbox-parity.json', import.meta.url)
 const raw = readFileSync(fixtureUrl)
 const fixture = JSON.parse(raw.toString('utf8'))
 const NOW = Date.parse(fixture.test.now)
-const expect = { keys: fixture.test.keys, repo: fixture.test.repo, runner: fixture.test.runner, now: NOW }
+// As the runner checks: with the moment its claim store was made (the board keeps no claims).
+const expect = { keys: fixture.test.keys, repo: fixture.test.repo, runner: fixture.test.runner, now: NOW, claimsSince: Date.parse(fixture.test.claimsSince) }
 
 test('mailbox parity: the contract file is ASCII with LF line ends, so its bytes survive any editor or checkout', () => {
   assert.ok([...raw].every((byte) => byte === 0x0a || (byte >= 0x20 && byte <= 0x7e)), 'a byte outside printable ASCII')
@@ -75,6 +76,25 @@ test('mailbox parity: the board\'s numbers, shapes and lists are the contract\'s
   assert.deepEqual(status.reasons, fixture.status.reasons)
   assert.deepEqual(status.allowedKeys, fixture.status.allowedKeys)
   assert.deepEqual(status.requiredKeys, fixture.status.requiredKeys)
+  // A claim outlives every way its order could still pass the other checks.
+  assert.equal(fixture.claims.keepSeconds, fixture.life.maxSeconds + fixture.life.futureSkewSeconds)
+  assert.equal(contract.claims.keepSeconds, fixture.claims.keepSeconds)
+  for (const rule of ['since', 'keep', 'seen', 'durable']) assert.equal(typeof fixture.claims[rule], 'string', `claims.${rule}`)
+  assert.match(fixture.claims.durable, /BEFORE any effect/)
+  assert.match(fixture.claims.durable, /fsync/)
+})
+
+test('mailbox parity: an order issued before the claim store was made is refused - and only a side that keeps claims checks it', () => {
+  const before = fixture.orders.find((order) => order.verdict === 'before-claims')
+  assert.ok(before, 'the contract has no before-claims case')
+  assert.equal(verifyOrder(before.envelope, expect).verdict, 'before-claims')
+  const { claimsSince, ...board } = expect
+  assert.equal(verifyOrder(before.envelope, board).verdict, 'ok', 'the board, which keeps no claims, refused it')
+  // Issued exactly at claimsSince is not before it.
+  const exactly = fixture.orders.find((order) => JSON.parse(order.envelope.body).issuedAt === fixture.test.claimsSince)
+  assert.equal(verifyOrder(exactly.envelope, expect).verdict, 'ok')
+  // A claim store whose made-at moment cannot be read is not one to run anything from.
+  assert.equal(verifyOrder(exactly.envelope, { ...expect, claimsSince: Number.NaN }).verdict, 'before-claims')
 })
 
 test('mailbox parity: an order lives max(15 minutes, 3 polls and 2 minutes), never more than an hour', () => {

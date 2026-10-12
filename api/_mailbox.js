@@ -41,6 +41,9 @@ export const MAILBOX_CONTRACT = Object.freeze({
   runnerShape: /^[a-z0-9-]{1,32}$/,
   timeShape: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
   life: Object.freeze({ minSeconds: 900, pollsCovered: 3, plusSeconds: 120, maxSeconds: 3600, futureSkewSeconds: 120 }),
+  // The runner keeps each claim at least this long after its order was issued (life.maxSeconds +
+  // life.futureSkewSeconds): until then the same signed order can still pass every other check.
+  claims: Object.freeze({ keepSeconds: 3720 }),
   keyShape: /^[\x21-\x7e]{32,256}$/,
   pollSeconds: Object.freeze({ min: 60, max: 3600, default: 600 }),
   maxOrders: 20,
@@ -123,7 +126,10 @@ const sameKeys = (object, keys) => {
 // The checks, in the contract's order. Any failure is a verdict and nothing else: the order is
 // given back only when every check passed. `keys` is { kid: secret }. The body is parsed only after
 // its signature matches, so nothing anybody wrote into the store is read before it is proven ours.
-export function verifyOrder(envelope, { keys, repo, runner, now }) {
+// `claimsSince` is for a side that keeps claims (the runner): the moment its claim store was made, so
+// an order issued before it - one a wiped or new claim folder has no claim for - is refused. The
+// board keeps none and leaves it out.
+export function verifyOrder(envelope, { keys, repo, runner, now, claimsSince = null }) {
   const refuse = (verdict) => ({ verdict })
   if (!plainObject(envelope) || !sameKeys(envelope, C.envelopeKeys)) return refuse('malformed')
   const { kid, body, sig } = envelope
@@ -155,6 +161,7 @@ export function verifyOrder(envelope, { keys, repo, runner, now }) {
   const life = expiresMs - issuedMs
   if (life <= 0 || life > C.life.maxSeconds * 1000) return refuse('bad-life')
   if (typeof order.id !== 'string' || !C.idShape.test(order.id)) return refuse('bad-id')
+  if (claimsSince !== null && !(Number.isFinite(claimsSince) && issuedMs >= claimsSince)) return refuse('before-claims')
   return { verdict: 'ok', order }
 }
 
