@@ -92,6 +92,23 @@ export function triggersInOldForm(raw) {
 // The routine for a slug, or null. Own entries only: "constructor" is a valid slug.
 export const triggerFor = (triggers, slug) => (triggers && Object.hasOwn(triggers, slug) ? triggers[slug] : null)
 
+// How a routine is fired (the routines-fire docs above): its own bearer token, the one accepted API
+// version, the routines beta header (accepted with or without it), and an optional body { text }, read
+// as freeform text of at most 65,536 characters. The text reaches the run inside a
+// <routine-fire-payload> block marked untrusted, so the routine's saved prompt must say to act on it
+// (the README has the task-intake prompt). Ours is one plain first line, then the request as JSON.
+export const ROUTINE_API_VERSION = '2023-06-01'
+export const ROUTINE_API_BETA = 'experimental-cc-routine-2026-04-01'
+export const FIRE_TEXT_MAX = 65_536
+export const FIRE_TEXT_HEADER = "A dispatch from the owner's agent-cockpit board. The JSON below is the whole request:"
+
+// The text for a request, or null when it would be over the API's limit: never cut, since half a
+// JSON request is not a request.
+export function fireText(payload) {
+  const text = `${FIRE_TEXT_HEADER}\n${JSON.stringify(payload, null, 2)}`
+  return text.length <= FIRE_TEXT_MAX ? text : null
+}
+
 const NOT_CONFIGURED =
   'Fire is not configured. Set FIRE_KEY and FIRE_TRIGGERS (a JSON object of slug → {"url", "token"}, ' +
   'one for each routine) in the hosting environment, then redeploy.'
@@ -821,12 +838,24 @@ export default async function handler(request, response) {
 // the message is a validated slug ("monday-brief", "task-intake"), nothing user-typed.
 // Returns the trigger's parsed JSON (or {}), or null after writing the error response.
 async function dispatchToTrigger(trigger, payload, label, response) {
+  const text = fireText(payload)
+  if (text === null) {
+    response.status(413).json({ error: `That request is too long for a routine: at most ${FIRE_TEXT_MAX} characters.` })
+    return null
+  }
   let upstream
   try {
     upstream = await fetch(trigger.url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      headers: {
+        Authorization: `Bearer ${trigger.token}`,
+        'anthropic-version': ROUTINE_API_VERSION,
+        'anthropic-beta': ROUTINE_API_BETA,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ text }),
+      // Never followed: a redirect could carry the token to another host.
+      redirect: 'error',
       signal: AbortSignal.timeout(TRIGGER_TIMEOUT_MS)
     })
   } catch {
