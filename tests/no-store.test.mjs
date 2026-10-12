@@ -40,6 +40,7 @@ const CASES = [
 
 test('every endpoint answers private, no-store - to a stranger, to a wrong method, to anything', async () => {
   assert.ok(endpoints.includes('state.js') && endpoints.includes('fire.js'), 'api/ was not read')
+  assert.ok(endpoints.includes('mailbox.js'), 'the Mac mailbox endpoint was not found, so it was not held to this')
   const previous = { ...process.env }
   for (const name of ['PUBLIC_DASHBOARD', 'EDIT_KEY', 'BLOB_STORE_ID', 'BLOB_READ_WRITE_TOKEN', 'OPENAI_API_KEY', 'FISH_API_KEY', 'PUBLIC_FIRE']) {
     delete process.env[name]

@@ -145,7 +145,10 @@ test('a write with no cookie and no key is refused before anything else', async 
 /* ---------- every gated endpoint, with the cookie alone ---------- */
 
 const API = fileURLToPath(new URL('../api/', import.meta.url))
-const ENDPOINTS = readdirSync(API).filter((name) => name.endsWith('.js') && !name.startsWith('_') && !['login.js', 'logout.js'].includes(name))
+// Signing in and out are the gate itself. The Mac mailbox (api/mailbox.js) is the one endpoint a
+// signed-in cookie must NOT open: it answers only the owner's computer, with its own key, and is
+// held to that below and in tests/mailbox-endpoint.test.mjs.
+const ENDPOINTS = readdirSync(API).filter((name) => name.endsWith('.js') && !name.startsWith('_') && !['login.js', 'logout.js', 'mailbox.js'].includes(name))
 
 function fakeResponse() {
   return {
@@ -428,4 +431,24 @@ test('an unchanged poll never renews the cookie: only a load that checked the si
   const load = await boardRequest(store, { headers })
   assert.ok(load.headers['Set-Cookie'], 'a full load did not renew a day-old cookie')
   forgetSignOuts()
+})
+
+test('the Mac mailbox is the one endpoint a signed-in cookie does not open: a browser is refused, and a cookie is not a key', async () => {
+  const { makeHandler } = await import('../api/mailbox.js')
+  const env = {
+    VIEW_KEY: VIEW,
+    GITHUB_OWNER: 'ExampleOwner',
+    GITHUB_REPO: 'example-team',
+    FIRE_MODE: 'mailbox',
+    MAILBOX_SECRET: ['test', 'only', 'mailbox', 'signing', 'value', '0123456789'].join('-'),
+    MAILBOX_KEY: ['test', 'only', 'mailbox', 'poll', 'value', 'abcdefghij'].join('-'),
+    BLOB_STORE_ID: 'store_fake'
+  }
+  const handler = makeHandler({ env, loadSdk: async () => { throw new Error('the store was reached') } })
+  for (const [headers, status] of [[{ ...signedIn(Date.now(), env), ...ours }, 403], [{ ...signedIn(Date.now(), env) }, 401]]) {
+    const response = fakeResponse()
+    await handler({ method: 'GET', headers, query: {} }, response)
+    assert.equal(response.statusCode, status)
+    assert.equal(response.headers['Cache-Control'], 'private, no-store')
+  }
 })
