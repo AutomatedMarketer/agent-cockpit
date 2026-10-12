@@ -31,7 +31,13 @@ test('every fixed dispatch slug is named in the deploy instructions', async () =
   // `?.` is allowed because this file uses optional chaining heavily; a lookup written
   // `triggers?.['x']` is the same lookup. Alias chains (`const m = triggers; m['x']`) are
   // still not followed - recorded in the lesson log rather than claimed away.
-  for (const m of source.matchAll(/triggers\s*\??\.?\s*\[\s*([A-Za-z_$][\w$]*|['"][a-z0-9-]+['"])\s*\]/g)) {
+  // Lookups go through triggerFor(triggers, KEY) since FIRE_TRIGGERS holds a routine's URL and token
+  // per slug (2026-10-12) - own entries only - so that spelling is a lookup too.
+  const lookups = [
+    ...source.matchAll(/triggers\s*\??\.?\s*\[\s*([A-Za-z_$][\w$]*|['"][a-z0-9-]+['"])\s*\]/g),
+    ...source.matchAll(/triggerFor\(\s*triggers\s*,\s*([A-Za-z_$][\w$]*|['"][a-z0-9-]+['"])\s*\)/g)
+  ]
+  for (const m of lookups) {
     const key = m[1]
     if (/^['"]/.test(key)) fixed.add(key.slice(1, -1))
     else if (constants.has(key)) fixed.add(constants.get(key))

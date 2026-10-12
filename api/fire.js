@@ -43,9 +43,15 @@ import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest } from './_l
 import { viewGate } from './_gate.js'
 export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
 
-// FIRE_TRIGGERS must be a JSON object of slug → https URL. Anything else reads as
-// "not configured" — never as "open".
-export function parseTriggers(raw) {
+// A routine is fired at its own address on the Claude Code routines API, with its own bearer token
+// made in the web UI (platform.claude.com/docs/en/api/claude-code/routines-fire and
+// code.claude.com/docs/en/routines, read 2026-10-12). So each FIRE_TRIGGERS entry is { url, token }:
+// the URL exactly that address - nowhere else, so a typo or a planted entry can never send a token to
+// another host - and the token one plain run of printable characters, safe in a header.
+const ROUTINE_FIRE_URL = /^https:\/\/api\.anthropic\.com\/v1\/claude_code\/routines\/trig_[A-Za-z0-9]{1,64}\/fire$/
+const ROUTINE_TOKEN = /^[\x21-\x7e]{1,512}$/
+
+function triggersObject(raw) {
   if (typeof raw !== 'string' || !raw.trim()) return null
   let parsed
   try {
@@ -53,9 +59,46 @@ export function parseTriggers(raw) {
   } catch {
     return null
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
-  return parsed
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
 }
+
+function routineEntry(value) {
+  if (!value || typeof value !== 'object') return null
+  const token = typeof value.token === 'string' ? value.token.trim() : ''
+  if (typeof value.url !== 'string' || !ROUTINE_FIRE_URL.test(value.url) || !ROUTINE_TOKEN.test(token)) return null
+  return { url: value.url, token }
+}
+
+// FIRE_TRIGGERS: a JSON object of slug → { url, token }. Only entries in that shape are kept; any
+// other reads as not there. A value that is not an object at all reads as "not configured" — never
+// as "open".
+export function parseTriggers(raw) {
+  const parsed = triggersObject(raw)
+  if (!parsed) return null
+  const kept = {}
+  for (const [slug, value] of Object.entries(parsed)) {
+    const entry = routineEntry(value)
+    if (entry) kept[slug] = entry
+  }
+  return kept
+}
+
+// The old form - a plain link per job, from before a routine needed a token - said plainly.
+export function triggersInOldForm(raw) {
+  const parsed = triggersObject(raw)
+  return Boolean(parsed) && Object.values(parsed).some((value) => typeof value === 'string')
+}
+
+// The routine for a slug, or null. Own entries only: "constructor" is a valid slug.
+export const triggerFor = (triggers, slug) => (triggers && Object.hasOwn(triggers, slug) ? triggers[slug] : null)
+
+const NOT_CONFIGURED =
+  'Fire is not configured. Set FIRE_KEY and FIRE_TRIGGERS (a JSON object of slug → {"url", "token"}, ' +
+  'one for each routine) in the hosting environment, then redeploy.'
+const OLD_FORM =
+  'Fire is not configured: FIRE_TRIGGERS is in the old format, a plain link per job. Each routine now ' +
+  'needs its URL and its token: {"<slug>": {"url": "<the routine\'s URL>", "token": "<its token>"}}. ' +
+  'The README\'s "Orders by voice" says where to get both; then redeploy.'
 
 // The payload each action sends to the trigger URL. Pause is a dispatch too: the AGENT
 // edits the workflow file and commits — the dashboard itself never writes to the repo.
@@ -453,14 +496,15 @@ export default async function handler(request, response) {
   const publicFire = process.env.PUBLIC_FIRE === 'true' && !openBoard
   const fireKey = process.env.FIRE_KEY
   const triggers = parseTriggers(process.env.FIRE_TRIGGERS)
+  // Nothing usable, and links in the old form: the format changed, and the sentence says so.
+  const oldForm = Boolean(triggers) && !Object.keys(triggers).length && triggersInOldForm(process.env.FIRE_TRIGGERS)
 
-  if (!triggers || (!fireKey && !publicFire)) {
+  if (!triggers || oldForm || (!fireKey && !publicFire)) {
     // Unconfigured is closed, never open — and the message says how to fix it without
     // saying which half is missing in a way that would confirm anything to a stranger.
     response.status(503).json({
       error:
-        'Fire is not configured. Set FIRE_KEY and FIRE_TRIGGERS (a JSON object of ' +
-        'workflow slug → trigger URL) in the hosting environment, then redeploy.' +
+        (oldForm ? OLD_FORM : NOT_CONFIGURED) +
         (openBoard && process.env.PUBLIC_FIRE === 'true' ? ' PUBLIC_FIRE does nothing on a board with PUBLIC_DASHBOARD=true.' : '')
     })
     return
@@ -500,8 +544,8 @@ export default async function handler(request, response) {
     }
     const task = checked.task
 
-    const taskTrigger = triggers[TASK_INTAKE_SLUG]
-    if (typeof taskTrigger !== 'string' || !/^https:\/\//.test(taskTrigger)) {
+    const taskTrigger = triggerFor(triggers, TASK_INTAKE_SLUG)
+    if (!taskTrigger) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot file ` +
@@ -563,8 +607,8 @@ export default async function handler(request, response) {
       return
     }
 
-    const creationTrigger = triggers[TASK_INTAKE_SLUG]
-    if (typeof creationTrigger !== 'string' || !/^https:\/\//.test(creationTrigger)) {
+    const creationTrigger = triggerFor(triggers, TASK_INTAKE_SLUG)
+    if (!creationTrigger) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot create a ` +
@@ -603,8 +647,8 @@ export default async function handler(request, response) {
     }
     const move = checked.move
 
-    const moveTrigger = triggers[TASK_INTAKE_SLUG]
-    if (typeof moveTrigger !== 'string' || !/^https:\/\//.test(moveTrigger)) {
+    const moveTrigger = triggerFor(triggers, TASK_INTAKE_SLUG)
+    if (!moveTrigger) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot change a ` +
@@ -654,8 +698,8 @@ export default async function handler(request, response) {
       return
     }
 
-    const armTrigger = triggers[TASK_INTAKE_SLUG]
-    if (typeof armTrigger !== 'string' || !/^https:\/\//.test(armTrigger)) {
+    const armTrigger = triggerFor(triggers, TASK_INTAKE_SLUG)
+    if (!armTrigger) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot arm jobs. ` +
@@ -685,8 +729,8 @@ export default async function handler(request, response) {
       return
     }
 
-    const approveTrigger = triggers[TASK_INTAKE_SLUG]
-    if (typeof approveTrigger !== 'string' || !/^https:\/\//.test(approveTrigger)) {
+    const approveTrigger = triggerFor(triggers, TASK_INTAKE_SLUG)
+    if (!approveTrigger) {
       response.status(404).json({
         error:
           `No "${TASK_INTAKE_SLUG}" routine is registered, so the dashboard cannot record ` +
@@ -717,11 +761,11 @@ export default async function handler(request, response) {
     return
   }
 
-  const triggerUrl = triggers[slug]
-  if (typeof triggerUrl !== 'string' || !/^https:\/\//.test(triggerUrl)) {
+  const trigger = triggerFor(triggers, slug)
+  if (!trigger) {
     response.status(404).json({
       error:
-        `No trigger is registered for "${slug}". Add its trigger URL to the FIRE_TRIGGERS ` +
+        `No trigger is registered for "${slug}". Add its routine's URL and token to the FIRE_TRIGGERS ` +
         'env var in the hosting environment and redeploy.'
     })
     return
@@ -761,7 +805,7 @@ export default async function handler(request, response) {
     return
   }
 
-  const result = await dispatchToTrigger(triggerUrl, dispatchPayload(slug, action), slug, response)
+  const result = await dispatchToTrigger(trigger, dispatchPayload(slug, action), slug, response)
   if (result === null) return
 
   const sessionUrl = sessionUrlFrom(result)
@@ -776,10 +820,10 @@ export default async function handler(request, response) {
 // anything the trigger said (its body is not ours to relay), never user text. The label in
 // the message is a validated slug ("monday-brief", "task-intake"), nothing user-typed.
 // Returns the trigger's parsed JSON (or {}), or null after writing the error response.
-async function dispatchToTrigger(triggerUrl, payload, label, response) {
+async function dispatchToTrigger(trigger, payload, label, response) {
   let upstream
   try {
-    upstream = await fetch(triggerUrl, {
+    upstream = await fetch(trigger.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

@@ -20,8 +20,8 @@ import { STORE_ENV, NOON, connectedStore, asTheBoard, call } from './helpers/per
 import { OPENAI_KEY, SDP_OFFER, SDP_ANSWER } from './helpers/voice-fixtures.mjs'
 import { HIDDEN_KINDS, PLAIN_TEXT } from './helpers/hidden-text.mjs'
 
-// Trigger links shaped like the real ones, made up. Nothing here is a working address.
-const LINK = (n) => `https://claude.ai/code/triggers/trig_${n}/fire`
+// Triggers shaped like the real ones - a routine's URL and its token - made up. Nothing here works.
+const LINK = (n) => ({ url: `https://api.anthropic.com/v1/claude_code/routines/trig_${n}/fire`, token: ['sk', 'ant', 'oat01', `fake${n}`].join('-') })
 const triggers = (map) => JSON.stringify(map)
 const KEYED = (map) => ({ FIRE_KEY: 'a-long-fire-passphrase', FIRE_TRIGGERS: triggers(map) })
 
@@ -32,9 +32,10 @@ test('orders are off until fire is set up, and the one sentence says how to swit
     ['nothing set', {}],
     ['FIRE_TRIGGERS that is not JSON', { FIRE_KEY: 'k', FIRE_TRIGGERS: 'task-intake=https://x' }],
     ['FIRE_TRIGGERS that is a list', { FIRE_KEY: 'k', FIRE_TRIGGERS: '["https://x"]' }],
+    ['FIRE_TRIGGERS in the old form, a plain link per job', { FIRE_KEY: 'k', FIRE_TRIGGERS: triggers({ 'task-intake': 'https://api.anthropic.com/v1/claude_code/routines/trig_1/fire' }) }],
     ['links but no fire key, and not PUBLIC_FIRE', { FIRE_TRIGGERS: triggers({ 'task-intake': LINK(1) }) }],
     ['a key but no links at all', KEYED({})],
-    ['a key, but every link is not https', KEYED({ 'task-intake': 'http://claude.ai/x', 'morning-intel': 'ftp://x' })],
+    ['a key, but every trigger points somewhere else', KEYED({ 'task-intake': { ...LINK(1), url: 'http://claude.ai/x' }, 'morning-intel': { ...LINK(2), url: 'https://evil.example/fire' } })],
     ['PUBLIC_FIRE on a board open to everyone, with no fire key', { PUBLIC_DASHBOARD: 'true', PUBLIC_FIRE: 'true', FIRE_TRIGGERS: triggers({ 'task-intake': LINK(1) }) }]
   ]) {
     const config = ordersConfig(env)
@@ -59,8 +60,10 @@ test('with the fire key and a task-intake link, tasks are on; every job with a l
     'gone-cold': LINK(3),
     'Bad Slug': LINK(4),
     '../escape': LINK(5),
-    'weekly-review': 'http://claude.ai/not-https',
-    'daily-brief': 42
+    'weekly-review': { ...LINK(6), url: 'http://claude.ai/not-https' },
+    'daily-brief': 42,
+    'old-form': 'https://api.anthropic.com/v1/claude_code/routines/trig_7/fire',
+    'no-token': { url: LINK(8).url }
   }))
   assert.deepEqual(config, { on: true, tasks: true, jobs: ['gone-cold', 'morning-intel'], key: 'fire-key', spokenYes: true, jev: false })
   // No task-intake: no task cards, but a job with its own link still runs.
@@ -101,18 +104,18 @@ test('Jev picks the agent only when JEV_ROUTING is on AND an OpenRouter key is s
   assert.equal(ordersConfig({ ...KEYED({ 'morning-intel': LINK(2) }), JEV_ROUTING: 'on', OPENROUTER_API_KEY: key }).jev, false)
 })
 
-test('no trigger link, part of one, or the fire key ever leaves the server in what orders say', () => {
+test('no trigger link, part of one, its token, or the fire key ever leaves the server in what orders say', () => {
   const key = 'fire-passphrase-that-stays-put'
   for (let round = 0; round < 50; round += 1) {
-    const map = { 'task-intake': `https://claude.ai/code/triggers/trig_intake${round}/fire?k=q${round}` }
+    const map = { 'task-intake': { url: `https://api.anthropic.com/v1/claude_code/routines/trig_intake${round}/fire`, token: `secretish${round}` } }
     for (let n = 0; n < 1 + (round % 7); n += 1) {
-      map[`job-${round}-${n}`] = `https://claude.ai/code/triggers/trig_${round}x${n}/fire#frag${n}`
+      map[`job-${round}-${n}`] = { url: `https://api.anthropic.com/v1/claude_code/routines/trig_${round}x${n}/fire`, token: `secretish${round}x${n}` }
       map[`https://claude.ai/${n}`] = LINK(n)
       map[`odd${n}/path`] = LINK(n)
     }
     const env = { FIRE_KEY: key, FIRE_TRIGGERS: triggers(map), PUBLIC_FIRE: round % 2 ? 'true' : '' }
     for (const said of [JSON.stringify(ordersConfig(env)), JSON.stringify(ordersView(ordersConfig(env)))]) {
-      for (const leak of ['https', '://', 'claude.ai', 'trig_', 'frag', key]) {
+      for (const leak of ['https', '://', 'anthropic', 'claude.ai', 'trig_', 'secretish', 'oat01', key]) {
         assert.ok(!said.includes(leak), `round ${round}: "${leak}" left the server in ${said}`)
       }
     }
@@ -163,7 +166,7 @@ test('the order tools are offered exactly as far as fire is set up: add_task wit
   for (const name of ['add_task', 'run_job']) {
     assert.match(all.tools.find((tool) => tool.name === name).description, /only shows .*card/i, name)
   }
-  assert.ok(!JSON.stringify(all).includes('https://claude.ai'), 'a trigger link reached the session')
+  assert.ok(!JSON.stringify(all).includes('claude_code/routines'), 'a routine link reached the session')
 })
 
 test('with orders on it is told to propose, ask once, and never claim - and it is never sent to a Run button', () => {
@@ -210,7 +213,8 @@ test('the call\'s answer tells the page what orders it may show - behind the wri
   const built = JSON.parse(sent[0].options.body.get('session'))
   assert.deepEqual(toolNames(built), [...READ_ONLY, 'add_task', 'run_job'])
   for (const text of [JSON.stringify(response.body), sent[0].options.body.get('session')]) {
-    assert.ok(!text.includes('claude.ai/code/triggers'), 'a trigger link left the server')
+    assert.ok(!text.includes('claude_code/routines'), 'a routine link left the server')
+    assert.ok(!text.includes('oat01'), 'a routine token left the server')
     assert.ok(!text.includes(env.FIRE_KEY), 'the fire key left the server')
   }
   // Without the write gate's yes nothing is said about orders at all.

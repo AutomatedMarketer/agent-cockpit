@@ -11,7 +11,7 @@
 // that have a trigger link. Never a link, or any part of one: a trigger link starts a session by
 // itself, so it stays in the env var, as fire.js keeps it. Pure: it reads the env it is handed.
 
-import { parseTriggers, TASK_INTAKE_SLUG } from './fire.js'
+import { parseTriggers, triggerFor, TASK_INTAKE_SLUG } from './fire.js'
 import { isValidSlug } from './_lib.js'
 import { ORDERS_OFF } from './_voice.js'
 
@@ -30,7 +30,8 @@ export function ordersConfig(env = {}) {
   // a board open to everyone, where there is no first key and so the fire key is required.
   const publicFire = env.PUBLIC_FIRE === 'true' && env.PUBLIC_DASHBOARD !== 'true'
   if (!triggers || (!env.FIRE_KEY && !publicFire)) return off()
-  const linked = (slug) => typeof triggers[slug] === 'string' && /^https:\/\//.test(triggers[slug])
+  // A routine's URL and token, in the shape fire.js keeps (parseTriggers drops any other).
+  const linked = (slug) => Boolean(triggerFor(triggers, slug))
   const tasks = linked(TASK_INTAKE_SLUG)
   const jobs = Object.keys(triggers)
     .filter((slug) => slug !== TASK_INTAKE_SLUG && isValidSlug(slug) && linked(slug))

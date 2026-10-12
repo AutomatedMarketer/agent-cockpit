@@ -7,6 +7,7 @@ import handler, {
   isValidSlug,
   keysMatch,
   parseTriggers,
+  triggersInOldForm,
   dispatchPayload,
   sessionUrlFrom,
   validateTask,
@@ -21,19 +22,27 @@ const FIRE_KEY = 'fk_correctHorseBatteryStaple'
 // is meant to get past it carries the view key as well.
 const VIEW_KEY = 'vk_fakeViewKeyForTheFireSuite'
 const GITHUB_TOKEN = 'ghp_thisMustNeverLeaveTheServer'
-const TRIGGER_URL = 'https://triggers.example/hooks/abc123SuperSecretPath'
-const TASK_TRIGGER_URL = 'https://triggers.example/hooks/task456AlsoSecretPath'
+// A routine is fired at its own URL on api.anthropic.com, with its own bearer token (Claude Code
+// routines docs, read 2026-10-12). Made-up values, put together at runtime so nothing here looks like
+// a real token to a scanner.
+const ROUTINE = (id) => `https://api.anthropic.com/v1/claude_code/routines/trig_${id}/fire`
+const ROUTINE_TOKEN = (name) => ['sk', 'ant', 'oat01', `fake${name}TokenThatStaysOnTheServer`].join('-')
+const TRIGGER_URL = ROUTINE('01MondaySecretPath')
+const TASK_TRIGGER_URL = ROUTINE('01TaskSecretPath')
 const TRIGGERS = JSON.stringify({
-  'monday-brief': TRIGGER_URL,
-  'ghost-flow': 'https://triggers.example/hooks/ghost',
-  'no-fire': 'https://triggers.example/hooks/nofire',
-  'task-intake': TASK_TRIGGER_URL
+  'monday-brief': { url: TRIGGER_URL, token: ROUTINE_TOKEN('Monday') },
+  'ghost-flow': { url: ROUTINE('01Ghost'), token: ROUTINE_TOKEN('Ghost') },
+  'no-fire': { url: ROUTINE('01NoFire'), token: ROUTINE_TOKEN('NoFire') },
+  'task-intake': { url: TASK_TRIGGER_URL, token: ROUTINE_TOKEN('Task') }
 })
 
 // Workflow files the stubbed GitHub serves. ghost-flow is in the map but not the repo.
 const FILES = {
   'workflows/monday-brief.yml':
     'name: Monday Brief\nowner: research\nsteps: [pull-calendar, write-brief]\ntrigger:\n  schedule: "weekly mon 06:00"\n  fire: true\noutput: inbox/{date}/monday-brief.md\n',
+  // A real workflow whose slug every object also has: only FIRE_TRIGGERS' own entries may fire it.
+  'workflows/constructor.yml':
+    'name: Constructor\nowner: research\nsteps: [write-brief]\ntrigger:\n  fire: true\noutput: inbox/{date}/constructor.md\n',
   'workflows/no-fire.yml':
     'name: No Fire\nowner: research\nsteps: [write-brief]\ntrigger:\n  schedule: "daily 06:00"\noutput: inbox/{date}/no-fire.md\n',
   '.claude/agents/research.md':
@@ -121,8 +130,9 @@ function assertNoSecrets(response) {
   assert.doesNotMatch(text, /fk_/, 'FIRE_KEY leaked')
   assert.doesNotMatch(text, /vk_/, 'VIEW_KEY leaked')
   assert.doesNotMatch(text, /ghp_/, 'GITHUB_TOKEN leaked')
-  assert.ok(!text.includes('triggers.example'), 'a trigger URL leaked')
-  assert.ok(!text.includes('SuperSecretPath'), 'a trigger URL path leaked')
+  assert.ok(!text.includes('claude_code/routines'), 'a routine URL leaked')
+  assert.ok(!text.includes('SecretPath'), 'a routine id leaked')
+  assert.ok(!text.includes('TokenThatStaysOnTheServer'), 'a routine token leaked')
 }
 
 // --- pure helpers -------------------------------------------------------------------------
@@ -144,10 +154,61 @@ test('key comparison rejects wrong, empty, and missing keys', () => {
 })
 
 test('FIRE_TRIGGERS must be a JSON object — anything else means unconfigured', () => {
-  assert.deepEqual(parseTriggers('{"a-b": "https://x"}'), { 'a-b': 'https://x' })
   for (const bad of [undefined, '', 'not json', '[]', '"str"', '42']) {
     assert.equal(parseTriggers(bad), null)
   }
+})
+
+test('each trigger is a routine\'s own URL on api.anthropic.com and its token - nothing else is kept', () => {
+  const good = { url: ROUTINE('01ABCdef234'), token: ROUTINE_TOKEN('Good') }
+  assert.deepEqual(parseTriggers(JSON.stringify({ 'a-b': good })), { 'a-b': good })
+  const kept = parseTriggers(JSON.stringify({
+    'old-form': 'https://api.anthropic.com/v1/claude_code/routines/trig_01Old/fire',
+    'other-host': { ...good, url: 'https://evil.example/v1/claude_code/routines/trig_01X/fire' },
+    'look-alike': { ...good, url: 'https://api.anthropic.com.evil.example/v1/claude_code/routines/trig_01X/fire' },
+    'user-info': { ...good, url: 'https://api.anthropic.com@evil.example/v1/claude_code/routines/trig_01X/fire' },
+    'plain-http': { ...good, url: 'http://api.anthropic.com/v1/claude_code/routines/trig_01X/fire' },
+    'more-path': { ...good, url: `${ROUTINE('01X')}/again` },
+    'a-query': { ...good, url: `${ROUTINE('01X')}?to=evil.example` },
+    'a-fragment': { ...good, url: `${ROUTINE('01X')}#x` },
+    'not-trig': { ...good, url: 'https://api.anthropic.com/v1/claude_code/routines/routine_01X/fire' },
+    'other-path': { ...good, url: 'https://api.anthropic.com/v1/messages' },
+    'no-token': { url: good.url },
+    'empty-token': { ...good, token: '  ' },
+    'spaced-token': { ...good, token: 'two words' },
+    'newline-token': { ...good, token: `${good.token}\nX-Evil: 1` },
+    'number-token': { ...good, token: 42 },
+    'a-list': [good.url, good.token],
+    'fine-one': good
+  }))
+  assert.deepEqual(Object.keys(kept), ['fine-one'], 'a trigger in another shape, or pointed anywhere else, was kept')
+  assert.equal(parseTriggers('{}') && Object.keys(parseTriggers('{}')).length, 0)
+})
+
+test('FIRE_TRIGGERS in the old form - a plain link per job - is not configured, and says the format changed', async () => {
+  assert.equal(triggersInOldForm(JSON.stringify({ 'task-intake': 'https://triggers.example/x' })), true)
+  assert.equal(triggersInOldForm(TRIGGERS), false)
+  assert.equal(triggersInOldForm('not json'), false)
+  const { response, calls } = await fire(withKey({ action: 'task', title: 'Chase the invoice' }), {
+    env: { FIRE_TRIGGERS: JSON.stringify({ 'task-intake': 'https://triggers.example/hooks/oldSecretPath', 'monday-brief': 'https://triggers.example/hooks/oldMonday' }) }
+  })
+  assert.equal(response.statusCode, 503)
+  assert.match(response.body.error, /old format/i)
+  assert.match(response.body.error, /"url"/)
+  assert.match(response.body.error, /"token"/)
+  assert.match(response.body.error, /README/)
+  assert.ok(!JSON.stringify(response.body).includes('oldSecretPath'), 'the old link was echoed')
+  assert.equal(calls.trigger.length, 0)
+  assertNoSecrets(response)
+})
+
+test('a job whose trigger is not a routine URL and token is not fired: it reads as not registered', async () => {
+  const { response, calls } = await fire(withKey({ workflow: 'monday-brief' }), {
+    env: { FIRE_TRIGGERS: JSON.stringify({ 'task-intake': { url: TASK_TRIGGER_URL, token: ROUTINE_TOKEN('Task') }, 'monday-brief': { url: 'https://evil.example/collect', token: ROUTINE_TOKEN('Monday') } }) }
+  })
+  assert.equal(response.statusCode, 404)
+  assert.equal(calls.trigger.length, 0, 'the board sent a token to a host that is not the routines API')
+  assertNoSecrets(response)
 })
 
 test('the pause payload tells the agent to make the edit, not the dashboard', () => {
@@ -579,7 +640,7 @@ test('a `for` agent that is not in the team repo is 400 with a plain message', a
 
 test('no task-intake trigger registered means 404 with a helpful message', async () => {
   const { response, calls } = await fire(withKey({ action: 'task', title: 'Fine title' }), {
-    env: { FIRE_TRIGGERS: JSON.stringify({ 'monday-brief': TRIGGER_URL }) }
+    env: { FIRE_TRIGGERS: JSON.stringify({ 'monday-brief': { url: TRIGGER_URL, token: ROUTINE_TOKEN('Monday') } }) }
   })
   assert.equal(response.statusCode, 404)
   assert.match(response.body.error, /task-intake/)
@@ -906,7 +967,7 @@ for (const [kind, command, folder] of [
 
   test(`no task-intake trigger means ${kind} is 404, never a silent success`, async () => {
     const { response, calls } = await fire(withKey({ action: kind, title: 'A fine title' }), {
-      env: { FIRE_TRIGGERS: JSON.stringify({ 'monday-brief': TRIGGER_URL }) }
+      env: { FIRE_TRIGGERS: JSON.stringify({ 'monday-brief': { url: TRIGGER_URL, token: ROUTINE_TOKEN('Monday') } }) }
     })
     assert.equal(response.statusCode, 404)
     assert.match(response.body.error, /task-intake/)
@@ -1022,4 +1083,16 @@ test('a task may name a model tier - only opus, sonnet or haiku, exactly - and i
   assert.equal(refused.response.statusCode, 400)
   assert.equal(refused.calls.trigger.length, 0)
   assertNoSecrets(refused.response)
+})
+
+test('a slug that names something every object has ("constructor", "toString") is never taken for a routine', async () => {
+  for (const workflow of ['constructor', 'to-string', 'has-own-property']) {
+    const { response, calls } = await fire(withKey({ workflow }))
+    assert.equal(response.statusCode, 404, workflow)
+    assert.match(response.body.error, /No trigger is registered/, workflow)
+    assert.equal(calls.trigger.length, 0, `${workflow}: something was fired`)
+  }
+  const { response, calls } = await fire(withKey({ workflow: 'constructor' }), { env: { FIRE_TRIGGERS: JSON.stringify({ 'task-intake': { url: TASK_TRIGGER_URL, token: ROUTINE_TOKEN('Task') } }) } })
+  assert.equal(response.statusCode, 404)
+  assert.equal(calls.trigger.length, 0)
 })
