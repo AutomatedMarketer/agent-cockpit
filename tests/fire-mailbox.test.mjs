@@ -94,8 +94,10 @@ function assertNothingLeaks(response) {
 }
 const mac = (response, echo) => {
   assert.equal(response.statusCode, 200, JSON.stringify(response.body))
-  const { orderId, expiresAt, ...rest } = response.body
+  const { orderId, expiresAt, pollSeconds, ...rest } = response.body
   assert.match(orderId, /^[0-9a-f]{32}$/)
+  // The pace, so the page and the voice can say when to expect it.
+  assert.equal(pollSeconds, 300)
   assert.ok(Date.parse(expiresAt) > Date.now())
   assert.deepEqual(rest, { ok: true, accepted: true, via: 'mac', ...echo })
   assertNothingLeaks(response)

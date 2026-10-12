@@ -911,7 +911,7 @@ Locally:
 npm test
 ```
 
-2129 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2144 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -

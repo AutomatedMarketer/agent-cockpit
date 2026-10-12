@@ -1909,3 +1909,66 @@ test('a search the page could not run is said, never invented', async () => {
   await flush()
   assert.match(outputOf(browser, 'call_find').error, /could not run/)
 })
+
+/* ---------- an order sent to the owner's Mac (Mac mailbox, plan 2026-10-12, C7) ---------- */
+// On a mailbox board fire answers { via: 'mac', orderId, expiresAt, pollSeconds }: the order waits in
+// the board's queue for the owner's computer. The card, the sheet and the system note say that - never
+// "started" - with the pace the board gave, and the device logs the order's id, expiry and pace, so
+// "is it done?" can read the Mac's status file for it.
+const MAC_ORDER_ID = '0f1e2d3c4b5a69788796a5b4c3d2e1f0'
+const macAnswer = (extra = {}) => async () => ({ ok: true, status: 200, payload: { ok: true, accepted: true, via: 'mac', orderId: MAC_ORDER_ID, expiresAt: new Date(NOW + 17 * 60_000).toISOString(), pollSeconds: 300, ...extra } })
+
+test('on a mailbox board the card says the order goes to the owner\'s Mac', async () => {
+  const browser = await ordering({ answer: { orders: { ...ORDERS, via: 'mac' } } })
+  propose(browser, 'add_task', { title: 'Draft it' })
+  assert.equal(lastCard(browser).what, 'A task card goes to your Mac, which files it for your team. It shows on the board a few minutes after you say yes.')
+  const run = await ordering({ answer: { orders: { ...ORDERS, via: 'mac' } } })
+  propose(run, 'run_job', { workflow: 'morning-intel' })
+  assert.equal(lastCard(run).what, 'Your Mac runs this job on your own Claude plan, a few minutes after you say yes.')
+})
+
+test('a task sent to the Mac is told as sent to the Mac, with its pace, and logged with its id, expiry and pace', async () => {
+  const browser = await ordering({ answer: { orders: { ...ORDERS, via: 'mac' } }, dispatch: macAnswer() })
+  propose(browser, 'add_task', { title: 'Draft it' })
+  tapYes(browser)
+  await flush()
+  assert.equal(systemNotes(browser).at(-1).item.content[0].text, 'The owner said yes. It was sent to their Mac, which checks every 5 minutes: the card should be on the board in about 6 minutes. It is not done yet.')
+  assert.equal(browser.ui.notes.at(-1), 'Sent to your Mac: "Draft it". It checks every 5 minutes, so the card should be on the board in about 6 minutes.')
+  assert.deepEqual(browser.state.orders[0], {
+    kind: 'task', title: 'Draft it', sentAt: new Date(NOW + 800).toISOString(),
+    via: 'mac', id: MAC_ORDER_ID, expiresAt: new Date(NOW + 17 * 60_000).toISOString(), pollSeconds: 300
+  })
+})
+
+test('a job sent to the Mac is never said to have started, and its slug is the only name in the note', async () => {
+  const browser = await ordering({ answer: { orders: { ...ORDERS, via: 'mac' } }, dispatch: macAnswer() })
+  propose(browser, 'run_job', { workflow: 'morning-intel' })
+  tapYes(browser)
+  await flush()
+  const note = systemNotes(browser).at(-1).item.content[0].text
+  assert.equal(note, 'The owner said yes. The job morning-intel was sent to their Mac, which checks every 5 minutes: it should start within about 5 minutes. It has not started yet.')
+  assert.doesNotMatch(note, /was started/)
+  assert.equal(browser.ui.notes.at(-1), 'Sent to your Mac: Morning intel. It should start within about 5 minutes.')
+  assert.equal(browser.state.orders[0].via, 'mac')
+  assert.equal(browser.state.orders[0].slug, 'morning-intel')
+})
+
+test('a Mac answer that is not the board\'s own shape is still a send, but nothing odd is logged or said', async () => {
+  for (const odd of [{ orderId: 'Chase the invoice' }, { expiresAt: 'soon' }, { pollSeconds: 5 }, { pollSeconds: '300' }]) {
+    const browser = await ordering({ answer: { orders: { ...ORDERS, via: 'mac' } }, dispatch: macAnswer(odd) })
+    propose(browser, 'add_task', { title: 'Draft it' })
+    tapYes(browser)
+    await flush()
+    const logged = browser.state.orders[0]
+    if ('orderId' in odd || 'expiresAt' in odd) {
+      assert.equal(logged.id, undefined, JSON.stringify(odd))
+      assert.equal(logged.via, undefined, JSON.stringify(odd))
+    }
+    // An odd pace is the board's default, ten minutes - never the number it was sent.
+    if ('pollSeconds' in odd) {
+      assert.match(systemNotes(browser).at(-1).item.content[0].text, /checks every 10 minutes/)
+      assert.equal(logged.pollSeconds, 600, 'an odd pace was logged as it came')
+    }
+    assert.ok(!JSON.stringify(systemNotes(browser)).includes('Chase the invoice'))
+  }
+})

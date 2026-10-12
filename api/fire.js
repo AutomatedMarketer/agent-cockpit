@@ -507,7 +507,7 @@ const SHORT_FIRE_KEY =
 async function queueAndAnswer(response, mailbox, payload, echo) {
   try {
     const sent = await queueOrder(mailbox.store, mailbox.config, payload)
-    response.status(200).json({ ok: true, accepted: true, ...echo, via: 'mac', orderId: sent.id, expiresAt: sent.expiresAt })
+    response.status(200).json({ ok: true, accepted: true, ...echo, via: 'mac', orderId: sent.id, expiresAt: sent.expiresAt, pollSeconds: mailbox.config.pollSeconds })
   } catch (error) {
     const { status, error: sentence } = failureAnswer(error)
     response.status(status).json({ error: sentence })

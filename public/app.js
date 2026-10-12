@@ -445,9 +445,11 @@ async function submitCreation(kind) {
       note.className = 'fire-note ok'
       // Says what was ASKED, like every other note on this board. The file is not there until the
       // session commits it, and this page does not get to guess in between.
-      note.textContent =
-        `Asked for — your team writes it and commits in about a minute, then leaves you a card ` +
-        `saying what it guessed.`
+      if (!macNote(note, kind, `New ${kind}: ${parts.title}`, result.payload)) {
+        note.textContent =
+          `Asked for — your team writes it and commits in about a minute, then leaves you a card ` +
+          `saying what it guessed.`
+      }
       el(`${kind}-text`).value = ''
     } else {
       note.className = 'fire-note bad'
@@ -1127,6 +1129,7 @@ function renderToday() {
     snapshotBannerHtml(data.routines) +
     ladderHtml(data.setup) +
     fireButtonsHtml(data.workflows) +
+    macOrdersHtml() +
     sectionHead('What everyone is on', '<h2>Board</h2>') + boardHtml(board) +
     sectionHead('Next 24 hours', '<h2>Due next</h2>') + dueHtml +
     sectionHead('Worth a look', '<h2>Gone quiet</h2>') + quietHtml +
@@ -2292,6 +2295,67 @@ function retryAfterSeconds(response) {
 // for this tab only. Deployments with PUBLIC_FIRE=true never prompt at all.
 const FIRE_KEY_STORE = 'agent-cockpit-fire-key'
 
+/* ---------- the Mac mailbox: orders the board queued for the owner's computer ----------
+   On a mailbox board (FIRE_MODE=mailbox) fire answers { via: 'mac', orderId, expiresAt, pollSeconds }:
+   the order waits in the board's queue until the owner's Mac collects it. A button's note says so, and
+   when to expect it - never "started", never a session link - and the device remembers the order, so
+   Today can follow it through the Mac's status file (data.mailbox) each time the board loads. The words
+   for what the Mac did are the voice's own (macOrderSaid, in the shared block). */
+const MAC_ORDERS_STORE = 'agent-cockpit-mac-orders'
+const MAC_ORDERS_KEPT = 10
+const MAC_KINDS = ['run', 'pause', 'task', 'move', 'approve', 'arm', 'skill', 'agent']
+
+// The note for a button whose order went to the Mac, or null when the answer is not the board's own
+// Mac answer - then the button says what it always said.
+function macSentWords(kind, payload) {
+  if (!macLogFields(payload).id) return null
+  const minutes = macMinutesOf(payload.pollSeconds)
+  if (kind === 'run') return `Sent to your Mac. It should start within about ${macWithin(minutes)}.`
+  if (kind === 'pause') return `Sent to your Mac. It switches the schedule off in the workflow file within about ${macWithin(minutes)}.`
+  if (kind === 'task') return `Sent to your Mac. It checks ${macEvery(minutes)}, so the card should be on the board in about ${minutes + 1} minutes.`
+  if (kind === 'move') return `Sent to your Mac. It lands in about ${minutes + 1} minutes.`
+  if (kind === 'approve') return 'Sent to your Mac. Nothing has been switched on.'
+  // Arm, a new skill, a new agent: the Mac files a card for the owner to finish in a session (D3).
+  return 'Sent to your Mac. It will file a card for you to finish in a Claude session.'
+}
+
+// The orders this device sent to the Mac, newest first: only entries in the board's own shape.
+function macOrdersLog() {
+  let parsed = null
+  try { parsed = JSON.parse(readStore(MAC_ORDERS_STORE) ?? 'null') } catch (error) { parsed = null }
+  return (Array.isArray(parsed) ? parsed : [])
+    .filter((entry) => isRecord(entry) && MAC_KINDS.includes(entry.kind) && typeof entry.label === 'string' && entry.label.length <= 200 &&
+      typeof entry.sentAt === 'string' && !Number.isNaN(Date.parse(entry.sentAt)))
+    .map((entry) => ({ kind: entry.kind, label: entry.label, sentAt: entry.sentAt, ...macLogFields({ via: entry.via, orderId: entry.id, expiresAt: entry.expiresAt, pollSeconds: entry.pollSeconds }) }))
+    .filter((entry) => entry.id)
+    .slice(0, MAC_ORDERS_KEPT)
+}
+
+// Says the Mac's words on a button's note and remembers the order. False when it was not a Mac answer.
+function macNote(note, kind, label, payload) {
+  const words = macSentWords(kind, payload)
+  if (!words) return false
+  note.textContent = words
+  const entry = { kind, label: String(label).slice(0, 200), sentAt: new Date().toISOString(), ...macLogFields(payload) }
+  writeStore(MAC_ORDERS_STORE, JSON.stringify([entry, ...macOrdersLog().filter((one) => one.id !== entry.id)].slice(0, MAC_ORDERS_KEPT)))
+  return true
+}
+
+// Today's "Your Mac" panel: each remembered order, and what the Mac's status file says of it.
+function macOrdersHtml() {
+  const orders = macOrdersLog()
+  if (!orders.length) return ''
+  let zone = 'UTC'
+  try { zone = voiceZone(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC' } catch (error) { zone = 'UTC' }
+  const rows = orders.map((order) => {
+    const said = macOrderSaid(order, data, Date.now(), zone)
+    if (!said) return ''
+    const words = said.state === 'sent to your Mac' ? `Sent to your Mac. It checks ${macEvery(macMinutesOf(order.pollSeconds))}.` : said.said
+    return `<div class="gap"><b>${escapeHtml(order.label)}</b> <span class="small">${escapeHtml(words)}</span></div>`
+  }).join('')
+  return rows ? sectionHead('Orders sent to your computer', '<h2>Your Mac</h2>') + `<div class="panel">${rows}</div>` : ''
+}
+
 function fireNoteFor(button) {
   let note = button.parentElement.querySelector('.fire-note')
   if (!note) {
@@ -2357,7 +2421,7 @@ async function armWorkflow(button) {
     const result = await postFire({ workflow: slug, action: 'arm' })
     if (result.ok) {
       note.className = 'fire-note ok'
-      note.textContent = 'Sent. It will ask for your run cap before it arms anything.'
+      if (!macNote(note, 'arm', `Arm ${slug}`, result.payload)) note.textContent = 'Sent. It will ask for your run cap before it arms anything.'
     } else {
       note.className = 'fire-note bad'
       note.textContent = result.payload.error || `Dispatch failed (${result.status}).`
@@ -2385,7 +2449,7 @@ async function approveProposal(button) {
     const result = await postFire({ action: 'approve', task })
     if (result.ok) {
       note.className = 'fire-note ok'
-      note.textContent = 'Approved. Nothing has been switched on.'
+      if (!macNote(note, 'approve', `Approve: ${task}`, result.payload)) note.textContent = 'Approved. Nothing has been switched on.'
     } else {
       note.className = 'fire-note bad'
       note.textContent = result.payload.error || `Dispatch failed (${result.status}).`
@@ -2416,7 +2480,9 @@ async function fireWorkflow(button) {
     const result = await postFire({ workflow: slug, action })
     if (result.ok) {
       note.className = 'fire-note ok'
-      if (SESSION_LINK.test(String(result.payload.sessionUrl ?? ''))) {
+      if (macNote(note, action, `${action === 'pause' ? 'Pause' : 'Run'} ${slug}`, result.payload)) {
+        // Sent to the owner's Mac: the note says so (macNote).
+      } else if (SESSION_LINK.test(String(result.payload.sessionUrl ?? ''))) {
         note.innerHTML = `Sent &middot; <a href="${escapeHtml(result.payload.sessionUrl)}" rel="noreferrer noopener">watch it run</a>`
       } else {
         note.textContent = action === 'pause' ? 'Pause sent to the agent.' : 'Job sent.'
@@ -2477,7 +2543,9 @@ async function moveTask(button) {
         note.className = 'move-note small ok'
         // Says what was ASKED, not what is true. The card is still whatever the repo says it is
         // until the session commits, and this board does not get to guess in between.
-        note.innerHTML = `Asked your team to mark this ${asked} — it lands in about a minute. <a href="#" data-reload="1">Refresh</a>`
+        if (!macNote(note, 'move', `Move ${button.dataset.move} to ${button.dataset.status}`, result.payload)) {
+          note.innerHTML = `Asked your team to mark this ${asked} — it lands in about a minute. <a href="#" data-reload="1">Refresh</a>`
+        }
       }
       card?.classList.add('pending')
     } else {
@@ -2517,7 +2585,7 @@ async function submitTask() {
     const result = await postFire(body)
     if (result.ok) {
       note.className = 'fire-note ok'
-      note.textContent = 'Card sent — it appears once your team commits it (about a minute).'
+      if (!macNote(note, 'task', `Task: ${parts.title}`, result.payload)) note.textContent = 'Card sent — it appears once your team commits it (about a minute).'
       el('task-text').value = ''
       el('task-for').value = ''
     } else {
@@ -2557,7 +2625,9 @@ async function submitWorkflowRequest() {
     })
     if (result.ok) {
       note.className = 'fire-note ok'
-      note.textContent = 'Requested — your team picks it up on the next sweep and will ask if it needs more.'
+      if (!macNote(note, 'task', `New workflow: ${splitTaskText(asked).title.slice(0, 180)}`, result.payload)) {
+        note.textContent = 'Requested — your team picks it up on the next sweep and will ask if it needs more.'
+      }
       el('wf-text').value = ''
     } else {
       note.className = 'fire-note bad'
@@ -4526,6 +4596,80 @@ function runSaid(run, running, zone) {
   return { state: 'finished', status: toolText(run.status) || 'ok', at: toolTime(run.finished_at ?? run.started_at, zone), summary: firstSentence(run.summary) }
 }
 
+// --- an order sent to the owner's Mac (the Mac mailbox, FIRE_MODE=mailbox) ---
+// The Mac pushes a status file with each order it does (data.mailbox, shaped by the board), matched by
+// the order's id - never by words. What is said of it is the board's own: a time, a pace and one of the
+// fixed reasons below, which are the shared contract's (tests/fixtures/mailbox-parity.json, status
+// reasons; KEEP IN SYNC - tests/mailbox-voice.test.mjs holds the two together).
+const MAC_REASON_WORDS = {
+  refused: {
+    expired: 'it expired before your Mac picked it up',
+    'wrong-repo': 'it was meant for another team repo',
+    'wrong-runner': 'it was meant for another computer',
+    'not-allowed': 'that kind of order is not on its list',
+    'job-not-allowed': 'that job is not on its list',
+    'daily-limit': 'it has done all the orders it allows today',
+    'not-valid': 'the order did not pass its checks',
+    'card-not-found': 'that card is not in the team repo',
+    'no-such-row': 'no row in proposals.yml matches it',
+    'several-rows': 'more than one row in proposals.yml matches it',
+    'no-workflow': 'that job has no workflow file',
+    'not-ready': 'its daily check found a problem with its login or settings'
+  },
+  failed: {
+    'change-refused': 'the change touched files it may not touch',
+    'tool-refused': 'Claude tried a tool it may not use',
+    'claude-failed': 'Claude stopped with an error',
+    'timed-out': 'it ran past its time limit',
+    'run-log-refused': 'its run log did not pass the check',
+    'push-failed': 'the change could not be pushed'
+  }
+}
+const MAC_ORDER_ID = /^[0-9a-f]{32}$/
+// The pace the board said when the order was sent; anything else is the board's default, never a guess.
+const macPace = (value) => (Number.isInteger(value) && value >= 60 && value <= 3600 ? value : 600)
+// After this many of the Mac's checks with no sign of it, the order is waiting, not just sent.
+const MAC_CHECKS_BEFORE_WAITING = 3
+const macReason = (state, why) => (typeof why === 'string' && Object.hasOwn(MAC_REASON_WORDS[state] ?? {}, why) ? MAC_REASON_WORDS[state][why] : null)
+
+// { state, said } for an order sent to the Mac, from its status file first; done: true when the Mac
+// says it finished, so the card or the run can say the rest. null for an order that did not go to the
+// Mac, or whose id or expiry is not the board's own shape.
+function macOrderSaid(order, data, now, zone) {
+  if (order?.via !== 'mac' || typeof order.id !== 'string' || !MAC_ORDER_ID.test(order.id)) return null
+  const expires = typeof order.expiresAt === 'string' ? Date.parse(order.expiresAt) : NaN
+  const sentAt = typeof order.sentAt === 'string' ? Date.parse(order.sentAt) : NaN
+  if (!Number.isFinite(expires) || !Number.isFinite(sentAt)) return null
+  const entry = toolList(data?.mailbox?.computers).flatMap((computer) => toolList(computer.orders)).find((one) => one.id === order.id)
+  if (entry?.state === 'claimed') return { state: 'picked up by your Mac', said: `Your Mac picked it up at ${toolTime(entry.at, zone)}.` }
+  if (entry?.state === 'running') return { state: 'running on your Mac', said: `Your Mac picked it up at ${toolTime(entry.startedAt ?? entry.at, zone)} and is running it.` }
+  if (entry?.state === 'refused') return { state: 'refused by your Mac', said: `Your Mac refused it: ${macReason('refused', entry.why) ?? 'it did not say why'}.` }
+  if (entry?.state === 'failed') {
+    const why = macReason('failed', entry.why)
+    return { state: 'failed on your Mac', said: `Your Mac tried and it failed${why ? `: ${why}` : ''}. Nothing changed on the board.` }
+  }
+  if (entry?.state === 'unknown') {
+    const checked = entry.landed === true
+      ? 'Checked afterwards: the change is on the board.'
+      : entry.landed === false ? 'Checked afterwards: the change is not on the board.' : 'It has not checked yet whether the change landed.'
+    return { state: 'outcome unknown', said: `Your Mac lost track of this one part-way. It will not run it again by itself. ${checked}` }
+  }
+  if (entry?.state === 'ok') {
+    return { state: 'done on your Mac', done: true, said: `Your Mac finished it at ${toolTime(entry.finishedAt ?? entry.at, zone)}. It shows on the board after the next refresh.` }
+  }
+  if (now >= expires) return { state: 'expired', said: 'It expired before your Mac picked it up, so nothing ran.' }
+  const pace = macPace(order.pollSeconds)
+  if (now - sentAt > MAC_CHECKS_BEFORE_WAITING * pace * 1000) {
+    return { state: 'waiting for your Mac', said: `Your Mac has not picked it up yet. It may be asleep or offline. If it has not started by ${toolTime(order.expiresAt, zone)}, it will not run at all.` }
+  }
+  const minutes = Math.max(1, Math.round(pace / 60))
+  const every = minutes === 1 ? 'every minute' : `every ${minutes} minutes`
+  const next = order.kind === 'run'
+    ? `it should start within about ${minutes === 1 ? 'a minute' : `${minutes} minutes`}`
+    : `the card should be on the board in about ${minutes + 1} minutes`
+  return { state: 'sent to your Mac', said: `Sent to your Mac. It checks ${every}, so ${next}.` }
+}
+
 function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fresh = false } = {}) {
   const zone = voiceZone(timeZone) ?? 'UTC'
   const when = {
@@ -4543,19 +4687,25 @@ function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fre
     if (!order) return { ...when, which: 'last order', state: 'unknown', said: 'No order has been sent from this device yet.' }
     const sentAt = Date.parse(order.sentAt)
     const sent = { sentAt: toolTime(order.sentAt, zone) }
+    // Sent to the Mac: its status file first; once it says done, the card or the run as for any order.
+    const mac = macOrderSaid(order, data, now, zone)
+    const fromMac = (base) => ({ ...when, ...base, state: mac.state, said: mac.said })
     if (order.kind === 'run') {
+      const job = { which: 'last order', kind: 'run', job: toolText(order.name), ...sent }
+      if (mac && !mac.done) return fromMac(job)
       const mine = runs
         .filter((run) => (run.workflow === order.slug || run.workflow === order.name) && Date.parse(run.started_at) >= sentAt - ORDER_RUN_SLACK_MS)
         .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
-      const job = { which: 'last order', kind: 'run', job: toolText(order.name), ...sent }
-      return mine.length ? toolFits({ ...when, ...job, ...runSaid(mine[0], isRunning(mine[0]), zone) }) : { ...when, ...job, state: 'sent, nothing has reported yet' }
+      if (mine.length) return toolFits({ ...when, ...job, ...runSaid(mine[0], isRunning(mine[0]), zone) })
+      return mac ? fromMac(job) : { ...when, ...job, state: 'sent, nothing has reported yet' }
     }
     const task = { which: 'last order', kind: 'task', title: toolText(order.title), ...sent }
+    if (mac && !mac.done) return fromMac(task)
     const open = toolList(data?.board?.todo).find((card) => card.title === order.title)
     if (open) return { ...when, ...task, state: open.doing ? 'doing' : 'to do' }
     const finished = [...toolList(data?.board?.done), ...toolList(data?.board?.finishedTasks)].find((card) => card.kind === 'task' && card.title === order.title)
     if (finished) return { ...when, ...task, state: 'done' }
-    return { ...when, ...task, state: 'not filed yet' }
+    return mac ? fromMac(task) : { ...when, ...task, state: 'not filed yet' }
   }
   const workflow = toolList(data?.workflows).find((one) => one.slug === which || (typeof one.name === 'string' && one.name.trim().toLowerCase() === which))
   if (!workflow) return { ...when, which: toolText(which), state: 'unknown', said: 'There is no job with that name on the board.' }
@@ -5244,6 +5394,11 @@ const VOICE_ORDER = {
   taskHeading: 'Send to the team?',
   taskWhat: 'A task card goes to your team. It shows on the board about a minute after you say yes.',
   runWhat: 'Starts this job now. It uses one routine run.',
+  // On a mailbox board the order waits for the owner's computer, which collects it every few minutes.
+  taskWhatMac: 'A task card goes to your Mac, which files it for your team. It shows on the board a few minutes after you say yes.',
+  runWhatMac: 'Your Mac runs this job on your own Claude plan, a few minutes after you say yes.',
+  sentTaskMac: (minutes) => `The owner said yes. It was sent to their Mac, which checks ${macEvery(minutes)}: the card should be on the board in about ${minutes + 1} minutes. It is not done yet.`,
+  sentRunMac: (slug, minutes) => `The owner said yes. The job ${VOICE_NOTE_SLUG.test(slug) ? `${slug} ` : ''}was sent to their Mac, which checks ${macEvery(minutes)}: it should start within about ${macWithin(minutes)}. It has not started yet.`,
   orchestrator: 'Let the orchestrator choose',
   waiting: { status: 'waiting', for: 'the owner', expiresInSeconds: CONFIRM_WINDOW_MS / 1000 },
   justSent: 'That was just sent, so it is on its way. Nothing more to do.',
@@ -5276,6 +5431,19 @@ function voicePickWords(agent, model) {
   return `${line('Agent', agent, 'the orchestrator decides')}\n${line('Model', model, "the agent's own")}`
 }
 const VOICE_NOTE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+// The Mac mailbox's pace, said: minutes from the seconds the board gave (macPace keeps them the board's
+// own shape, or its default).
+const macMinutesOf = (pollSeconds) => Math.max(1, Math.round(macPace(pollSeconds) / 60))
+const macEvery = (minutes) => (minutes === 1 ? 'every minute' : `every ${minutes} minutes`)
+const macWithin = (minutes) => (minutes === 1 ? 'a minute' : `${minutes} minutes`)
+// What the device logs of an order the board queued for the Mac: its id, expiry and pace, each only in
+// the board's own shape - otherwise nothing, and "is it done?" answers it as any other order.
+function macLogFields(payload) {
+  if (!isRecord(payload) || payload.via !== 'mac') return {}
+  if (typeof payload.orderId !== 'string' || !MAC_ORDER_ID.test(payload.orderId)) return {}
+  if (typeof payload.expiresAt !== 'string' || Number.isNaN(Date.parse(payload.expiresAt))) return {}
+  return { via: 'mac', id: payload.orderId, expiresAt: new Date(Date.parse(payload.expiresAt)).toISOString(), pollSeconds: macPace(payload.pollSeconds) }
+}
 // Why an order was not sent, for the model: fixed words chosen by the answer's status. The person sees
 // the board's own sentence in the sheet; the model never gets any text that came over the network.
 function voiceRefusalWords(result) {
@@ -5304,6 +5472,8 @@ function voiceOrdersLog() {
   const text = (value) => typeof value === 'string' && value.length <= 200
   return (Array.isArray(parsed) ? parsed : []).filter((entry) => isRecord(entry) && text(entry.sentAt) && !Number.isNaN(Date.parse(entry.sentAt)) &&
     ((entry.kind === 'task' && text(entry.title)) || (entry.kind === 'run' && text(entry.slug) && text(entry.name)))).slice(0, VOICE_ORDERS_KEPT)
+    // An order sent to the Mac keeps its id, expiry and pace only in the board's own shape.
+    .map(({ via, id, expiresAt, pollSeconds, ...entry }) => ({ ...entry, ...macLogFields({ via, orderId: id, expiresAt, pollSeconds }) }))
 }
 // What the board said orders may do on this call (api/_orders.js, ordersView), or off.
 function voiceOrdersFrom(raw) {
@@ -5314,7 +5484,8 @@ function voiceOrdersFrom(raw) {
     jobs: Array.isArray(raw.jobs) ? raw.jobs.filter((slug) => typeof slug === 'string').slice(0, 40) : [],
     key: raw.key === 'public' ? 'public' : 'fire-key',
     spokenYes: raw.spokenYes === true,
-    jev: raw.jev === true
+    jev: raw.jev === true,
+    ...(raw.via === 'mac' ? { via: 'mac' } : {})
   }
 }
 const voiceDoing = (calls) =>
@@ -5780,7 +5951,9 @@ function openVoice(deps, ui) {
     const asking = order.kind === 'task' && session.orders.jev === true && !(order.agent && order.model)
     return {
       heading: order.kind === 'task' ? VOICE_ORDER.taskHeading : `Run ${order.name}?`,
-      what: order.kind === 'task' ? VOICE_ORDER.taskWhat : VOICE_ORDER.runWhat,
+      what: session.orders.via === 'mac'
+        ? (order.kind === 'task' ? VOICE_ORDER.taskWhatMac : VOICE_ORDER.runWhatMac)
+        : (order.kind === 'task' ? VOICE_ORDER.taskWhat : VOICE_ORDER.runWhat),
       text: order.kind === 'task' ? order.title : '',
       details: order.details ?? '',
       owners,
@@ -5913,10 +6086,20 @@ function openVoice(deps, ui) {
       deps.saveOrder?.({
         kind: order.kind,
         ...(order.kind === 'task' ? { title: order.title } : { slug: order.slug, name: order.name }),
-        sentAt: new Date(sent.at).toISOString()
+        sentAt: new Date(sent.at).toISOString(),
+        ...macLogFields(result.payload)
       })
-      showOutcome(order.kind === 'task' ? `Sent: "${order.title}". It shows on the board in about a minute.` : `Started: ${order.name}.`)
-      tellModel(order.kind === 'task' ? VOICE_ORDER.sentTask : VOICE_ORDER.sentRun(order.slug))
+      if (result.payload?.via === 'mac') {
+        // Waiting for the owner's computer: never "started", and the pace is the board's own.
+        const minutes = macMinutesOf(result.payload.pollSeconds)
+        showOutcome(order.kind === 'task'
+          ? `Sent to your Mac: "${order.title}". It checks ${macEvery(minutes)}, so the card should be on the board in about ${minutes + 1} minutes.`
+          : `Sent to your Mac: ${order.name}. It should start within about ${macWithin(minutes)}.`)
+        tellModel(order.kind === 'task' ? VOICE_ORDER.sentTaskMac(minutes) : VOICE_ORDER.sentRunMac(order.slug, minutes))
+      } else {
+        showOutcome(order.kind === 'task' ? `Sent: "${order.title}". It shows on the board in about a minute.` : `Started: ${order.name}.`)
+        tellModel(order.kind === 'task' ? VOICE_ORDER.sentTask : VOICE_ORDER.sentRun(order.slug))
+      }
     } else {
       // Not sent, so not "just sent" either: the same order may be proposed again at once.
       session.sent = session.sent.filter((one) => one !== sent)
