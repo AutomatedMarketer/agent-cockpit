@@ -103,9 +103,12 @@ export const FIRE_TEXT_MAX = 65_536
 export const FIRE_TEXT_HEADER = "A dispatch from the owner's agent-cockpit board. The JSON below is the whole request:"
 
 // The text for a request, or null when it would be over the API's limit: never cut, since half a
-// JSON request is not a request.
+// JSON request is not a request. No raw < or > is sent: typed words like "</routine-fire-payload>"
+// could otherwise close the platform's untrusted wrapper early. JSON's < and > read back
+// as the same characters, so the request is unchanged. The limit counts the escaped text.
 export function fireText(payload) {
-  const text = `${FIRE_TEXT_HEADER}\n${JSON.stringify(payload, null, 2)}`
+  const json = JSON.stringify(payload, null, 2).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e')
+  const text = `${FIRE_TEXT_HEADER}\n${json}`
   return text.length <= FIRE_TEXT_MAX ? text : null
 }
 
