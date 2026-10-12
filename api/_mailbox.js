@@ -178,6 +178,12 @@ const notSet = (name, what) =>
   `The Mac mailbox is not configured: ${name} must be ${what}. Set it in the hosting environment (the README's "Orders on your own computer" says how), then redeploy.`
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '')
+
+// The fire key a mailbox board needs: 24 characters or more, and not a placeholder - the same test the
+// secret and the key get. Mailbox mode only: a cloud board's passphrase is the owner's, and a word in it
+// like "example" must not switch their Run buttons off (FIRE_TRIGGERS still guards a cloud board).
+export const MAILBOX_FIRE_KEY_MIN = 24
+export const mailboxFireKeyOk = (value) => typeof value === 'string' && value.length >= MAILBOX_FIRE_KEY_MIN && !PLACEHOLDER.test(value)
 const secretValue = (value, shape) => {
   const text = trimmed(value)
   return shape.test(text) && !PLACEHOLDER.test(text) ? text : null

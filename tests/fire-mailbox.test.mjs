@@ -196,6 +196,14 @@ test('in mailbox mode a fire key under 24 characters is not configured - the pla
     assert.ok(!response.body.error.includes(short), 'the key was echoed')
     assert.equal(fake.calls.put.length, 0)
   }
+  // Long, and still a placeholder: the same rule MAILBOX_SECRET and MAILBOX_KEY are held to.
+  for (const placeholder of ['FILL-ME-IN-FILL-ME-IN-FILL-ME-IN', 'your-long-passphrase-goes-here', 'replace-me-with-a-long-passphrase', 'an-example-fire-key-of-some-length']) {
+    const { response, fake } = await fire({ action: 'task', title: 'Chase the invoice' }, { env: { FIRE_KEY: placeholder }, headers: { 'x-fire-key': placeholder } })
+    assert.equal(response.statusCode, 503, placeholder)
+    assert.match(response.body.error, /FIRE_KEY must be 24 characters or more, and not a placeholder/)
+    assert.ok(!response.body.error.includes(placeholder), 'the key was echoed')
+    assert.equal(fake.calls.put.length, 0)
+  }
   const exactly = 'y'.repeat(24)
   const ok = await fire({ action: 'task', title: 'Chase the invoice' }, { env: { FIRE_KEY: exactly }, headers: { 'x-fire-key': exactly } })
   assert.equal(ok.response.statusCode, 200)

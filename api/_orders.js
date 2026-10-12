@@ -11,10 +11,10 @@
 // that have a trigger link. Never a link, or any part of one: a trigger link starts a session by
 // itself, so it stays in the env var, as fire.js keeps it. Pure: it reads the env it is handed.
 
-import { parseTriggers, triggerFor, TASK_INTAKE_SLUG, MAILBOX_FIRE_KEY_MIN } from './fire.js'
+import { parseTriggers, triggerFor, TASK_INTAKE_SLUG } from './fire.js'
 import { isValidSlug } from './_lib.js'
 import { ORDERS_OFF, MAILBOX_ORDERS_OFF } from './_voice.js'
-import { mailboxConfig, MAILBOX_CONTRACT } from './_mailbox.js'
+import { mailboxConfig, mailboxFireKeyOk, MAILBOX_CONTRACT } from './_mailbox.js'
 import { shapeMailbox, MAILBOX_FOLDER } from './state.js'
 
 // The jobs the assistant is offered by name. A list it can be shown in one tool, sorted so the
@@ -42,7 +42,7 @@ const extras = (env, tasks) => ({
 // fire: true, and the computer its own list, on every order.
 function mailboxOrders(env, mac, publicFire) {
   const settings = mailboxConfig(env)
-  const keyed = publicFire || (typeof env.FIRE_KEY === 'string' && env.FIRE_KEY.length >= MAILBOX_FIRE_KEY_MIN)
+  const keyed = publicFire || mailboxFireKeyOk(env.FIRE_KEY)
   if (!settings.ready || !keyed) return off(MAILBOX_ORDERS_OFF)
   const actions = mac?.allows?.actions ?? null
   const tasks = actions ? actions.includes('task') : true

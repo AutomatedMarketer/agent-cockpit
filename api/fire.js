@@ -41,7 +41,7 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 // too, and a second copy of either is a second place to get it wrong.
 import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest } from './_lib.js'
 import { viewGate } from './_gate.js'
-import { mailboxConfig, queueOrder } from './_mailbox.js'
+import { mailboxConfig, queueOrder, mailboxFireKeyOk, MAILBOX_FIRE_KEY_MIN } from './_mailbox.js'
 import { pictureStore, failureAnswer } from './_picture-store.js'
 export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
 
@@ -498,10 +498,10 @@ function readBody(request) {
 // order goes into the board's own queue for the owner's computer instead of to a cloud routine. The
 // fire key must then be 24 characters or more: FIRE_TRIGGERS, whose absence used to keep a
 // placeholder fire key harmless, is not needed in that mode.
-export const MAILBOX_FIRE_KEY_MIN = 24
+export { MAILBOX_FIRE_KEY_MIN }
 const SHORT_FIRE_KEY =
-  `Fire is not configured: in mailbox mode FIRE_KEY must be ${MAILBOX_FIRE_KEY_MIN} characters or more - a long ` +
-  'passphrase you make up - or PUBLIC_FIRE=true. Set it in the hosting environment, then redeploy.'
+  `Fire is not configured: in mailbox mode FIRE_KEY must be ${MAILBOX_FIRE_KEY_MIN} characters or more, and not a ` +
+  'placeholder - a long passphrase you make up - or PUBLIC_FIRE=true. Set it in the hosting environment, then redeploy.'
 
 // The answer to an order the queue took: the same echo the cloud gives, and where it went. Never the
 // signed order itself.
@@ -554,7 +554,7 @@ async function handle(request, response, { loadSdk }) {
     // sentence names the setting, never its value.
     const why = !settings.ready
       ? settings.why
-      : !publicFire && !(typeof fireKey === 'string' && fireKey.length >= MAILBOX_FIRE_KEY_MIN) ? SHORT_FIRE_KEY : null
+      : !publicFire && !mailboxFireKeyOk(fireKey) ? SHORT_FIRE_KEY : null
     if (why) {
       response.status(503).json({ error: why })
       return

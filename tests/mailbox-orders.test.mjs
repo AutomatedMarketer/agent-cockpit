@@ -57,6 +57,7 @@ test('in mailbox mode orders are off - in the mailbox\'s own sentence - when it 
     ['no picture store', { ...ENV, BLOB_STORE_ID: undefined }],
     ['a fire key under 24 characters', { ...ENV, FIRE_KEY: 'FILL-ME-IN' }],
     ['no fire key', { ...ENV, FIRE_KEY: undefined }],
+    ['a long placeholder fire key', { ...ENV, FIRE_KEY: 'your-long-passphrase-goes-here' }],
     ['a FIRE_MODE that is neither', { ...ENV, FIRE_MODE: 'mac' }]
   ]) {
     const config = ordersConfig(env, null)

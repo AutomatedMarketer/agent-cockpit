@@ -789,8 +789,8 @@ and one function call. Each order is one more read and one write. In a 31-day mo
    You paste them; nobody else types a key
 2. **In Vercel**, Production: `FIRE_MODE=mailbox`, `MAILBOX_KEY` and `MAILBOX_SECRET` (both Sensitive),
    `MAILBOX_SECRET_ID=k1`, `MAILBOX_RUNNER=mac-mini`, and `MAILBOX_POLL_SECONDS=300` on Pro (leave it
-   unset on Hobby). `FIRE_KEY` must be **24 characters or more** - a placeholder like `FILL-ME-IN` reads
-   as not configured. A private picture store must be connected. `FIRE_TRIGGERS` is not needed. Redeploy
+   unset on Hobby). `FIRE_KEY` must be **24 characters or more, and not a placeholder** - `FILL-ME-IN`, or
+   a long one like `your-long-passphrase-goes-here`, reads as not configured. A private picture store must be connected. `FIRE_TRIGGERS` is not needed. Redeploy
 3. Tap **Add task** with a test card. It should be on the board within a few minutes
 
 **Changing the secret** (when you think it leaked, when the Mac is replaced, and once a year): add the new
@@ -852,7 +852,7 @@ has no evidence for.
 | `BOARD_PASSWORD` | The password you sign in with: **12 characters or more**. Tick **Sensitive** | Recommended |
 | `PUBLIC_DASHBOARD` | `true` to skip the key entirely — only if the repo is genuinely public | No |
 | `FIRE_TRIGGERS` | One JSON object: for each routine, its `"url"` and `"token"` from its API trigger at claude.ai/code/routines - `{"task-intake":{"url":"…","token":"…"}}`. Needed for the Run buttons. **Include `task-intake`** — a routine, not a job — or Add task, New workflow, Arm, Approve and Pause all fail. Mark it sensitive. See [Orders by voice](#orders-by-voice) | For buttons |
-| `FIRE_KEY` | A password for firing jobs, sent as `x-fire-key`. In mailbox mode it must be **24 characters or more** | For buttons |
+| `FIRE_KEY` | A password for firing jobs, sent as `x-fire-key`. In mailbox mode it must be **24 characters or more, and not a placeholder** | For buttons |
 | `FIRE_MODE` | `mailbox` to send orders to your own Mac instead of cloud routines ([Orders on your own computer](#orders-on-your-own-computer-mac-mailbox)). `cloud` unless set; anything else reads as not configured | No |
 | `MAILBOX_SECRET` | The secret that signs every order, made on your Mac (32+ characters). Sensitive. Never the same as `MAILBOX_KEY` | For the mailbox |
 | `MAILBOX_SECRET_ID` | Which secret signs: `k1` unless set (`k2` while you change it) | No |
@@ -1037,7 +1037,7 @@ hash - loaded only when someone opens **Graph** on Memory. Every notice they car
 | "…does not exist any more…" | The routine was deleted, or its URL in `FIRE_TRIGGERS` is wrong. Copy the URL again from its API trigger |
 | Pause was sent, and the job still runs on its schedule | Pause edits only `workflows/<slug>.yml`. If the job's routine has a schedule of its own at claude.ai/code/routines, Pause cannot stop that: switch the routine off there |
 | "The Mac mailbox is not configured: …" | The sentence names the setting. Set it in Vercel and redeploy ([Orders on your own computer](#orders-on-your-own-computer-mac-mailbox)) |
-| "…in mailbox mode FIRE_KEY must be 24 characters or more…" | Set a long `FIRE_KEY` you make up (or `PUBLIC_FIRE=true`) and redeploy |
+| "…in mailbox mode FIRE_KEY must be 24 characters or more, and not a placeholder…" | Set a long `FIRE_KEY` you make up (or `PUBLIC_FIRE=true`) and redeploy |
 | "Your board has sent all 8 orders it allows today…" | Wait until midnight UTC. The limit keeps the picture store inside its free allowance |
 | "Your Mac has not picked it up yet. It may be asleep or offline…" | Wake the Mac and check it is online. The Readiness wall's Mac mailbox light, and the runner's `PAUSE` file, say more |
 | "It expired before your Mac picked it up, so nothing ran." | Nothing happened. Send it again once your Mac is on |
