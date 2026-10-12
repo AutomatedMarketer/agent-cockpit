@@ -443,6 +443,9 @@ the rest of the 2,000 for retries and for you looking at the store in Vercel:
   changes first, up to 26 a day, and pictures from words get whatever is left
 - The defaults, 19 changes and 10 pictures from words, are 48 a day; with meaning search's 2, 50. The
   voice meter uses the 5 left over
+- In mailbox mode ([Orders on your own computer](#orders-on-your-own-computer-mac-mailbox)) each order is
+  one write, at most 8 a day, taken from the changes: 15 a day instead of 19, so
+  `2 × 15 + 10 + 2 + 8 + 5 = 55`
 - The Blob library retries a failed write up to 10 times on its own, and a retry can count. Set
   `VERCEL_BLOB_RETRIES=2` in Vercel to keep that small
 - **The budget does not cover changes from many devices at the same moment.** Vercel may run several
@@ -718,12 +721,85 @@ Fish Audio can speak the answers in a voice you pick from its library.
 | The words of each answer, with Fish on | **Fish** | So it can speak them. Its free model may train on them |
 | Each conversation's token counts | **The board's picture store** | The meter |
 | The words of an order you say yes to | **Your `task-intake` routine** (a task) or **that job's routine** (a run), through the board's own `/api/fire` and Anthropic's routines API | So your team does it. The routines' URLs and tokens stay in Vercel; none reaches your browser |
+| In mailbox mode: the words of each order you send | **Your private picture store**, for up to an hour (17 minutes at a 5-minute pace), then **your Mac**, which collects them | So your Mac does it. Signed, so your Mac refuses anything the board did not send |
 | With `JEV_ROUTING=on`: a task's title and details, your agents' slugs and descriptions, and the board's note on each model tier | **OpenRouter** (Jev) | So it can pick who does the task and on which model. Off by default |
 | With `MEMORY_MEANING=on`: the text of each note the board can open (its first 8,000 characters), and the words of each search | **OpenAI** | So notes can be found by meaning. Kept up to 30 days in OpenAI's abuse logs, never trained on. The lists of numbers made from them stay in your private picture store |
 | The titles, folders and days of the notes a search found, and why each was found in the board's own words, when you ask by voice | **OpenAI** | So the assistant can say what it found. Never a heading, an opening or anything else a note says |
 
 Everything else stays where it was. The page's security policy did not change: the call itself is
 browser-to-OpenAI audio, and the page only ever talks to its own site.
+
+---
+
+## Orders on your own computer (Mac mailbox)
+
+Optional, and off unless you switch it on. Out of the box every Run, Add task and voice order goes to a
+cloud routine (see [Orders by voice](#orders-by-voice)). With `FIRE_MODE=mailbox` it goes to your own
+always-on Mac instead: the board keeps the order in its private picture store, your Mac collects it,
+does it, and pushes the result to your team repo. If you are not sure you need this, leave it on cloud.
+
+### How it works
+
+- **The board signs every order.** HMAC-SHA256 over the exact order, with `MAILBOX_SECRET`, a secret only
+  Vercel and your Mac hold. Your Mac refuses an order that is unsigned, edited, meant for another repo or
+  computer, expired, or seen before
+- **Your Mac asks, the board never calls in.** Every `MAILBOX_POLL_SECONDS` your Mac asks
+  `GET /api/mailbox` "any orders for me?" with its own key, `MAILBOX_KEY`. That key can only read the
+  waiting orders. Your Mac never gets the picture store's key, and the board never gets a key that can
+  write your repo. Nothing on the Mac is opened to the internet
+- **An order waits a while, then expires.** It waits for three of your Mac's checks and two minutes more,
+  at least 15 minutes and never more than an hour: **17 minutes** at a 5-minute pace, **32 minutes** at
+  the default 10. Not picked up by then, it expires and nothing runs. Your Mac never catches up on old ones
+- **Card buttons are plain file edits on the Mac, with no AI** (Add task, Start, Done, Approve, Pause).
+  Your words are written exactly, and nothing in a card can talk the Mac into anything
+- **Run uses Claude Code on your own plan**, with no shell and no connectors, only on the jobs your Mac's
+  own list allows. The Mac checks every changed file, then commits and pushes; Claude never pushes
+- **Arm, Add skill and Add agent: your Mac files a card for you to finish in a Claude session.** A new
+  schedule, a new skill or a new agent needs you there, so it is never done unattended
+- **What happened comes back in a file.** With each order your Mac pushes
+  `.agent-team/status/mailbox/<computer>.json`: ids, states and fixed reasons, never your words. The
+  board, the voice ("is it done?") and the Readiness wall read it: sent, waiting, picked up, running,
+  done, refused, failed, outcome unknown (it stopped part-way and will not run it again by itself), or
+  expired. Today shows the orders you sent from this device under **Your Mac**
+
+### What it costs
+
+Each check of your Mac is one fresh read of one small file in the picture store (a simple operation),
+and one function call. Each order is one more read and one write. In a 31-day month
+([Vercel Blob pricing](https://vercel.com/docs/vercel-blob/usage-and-pricing), checked 12 October 2026):
+
+| Your Mac checks every | Checks a month | On Pro (about $0.40 a million reads) | On Hobby (10,000 reads a month included) |
+|---|---|---|---|
+| **5 minutes** (`MAILBOX_POLL_SECONDS=300`) | **8,928** | Under 1 cent | 89% - too close beside the board's own reads |
+| **10 minutes** (the default) | **4,464** | Under 1 cent | 45% - the setting for Hobby |
+| 1 minute | 44,640 | About 2 cents | Over 4 times: the store is **locked for 30 days**. Never on Hobby |
+
+- **At most 8 orders a day** leave the board (248 writes in the longest month). The ninth is refused
+  until midnight UTC. In mailbox mode those 8 come out of the day's picture changes, 19 to 15
+  ([the budget](#the-picture-stores-free-limit-and-why-the-caps-are-where-they-are))
+- **How long it takes:** at a 5-minute pace your Mac picks an order up within about 5 minutes, and a card
+  is on the board about a minute after that. Run uses your Claude plan's limits, like your own sessions
+
+### Switch it on
+
+1. **On your Mac**, set up the runner with the Mac mailbox guide in agent-team-template
+   (`.agent-team/mailbox/README.md`). It makes the two secrets on the Mac, kept in
+   `~/.config/agent-mailbox/env` (only you can read it), and copies each one for you to paste:
+   `MAILBOX_KEY` from `openssl rand -hex 32`, `MAILBOX_SECRET` from `openssl rand -base64 32`.
+   You paste them; nobody else types a key
+2. **In Vercel**, Production: `FIRE_MODE=mailbox`, `MAILBOX_KEY` and `MAILBOX_SECRET` (both Sensitive),
+   `MAILBOX_SECRET_ID=k1`, `MAILBOX_RUNNER=mac-mini`, and `MAILBOX_POLL_SECONDS=300` on Pro (leave it
+   unset on Hobby). `FIRE_KEY` must be **24 characters or more** - a placeholder like `FILL-ME-IN` reads
+   as not configured. A private picture store must be connected. `FIRE_TRIGGERS` is not needed. Redeploy
+3. Tap **Add task** with a test card. It should be on the board within a few minutes
+
+**Changing the secret** (when you think it leaked, when the Mac is replaced, and once a year): add the new
+one on the Mac first as `k2`; then set it as `MAILBOX_SECRET` with `MAILBOX_SECRET_ID=k2` in Vercel and
+redeploy; send a test card; then remove `k1` from the Mac. An order sent in the minute you switch can
+expire unpicked: send it again. Change `MAILBOX_KEY` on both sides the same day.
+
+**Back to the cloud:** set `FIRE_MODE=cloud` (or remove it) and redeploy. Orders still waiting expire by
+themselves.
 
 ---
 
@@ -776,7 +852,13 @@ has no evidence for.
 | `BOARD_PASSWORD` | The password you sign in with: **12 characters or more**. Tick **Sensitive** | Recommended |
 | `PUBLIC_DASHBOARD` | `true` to skip the key entirely — only if the repo is genuinely public | No |
 | `FIRE_TRIGGERS` | One JSON object: for each routine, its `"url"` and `"token"` from its API trigger at claude.ai/code/routines - `{"task-intake":{"url":"…","token":"…"}}`. Needed for the Run buttons. **Include `task-intake`** — a routine, not a job — or Add task, New workflow, Arm, Approve and Pause all fail. Mark it sensitive. See [Orders by voice](#orders-by-voice) | For buttons |
-| `FIRE_KEY` | A password for firing jobs, sent as `x-fire-key` | For buttons |
+| `FIRE_KEY` | A password for firing jobs, sent as `x-fire-key`. In mailbox mode it must be **24 characters or more** | For buttons |
+| `FIRE_MODE` | `mailbox` to send orders to your own Mac instead of cloud routines ([Orders on your own computer](#orders-on-your-own-computer-mac-mailbox)). `cloud` unless set; anything else reads as not configured | No |
+| `MAILBOX_SECRET` | The secret that signs every order, made on your Mac (32+ characters). Sensitive. Never the same as `MAILBOX_KEY` | For the mailbox |
+| `MAILBOX_SECRET_ID` | Which secret signs: `k1` unless set (`k2` while you change it) | No |
+| `MAILBOX_KEY` | Your Mac's own key for `/api/mailbox` (32+ characters). Sensitive | For the mailbox |
+| `MAILBOX_POLL_SECONDS` | How often your Mac checks, 60 to 3,600. `600` unless set; `300` on Pro. See what it costs before you go faster | No |
+| `MAILBOX_RUNNER` | The computer the orders are for: `mac-mini` unless set | No |
 | `PUBLIC_FIRE` | `true` to drop `FIRE_KEY` for requests from your own page. **Read the warning below first** | No |
 | `BLOB_...` | Set **by Vercel** when you connect a private Blob store. You never type these. See [Make it yours](#make-it-yours) | To personalise |
 | `OPENAI_API_KEY` | Your OpenAI key, for **Make it** and for [talking to the board](#talk-to-your-board). **Set a hard spend limit on its project first** | For pictures from words and voice |
@@ -911,7 +993,7 @@ Locally:
 npm test
 ```
 
-2149 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2156 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -
@@ -954,6 +1036,15 @@ hash - loaded only when someone opens **Graph** on Memory. Every notice they car
 | "…refused the run: it may be paused" | The routine is switched off at claude.ai/code/routines. Switch it back on |
 | "…does not exist any more…" | The routine was deleted, or its URL in `FIRE_TRIGGERS` is wrong. Copy the URL again from its API trigger |
 | Pause was sent, and the job still runs on its schedule | Pause edits only `workflows/<slug>.yml`. If the job's routine has a schedule of its own at claude.ai/code/routines, Pause cannot stop that: switch the routine off there |
+| "The Mac mailbox is not configured: …" | The sentence names the setting. Set it in Vercel and redeploy ([Orders on your own computer](#orders-on-your-own-computer-mac-mailbox)) |
+| "…in mailbox mode FIRE_KEY must be 24 characters or more…" | Set a long `FIRE_KEY` you make up (or `PUBLIC_FIRE=true`) and redeploy |
+| "Your board has sent all 8 orders it allows today…" | Wait until midnight UTC. The limit keeps the picture store inside its free allowance |
+| "Your Mac has not picked it up yet. It may be asleep or offline…" | Wake the Mac and check it is online. The Readiness wall's Mac mailbox light, and the runner's `PAUSE` file, say more |
+| "It expired before your Mac picked it up, so nothing ran." | Nothing happened. Send it again once your Mac is on |
+| "Your Mac refused it: …" | The reason says which. A job not on its list is added in the Mac's own `allowed-orders.yml`, on the Mac |
+| "Your Mac lost track of this one part-way…" | It will not run it again by itself. Check the board; if the change is not there, send it again |
+| Your Mac's check answers "The Mac mailbox is not switched on for this board." | `FIRE_MODE=mailbox` and the mailbox settings are not all set. Fix them and redeploy |
+| Your Mac's check answers "Missing or wrong mailbox key." | `MAILBOX_KEY` is not the same in Vercel and in the Mac's env file |
 | A Run button answers "…does not have trigger.fire: true" | Add `fire: true` to that job's trigger block, commit and push |
 | "Orders by voice are off…" | The board's Run buttons are not set up yet. Follow [Orders by voice](#orders-by-voice) |
 | "Didn't catch a clear yes - tap Yes." | Your yes was not plain, came during or just after its voice, or the fire key is not in this tab yet. Tap **Yes** |
