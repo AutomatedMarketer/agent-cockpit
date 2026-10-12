@@ -417,23 +417,15 @@ export function creationDispatchPayload(kind, item) {
 // Accept a session link under the names triggers actually use — https only, and only on
 // hosts we would tell someone to click. The trigger response is third-party input; a
 // compromised trigger must not get to plant an arbitrary "watch live" link on this page.
-const SESSION_URL_HOSTS = ['claude.ai']
+// A fired routine answers 200 with { type: 'routine_fire', claude_code_session_id,
+// claude_code_session_url } (the routines-fire docs). Only that field is read, and only a plain
+// claude.ai session address is passed on: it becomes a link on the board, so nothing else may.
+// KEEP IN SYNC with SESSION_LINK in public/app.js, which checks it again before showing it.
+export const SESSION_URL = /^https:\/\/claude\.ai\/code\/session_[A-Za-z0-9_-]{1,100}$/
 
 export function sessionUrlFrom(result) {
-  for (const key of ['sessionUrl', 'session_url', 'url']) {
-    const value = result?.[key]
-    if (typeof value !== 'string' || !/^https:\/\//.test(value)) continue
-    let host
-    try {
-      host = new URL(value).hostname
-    } catch {
-      continue
-    }
-    if (SESSION_URL_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) {
-      return value
-    }
-  }
-  return null
+  const value = result?.claude_code_session_url
+  return typeof value === 'string' && SESSION_URL.test(value) ? value : null
 }
 
 // The same-origin check lives in _lib.js (imported above), with the note on why it is
@@ -837,6 +829,37 @@ export default async function handler(request, response) {
 // anything the trigger said (its body is not ours to relay), never user text. The label in
 // the message is a validated slug ("monday-brief", "task-intake"), nothing user-typed.
 // Returns the trigger's parsed JSON (or {}), or null after writing the error response.
+// Retry-After as whole seconds from now, from either form the header takes (seconds, or an HTTP
+// date), or null when it is missing, malformed or already past.
+export function retryAfterSeconds(header, now = Date.now()) {
+  const value = String(header ?? '').trim()
+  if (!value) return null
+  const seconds = /^\d{1,9}$/.test(value) ? Number(value) : Math.ceil((Date.parse(value) - now) / 1000)
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null
+}
+
+function routineLimitWords(label, wait) {
+  const minutes = wait === null ? 0 : Math.max(1, Math.round(wait / 60))
+  const when = minutes ? `Try again in about ${minutes} minute${minutes === 1 ? '' : 's'}.` : 'Try again later.'
+  return `The routine "${label}" has reached its hourly limit (30 an hour for each routine, 100 for the account, Run now in claude.ai included). Nothing was started. ${when}`
+}
+
+function routineRefusalWords(label, status) {
+  if (status === 401) {
+    return `The token for "${label}" was refused: generate a new one in claude.ai/code/routines and update FIRE_TRIGGERS.`
+  }
+  if (status === 400) {
+    return `The routine "${label}" refused the run: it may be paused. Check it in claude.ai/code/routines. Nothing was started.`
+  }
+  if (status === 403) {
+    return `The account behind the token for "${label}" cannot fire routines. Check its access in claude.ai/code/routines.`
+  }
+  if (status === 404) {
+    return `The routine for "${label}" does not exist any more: check its URL in FIRE_TRIGGERS against claude.ai/code/routines.`
+  }
+  return `The trigger for "${label}" rejected the dispatch (status ${status}).`
+}
+
 async function dispatchToTrigger(trigger, payload, label, response) {
   const text = fireText(payload)
   if (text === null) {
@@ -863,10 +886,17 @@ async function dispatchToTrigger(trigger, payload, label, response) {
     return null
   }
 
+  // Never sent again from here, whatever the answer: the API has no idempotency key, so a second
+  // try can start the same run twice. The vendor's own words are never relayed either; each
+  // refusal gets a fixed sentence that names the routine by its slug only.
   if (!upstream.ok) {
-    response.status(502).json({
-      error: `The trigger for "${label}" rejected the dispatch (status ${upstream.status}).`
-    })
+    if (upstream.status === 429) {
+      const wait = retryAfterSeconds(upstream.headers.get('retry-after'))
+      if (wait !== null) response.setHeader('Retry-After', String(wait))
+      response.status(429).json({ error: routineLimitWords(label, wait) })
+      return null
+    }
+    response.status(502).json({ error: routineRefusalWords(label, upstream.status) })
     return null
   }
 

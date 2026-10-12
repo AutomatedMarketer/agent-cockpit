@@ -1753,12 +1753,14 @@ test('a system note is only ever the board\'s own words: never a workflow\'s nam
     403: 'The board refused it.',
     404: 'That job or routine has no trigger link.',
     400: 'The board found something wrong with the order.',
-    502: 'The routine did not answer.',
+    // A refused routine token comes back as 502 as well, so these words cover both.
+    502: 'The routine refused it or did not answer.',
     504: 'The routine did not answer.',
+    429: 'The routine has reached its hourly limit, so nothing was started.',
     0: 'The board could not be reached.',
     418: 'The board answered 418.'
   }
-  for (const [status, needs] of [[503], [401, 'fire-key'], [401, 'sign-in'], [403], [404], [400], [502], [504], [0], [418]]) {
+  for (const [status, needs] of [[503], [401, 'fire-key'], [401, 'sign-in'], [403], [404], [400], [502], [504], [429], [0], [418]]) {
     const browser = await ordering({ dispatch: async () => ({ ok: false, status, payload: { error: `Server words ${status}`, ...(needs ? { needs } : {}) } }) })
     propose(browser, 'add_task', { title: 'Draft it' })
     tapYes(browser)

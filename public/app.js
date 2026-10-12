@@ -2399,6 +2399,10 @@ async function approveProposal(button) {
   }
 }
 
+// The run's own claude.ai session, as the routines API names it. The server checks this too
+// (SESSION_URL in api/fire.js, KEEP IN SYNC); the page checks again because it becomes a link.
+const SESSION_LINK = /^https:\/\/claude\.ai\/code\/session_[A-Za-z0-9_-]{1,100}$/
+
 async function fireWorkflow(button) {
   const slug = button.dataset.fire
   const action = button.dataset.action === 'pause' ? 'pause' : 'run'
@@ -2412,8 +2416,8 @@ async function fireWorkflow(button) {
     const result = await postFire({ workflow: slug, action })
     if (result.ok) {
       note.className = 'fire-note ok'
-      if (result.payload.sessionUrl) {
-        note.innerHTML = `Sent &middot; <a href="${escapeHtml(result.payload.sessionUrl)}" rel="noreferrer noopener">watch live</a>`
+      if (SESSION_LINK.test(String(result.payload.sessionUrl ?? ''))) {
+        note.innerHTML = `Sent &middot; <a href="${escapeHtml(result.payload.sessionUrl)}" rel="noreferrer noopener">watch it run</a>`
       } else {
         note.textContent = action === 'pause' ? 'Pause sent to the agent.' : 'Job sent.'
       }
@@ -5281,7 +5285,10 @@ function voiceRefusalWords(result) {
   if (status === 403) return 'The board refused it.'
   if (status === 404) return 'That job or routine has no trigger link.'
   if (status === 400) return 'The board found something wrong with the order.'
-  if (status === 502 || status === 504) return 'The routine did not answer.'
+  // A refused routine token is a 502 as well (api/fire.js), so 502 says both.
+  if (status === 502) return 'The routine refused it or did not answer.'
+  if (status === 504) return 'The routine did not answer.'
+  if (status === 429) return 'The routine has reached its hourly limit, so nothing was started.'
   if (status === 0) return 'The board could not be reached.'
   return `The board answered ${Number.isInteger(status) && status > 0 && status < 1000 ? status : 'nothing'}.`
 }

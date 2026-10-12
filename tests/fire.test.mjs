@@ -73,7 +73,7 @@ function stubFetch({ trigger = { status: 200, body: '{}' } } = {}) {
     }
     calls.trigger.push({ url: target, options })
     if (trigger.reject) throw new Error('boom')
-    return new Response(trigger.body, { status: trigger.status })
+    return new Response(trigger.body, { status: trigger.status, headers: trigger.headers })
   }
   return { calls, restore: () => (globalThis.fetch = original) }
 }
@@ -232,19 +232,21 @@ test('the pause payload tells the agent to make the edit, not the dashboard', ()
   })
 })
 
-test('session URLs are accepted under their real names, https only', () => {
-  assert.equal(sessionUrlFrom({ session_url: 'https://claude.ai/code/s1' }), 'https://claude.ai/code/s1')
-  assert.equal(sessionUrlFrom({ sessionUrl: 'https://claude.ai/code/s2' }), 'https://claude.ai/code/s2')
-  assert.equal(sessionUrlFrom({ url: 'http://insecure.example' }), null)
+test('the session link comes from the routines API\'s own answer, and only as a claude.ai session', () => {
+  const live = 'https://claude.ai/code/session_01HJKLMNOPQRSTUVWXYZ'
+  assert.equal(sessionUrlFrom({ type: 'routine_fire', claude_code_session_id: 'session_01HJ', claude_code_session_url: live }), live)
+  for (const bad of [
+    'http://claude.ai/code/session_01X', 'https://claude.ai/code/task_01X', 'https://claude.ai.evil.com/code/session_01X',
+    'https://claude.ai@evil.com/code/session_01X', 'https://a.claude.ai/code/session_01X', 'https://claude.ai/code/session_01X/../../evil',
+    'https://claude.ai/code/session_01X?next=https://evil.example', 'https://claude.ai/code/session_01X#x', 'https://claude.ai/code/session_', 42,
+    'https://evil.example/go?to=https://claude.ai/code/session_01X', 'javascript:alert(1)//https://claude.ai/code/session_01X'
+  ]) {
+    assert.equal(sessionUrlFrom({ claude_code_session_url: bad }), null, String(bad))
+  }
+  // The old guesses at a name are gone: the API's answer names it claude_code_session_url.
+  for (const name of ['session_url', 'sessionUrl', 'url']) assert.equal(sessionUrlFrom({ [name]: live }), null, name)
   assert.equal(sessionUrlFrom({}), null)
   assert.equal(sessionUrlFrom(null), null)
-})
-
-test('session URL host allowlist survives suffix and userinfo confusion', () => {
-  assert.equal(sessionUrlFrom({ url: 'https://a.claude.ai/code/s3' }), 'https://a.claude.ai/code/s3')
-  assert.equal(sessionUrlFrom({ url: 'https://claude.ai.evil.com/phish' }), null)
-  assert.equal(sessionUrlFrom({ url: 'https://notclaude.ai/phish' }), null)
-  assert.equal(sessionUrlFrom({ url: 'https://claude.ai@evil.com/phish' }), null)
 })
 
 // --- method and auth ----------------------------------------------------------------------
@@ -487,14 +489,14 @@ test('a workflow without trigger.fire: true is refused', async () => {
 
 test('happy path run: dispatches server-side and returns the session URL', async () => {
   const { response, calls } = await fire(withKey({ workflow: 'monday-brief' }), {
-    trigger: { status: 200, body: JSON.stringify({ session_url: 'https://claude.ai/code/session_live' }) }
+    trigger: { status: 200, body: JSON.stringify({ type: 'routine_fire', claude_code_session_id: 'session_01Live', claude_code_session_url: 'https://claude.ai/code/session_01Live' }) }
   })
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.body, {
     ok: true,
     workflow: 'monday-brief',
     action: 'run',
-    sessionUrl: 'https://claude.ai/code/session_live'
+    sessionUrl: 'https://claude.ai/code/session_01Live'
   })
   assert.equal(calls.trigger.length, 1)
   assert.equal(calls.trigger[0].url, TRIGGER_URL, 'dispatched to the mapped trigger')
@@ -510,7 +512,7 @@ test('happy path run: dispatches server-side and returns the session URL', async
 
 test('a session URL on a host other than claude.ai is dropped, not relayed', async () => {
   const { response } = await fire(withKey({ workflow: 'monday-brief' }), {
-    trigger: { status: 200, body: JSON.stringify({ session_url: 'https://evil.example/phish' }) }
+    trigger: { status: 200, body: JSON.stringify({ claude_code_session_url: 'https://evil.example/phish' }) }
   })
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.body, { ok: true, workflow: 'monday-brief', action: 'run', accepted: true })
@@ -616,11 +618,11 @@ test('happy path task: dispatches to task-intake and echoes only the title back'
 
 test('a task needs no `for` — and then no repo read happens at all', async () => {
   const { response, calls } = await fire(withKey({ action: 'task', title: 'Sort the inbox' }), {
-    trigger: { status: 200, body: JSON.stringify({ session_url: 'https://claude.ai/code/task_live' }) }
+    trigger: { status: 200, body: JSON.stringify({ claude_code_session_url: 'https://claude.ai/code/session_01TaskLive' }) }
   })
   assert.equal(response.statusCode, 200)
   assert.deepEqual(response.body,
-    { ok: true, accepted: true, title: 'Sort the inbox', sessionUrl: 'https://claude.ai/code/task_live' })
+    { ok: true, accepted: true, title: 'Sort the inbox', sessionUrl: 'https://claude.ai/code/session_01TaskLive' })
   assertNoSecrets(response)
 })
 
@@ -679,7 +681,7 @@ test('a task-intake trigger that fails comes back as a plain 502', async () => {
 
 test('the happy path never leaks a secret either', async () => {
   const { response } = await fire(withKey({ workflow: 'monday-brief' }), {
-    trigger: { status: 200, body: JSON.stringify({ session_url: 'https://claude.ai/code/s' }) }
+    trigger: { status: 200, body: JSON.stringify({ claude_code_session_url: 'https://claude.ai/code/session_01S' }) }
   })
   assertNoSecrets(response)
 })
@@ -951,10 +953,10 @@ for (const [kind, command, folder] of [
 
   test(`a ${kind} session URL comes back when the trigger returns one`, async () => {
     const { response } = await fire(withKey({ action: kind, title: 'Watches competitor pricing' }), {
-      trigger: { status: 200, body: JSON.stringify({ session_url: 'https://claude.ai/code/live' }) }
+      trigger: { status: 200, body: JSON.stringify({ claude_code_session_url: 'https://claude.ai/code/session_01Live2' }) }
     })
     assert.deepEqual(response.body, {
-      ok: true, accepted: true, title: 'Watches competitor pricing', sessionUrl: 'https://claude.ai/code/live'
+      ok: true, accepted: true, title: 'Watches competitor pricing', sessionUrl: 'https://claude.ai/code/session_01Live2'
     })
     assertNoSecrets(response)
   })
@@ -1143,4 +1145,62 @@ test('the text a routine is sent stays within the API\'s 65,536 characters', () 
   const room = 65_536 - fireText(atLimit).length
   assert.equal(fireText({ pad: 'x'.repeat(room) }).length, 65_536)
   assert.equal(fireText({ pad: 'x'.repeat(room + 1) }), null)
+})
+
+/* ---------- what a routine's refusal means, in plain words ---------- */
+
+const VENDOR = JSON.stringify({ type: 'error', error: { type: 'some_error', message: 'Leaked vendor words' } })
+
+test('a refused token says which routine and how to make a new one - and nothing is tried again', async () => {
+  const { response, calls } = await fire(withKey({ workflow: 'monday-brief' }), { trigger: { status: 401, body: VENDOR } })
+  assert.equal(response.statusCode, 502)
+  assert.equal(response.body.error, 'The token for "monday-brief" was refused: generate a new one in claude.ai/code/routines and update FIRE_TRIGGERS.')
+  assert.equal(calls.trigger.length, 1)
+  assert.ok(!JSON.stringify(response.body).includes('Leaked'))
+  assertNoSecrets(response)
+})
+
+test('the hourly limit says when to try again, from Retry-After, and is never retried: there is no idempotency key', async () => {
+  const seconds = await fire(withKey({ action: 'task', title: 'Chase the invoice' }), { trigger: { status: 429, body: VENDOR, headers: { 'Retry-After': '720' } } })
+  assert.equal(seconds.response.statusCode, 429)
+  assert.match(seconds.response.body.error, /"task-intake" has reached its hourly limit/)
+  assert.match(seconds.response.body.error, /30 an hour for each routine, 100 for the account/)
+  assert.match(seconds.response.body.error, /Try again in about 12 minutes\./)
+  assert.equal(seconds.response.headers['Retry-After'], '720')
+  assert.equal(seconds.calls.trigger.length, 1, 'a refused run was sent again, which would start it twice')
+  const date = await fire(withKey({ workflow: 'monday-brief' }), { trigger: { status: 429, body: VENDOR, headers: { 'Retry-After': new Date(Date.now() + 5 * 60_000 + 500).toUTCString() } } })
+  assert.match(date.response.body.error, /Try again in about 5 minutes\./)
+  const none = await fire(withKey({ workflow: 'monday-brief' }), { trigger: { status: 429, body: VENDOR } })
+  assert.match(none.response.body.error, /Try again later\./)
+  assert.equal(none.response.headers['Retry-After'], undefined)
+  // A Retry-After that is past, zero or not a time at all says "later" and is not passed on.
+  const odd = []
+  for (const header of [new Date(Date.now() - 60_000).toUTCString(), '0', 'soon', '-5']) {
+    const answer = await fire(withKey({ workflow: 'monday-brief' }), { trigger: { status: 429, body: VENDOR, headers: { 'Retry-After': header } } })
+    assert.match(answer.response.body.error, /Try again later\./, header)
+    assert.equal(answer.response.headers['Retry-After'], undefined, header)
+    odd.push(answer)
+  }
+  for (const answer of [seconds, date, none, ...odd]) {
+    assert.ok(!JSON.stringify(answer.response.body).includes('Leaked'))
+    assertNoSecrets(answer.response)
+  }
+})
+
+test('a paused, missing or not-allowed routine, or the service failing, each has its own plain sentence and no retry', async () => {
+  const said = async (status) => {
+    const { response, calls } = await fire(withKey({ workflow: 'monday-brief' }), { trigger: { status, body: VENDOR } })
+    assert.equal(calls.trigger.length, 1, `status ${status} was tried again`)
+    assert.ok(!JSON.stringify(response.body).includes('Leaked'), `status ${status}: the vendor's words were relayed`)
+    assertNoSecrets(response)
+    return response
+  }
+  assert.match((await said(400)).body.error, /"monday-brief" refused the run: it may be paused/)
+  assert.match((await said(403)).body.error, /cannot fire routines/)
+  assert.match((await said(404)).body.error, /routine for "monday-brief" does not exist any more/)
+  for (const status of [500, 503]) {
+    const response = await said(status)
+    assert.equal(response.statusCode, 502)
+    assert.match(response.body.error, /rejected the dispatch \(status \d+\)/)
+  }
 })

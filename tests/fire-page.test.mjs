@@ -13,7 +13,7 @@ function firePage({ answers, prompt = () => 'fk_typed', storage = {} }) {
   const asked = []
   const fires = []
   const page = loadPage({
-    expose: ['postFire'],
+    expose: ['postFire', 'fireWorkflow'],
     storage,
     prompt: (text) => { asked.push(text); return prompt(text) },
     fetch: async (url, init = {}) => {
@@ -63,4 +63,22 @@ test('an order sent by a spoken yes never asks for the fire key: with ask off, a
   assert.equal(result.status, 401)
   assert.deepEqual(asked, [], 'a spoken yes was met with a key prompt')
   assert.equal(fires.length, 1)
+})
+
+test('a Run that started shows a "watch it run" link to its claude.ai session - and nothing for any other address', async () => {
+  const run = async (sessionUrl) => {
+    const { page } = firePage({ answers: [json(200, { ok: true, workflow: 'monday-brief', action: 'run', ...(sessionUrl ? { sessionUrl } : {}) })] })
+    await flush()
+    const row = page.node('run-row')
+    const button = { dataset: { fire: 'monday-brief', action: 'run' }, parentElement: row, innerHTML: 'Run', disabled: false }
+    await page.exposed.fireWorkflow(button)
+    return row.children.at(-1)
+  }
+  const live = await run('https://claude.ai/code/session_01Live')
+  assert.match(live.innerHTML, /<a href="https:\/\/claude\.ai\/code\/session_01Live" rel="noreferrer noopener">watch it run<\/a>/)
+  for (const odd of ['https://evil.example/session_01X', 'javascript:alert(1)', 'https://claude.ai/code/task_01X']) {
+    const note = await run(odd)
+    assert.equal(note.innerHTML, '', `${odd} was put on the page as a link`)
+    assert.equal(note.textContent, 'Job sent.')
+  }
 })
