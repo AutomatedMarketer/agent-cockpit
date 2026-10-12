@@ -1318,3 +1318,14 @@ test('a routine URL or token pasted with spaces or a line break around it is tri
   const inside = parseTriggers(JSON.stringify({ a: { url: TRIGGER_URL, token: 'sk-ant oat01' }, b: { url: ROUTINE('01 Inside'), token: ROUTINE_TOKEN('B') } }))
   assert.deepEqual(inside, {})
 })
+
+/* ---------- a task card has its title as its heading (Mac mailbox plan, finding 8 / C10) ----------
+   The board titles a card from its first "#" heading, else its file name, and "is it done?" finds an
+   order's card by that title. A card written with no heading is never found by it. */
+
+test('the task-intake instruction asks for the title as the card\'s first heading, then the details', () => {
+  const { instruction } = taskDispatchPayload({ title: 'Chase the invoice', details: 'By Friday' })
+  assert.match(instruction, /first line "# " followed by the title field exactly/)
+  assert.match(instruction, /then the details field/)
+  assert.doesNotMatch(instruction, /or the title when there are no details/)
+})
