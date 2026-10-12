@@ -27,6 +27,10 @@ import { lateness, nextRunAt, SLOT_GRACE_MINUTES, SLOT_TOLERANCE_MINUTES } from 
 export const READINESS_STALE_HOURS = 8
 // The status collector runs every three hours on the Mac; its own card is judged by that.
 export const COLLECTOR_EVERY_MINUTES = 180
+// The Mac mailbox's card (plan 2026-10-12-mac-mailbox, C8): a failed or lost order this recent is the
+// one that matters; a computer that has not reported on an order for this long cannot be vouched for.
+export const MAILBOX_LOOKBACK_HOURS = 24
+export const MAILBOX_SILENT_HOURS = 24
 export const READINESS_NAME_MAX = 80
 export const READINESS_SUMMARY_MAX = 160
 
@@ -88,6 +92,11 @@ export const READINESS_WORDS = {
   hermesDown: 'Hermes was not running when the Mac checked at {time}.',
   collectorRan: 'The status collector last wrote its readings at {time}.',
   collectorSilent: 'The status collector has not written its readings since {date}, so nothing on the Mac is being checked.',
+  mailboxFine: 'Your Mac last reported on its orders at {time}, and none failed in the last day.',
+  mailboxFailed: 'An order failed on your Mac at {time}. Nothing it changed left the Mac; send it again from the board.',
+  mailboxLost: 'Your Mac lost track of an order at {time} and will not run it again by itself. Check the board, then send it again if it is not there.',
+  mailboxSilent: 'Your Mac has not reported on an order since {date}, so the board cannot vouch for its mailbox.',
+  mailboxSchedule: 'Collects the board\'s orders',
   never: 'Never'
 }
 
@@ -506,6 +515,30 @@ function collectorCard(computer, now) {
   })
 }
 
+// One card per computer that reports on its orders (data.mailbox, shaped by state.js). NO GO for an
+// order that failed, or was lost part-way without landing, in the last day - the newest is the one it
+// names; SILENT when the computer has not reported for a day; GO otherwise. The Mac only pushes its
+// file with an order, so a quiet day is SILENT, never a guessed GO.
+function mailboxCard(computer, now) {
+  const where = computer.computer ?? 'Mac'
+  const takenMs = Date.parse(computer.takenAt)
+  const base = {
+    id: `mailbox:${computer.runner}`, source: 'mailbox', name: 'Mac mailbox', ref: `${where} · Mac mailbox`,
+    schedule: READINESS_WORDS.mailboxSchedule, lastReport: lastReportOf(computer.takenAt)
+  }
+  const recent = (Array.isArray(computer.orders) ? computer.orders : [])
+    .filter((entry) => now - Date.parse(entry.at) <= minutes(MAILBOX_LOOKBACK_HOURS * 60))
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+  const wrong = recent.find((entry) => entry.state === 'failed' || (entry.state === 'unknown' && entry.landed !== true))
+  if (wrong) {
+    return makeCard({ ...base, light: 'no-go', sentence: sentence(wrong.state === 'failed' ? READINESS_WORDS.mailboxFailed : READINESS_WORDS.mailboxLost, wrong.at) })
+  }
+  const silentWords = sentence(READINESS_WORDS.mailboxSilent, computer.takenAt)
+  const silentMs = takenMs + minutes(MAILBOX_SILENT_HOURS * 60)
+  if (now >= silentMs) return makeCard({ ...base, light: 'silent', sentence: silentWords })
+  return makeCard({ ...base, light: 'go', sentence: sentence(READINESS_WORDS.mailboxFine, computer.takenAt), silentAt: isoOf(silentMs), silentSentence: silentWords })
+}
+
 const GATEWAY_LABEL = /^ai\.hermes\.gateway/
 
 // A list the collector wrote as "unavailable": the Mac was asked for it and could not give it (it
@@ -556,7 +589,7 @@ export function countCards(cards) {
   return counts
 }
 
-export function shapeReadiness({ workflows = [], routines = null, jobs = null, hermes = null, overrides = null, now = Date.now() } = {}) {
+export function shapeReadiness({ workflows = [], routines = null, jobs = null, hermes = null, mailbox = null, overrides = null, now = Date.now() } = {}) {
   const lookup = overridesLookup(overrides)
   const cards = []
   const switchedOff = []
@@ -623,6 +656,10 @@ export function shapeReadiness({ workflows = [], routines = null, jobs = null, h
         else cards.push(hermesJobCard(job, ctx, lookup))
       }
     }
+  }
+
+  for (const computer of mailbox?.status === 'ok' && Array.isArray(mailbox.computers) ? mailbox.computers : []) {
+    cards.push(mailboxCard(computer, now))
   }
 
   const ordered = orderCards(cards)

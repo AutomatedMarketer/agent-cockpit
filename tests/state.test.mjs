@@ -1888,6 +1888,8 @@ test('a Mac mailbox status file in the repo reaches the payload as mailbox, and 
   assert.equal(computer.runner, 'mac-mini')
   assert.equal(computer.orders.length, mailboxSample().orders.length)
   assert.ok(!JSON.stringify(body.mailbox).includes('say it was sent'))
+  // And the Readiness wall has its light (C8).
+  assert.equal(body.readiness.cards.filter((card) => card.source === 'mailbox').length, 1)
 })
 
 test('a repo with no Mac mailbox status says so in the payload', async () => {

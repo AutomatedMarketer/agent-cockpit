@@ -2672,6 +2672,7 @@ async function handle(request, response, store) {
       routines: { known: routinesKnown, orphans: orphanRoutines },
       jobs,
       hermes,
+      mailbox,
       overrides: shapeJobOverrides(jobsNamesSource ? parseSimpleYaml(jobsNamesSource) : null),
       now
     })
