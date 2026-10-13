@@ -94,9 +94,12 @@ test('a mailbox setting that is missing, short, a placeholder or the wrong shape
     [{ MAILBOX_SECRET: 'FILL-ME-IN' }, /MAILBOX_SECRET/],
     [{ MAILBOX_SECRET: 'your-mailbox-secret-goes-here-0123456789' }, /MAILBOX_SECRET/],
     [{ MAILBOX_SECRET: 'two words that are long enough for the length rule' }, /MAILBOX_SECRET/],
+    // Long enough, no placeholder word, and two different characters: a filler, not a secret.
+    [{ MAILBOX_SECRET: 'ab'.repeat(20) }, /MAILBOX_SECRET/],
     [{ MAILBOX_KEY: undefined }, /MAILBOX_KEY/],
     [{ MAILBOX_KEY: 'short-key' }, /MAILBOX_KEY/],
     [{ MAILBOX_KEY: 'REPLACE-ME-with-the-key-from-the-mac-000' }, /MAILBOX_KEY/],
+    [{ MAILBOX_KEY: 'cd'.repeat(20) }, /MAILBOX_KEY/],
     [{ MAILBOX_KEY: SECRET }, /MAILBOX_KEY.*MAILBOX_SECRET|MAILBOX_SECRET.*MAILBOX_KEY/],
     [{ MAILBOX_SECRET_ID: 'K1' }, /MAILBOX_SECRET_ID/],
     [{ MAILBOX_RUNNER: 'Mac Mini' }, /MAILBOX_RUNNER/],

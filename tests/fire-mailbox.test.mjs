@@ -201,7 +201,9 @@ test('in mailbox mode a fire key under 24 characters is not configured - the pla
   // A long key of a handful of different characters is a filler, not a passphrase.
   for (const placeholder of ['FILL-ME-IN-FILL-ME-IN-FILL-ME-IN', 'your-long-passphrase-goes-here', 'replace-me-with-a-long-passphrase', 'an-example-fire-key-of-some-length',
     'FILL-IN-FILL-IN-FILL-IN-FILL-IN', 'insert-key-here-insert-key', 'REPLACE_THIS_WITH_A_KEY_123', 'changeit-changeit-changeit-1',
-    'TODO-TODO-TODO-TODO-TODO-TODO', 'set-me-set-me-set-me-set-me', '*'.repeat(24), 'y'.repeat(24)]) {
+    'TODO-TODO-TODO-TODO-TODO-TODO', 'set-me-set-me-set-me-set-me', '*'.repeat(24), 'y'.repeat(24),
+    // A placeholder word among plenty of different characters: the word alone has to catch it.
+    'fill-in-abcdefghijklmnopqrstuvwxyz']) {
     const { response, fake } = await fire({ action: 'task', title: 'Chase the invoice' }, { env: { FIRE_KEY: placeholder }, headers: { 'x-fire-key': placeholder } })
     assert.equal(response.statusCode, 503, placeholder)
     assert.match(response.body.error, /FIRE_KEY must be 24 characters or more, and not a placeholder/)
