@@ -178,22 +178,29 @@ export function verifyOrder(envelope, { keys, repo, runner, now, claimsSince = n
 //   MAILBOX_POLL_SECONDS  how often the Mac asks, clamped 60 to 3,600, default 600
 //   MAILBOX_RUNNER        the computer the orders are for, default mac-mini
 // and GITHUB_OWNER / GITHUB_REPO (the repo every order names) and a connected picture store.
-// A value someone left as a placeholder - FILL-ME-IN, "your-...", "replace me" - is not a value.
-const PLACEHOLDER = /fill[-_ ]?me|your[-_ ]|replace[-_ ]?me|change[-_ ]?me|placeholder|example|xxxxxx|[<>]/i
+// A value someone left as a placeholder - FILL-ME-IN, "your-...", "replace this" - is not a value, and
+// nor is a long run of a handful of characters (TODO-TODO-..., ****...): a made-up key has more.
+const PLACEHOLDER = /fill[-_ ]?(me|in)|your[-_ ]|replace|change[-_ ]?(me|it)|insert|placeholder|example|xxxxxx|[<>]/i
+const FEWEST_CHARACTERS = 8
+const notAValue = (text) => PLACEHOLDER.test(text) || new Set(text).size < FEWEST_CHARACTERS
 const MODE_UNKNOWN = 'Fire is not configured: FIRE_MODE must be cloud or mailbox. Fix it in the hosting environment, then redeploy.'
 const notSet = (name, what) =>
   `The Mac mailbox is not configured: ${name} must be ${what}. Set it in the hosting environment (the README's "Orders on your own computer" says how), then redeploy.`
 
 const trimmed = (value) => (typeof value === 'string' ? value.trim() : '')
 
-// The fire key a mailbox board needs: 24 characters or more, and not a placeholder - the same test the
-// secret and the key get. Mailbox mode only: a cloud board's passphrase is the owner's, and a word in it
-// like "example" must not switch their Run buttons off (FIRE_TRIGGERS still guards a cloud board).
+// The fire key a mailbox board needs: 24 characters or more once the spaces round it are gone, and not a
+// placeholder - the same test the secret and the key get. Mailbox mode only: a cloud board's passphrase
+// is the owner's, and a word in it like "example" must not switch their Run buttons off (FIRE_TRIGGERS
+// still guards a cloud board).
 export const MAILBOX_FIRE_KEY_MIN = 24
-export const mailboxFireKeyOk = (value) => typeof value === 'string' && value.length >= MAILBOX_FIRE_KEY_MIN && !PLACEHOLDER.test(value)
+export const mailboxFireKeyOk = (value) => {
+  const text = trimmed(value)
+  return text.length >= MAILBOX_FIRE_KEY_MIN && !notAValue(text)
+}
 const secretValue = (value, shape) => {
   const text = trimmed(value)
-  return shape.test(text) && !PLACEHOLDER.test(text) ? text : null
+  return shape.test(text) && !notAValue(text) ? text : null
 }
 
 export function mailboxConfig(env = process.env) {
@@ -243,6 +250,7 @@ export function makeOrder(payload, config, now = new Date(), random = randomByte
 // that are still alive are kept, and anything else in the file is dropped, never served or saved.
 
 const QUEUE_DAY = /^\d{4}-\d{2}-\d{2}$/
+const ONE_DAY_MS = 86_400_000
 const ORDERS_SPENT =
   `Your board has sent all ${MAILBOX_ORDERS_PER_DAY} orders it allows today, so nothing was sent: try again ` +
   'tomorrow (the count starts again at midnight UTC). The limit keeps the picture store inside Vercel\'s ' +
@@ -260,7 +268,11 @@ export function parseQueue(text, config, nowMs) {
     return empty
   }
   if (!plainObject(parsed) || !Array.isArray(parsed.orders)) return empty
-  const day = typeof parsed.day === 'string' && QUEUE_DAY.test(parsed.day) ? parsed.day : ''
+  // The latest day this board writes is tomorrow: another instance whose clock is already past midnight.
+  // A day further on is a stranger's - believed, it would hold the day's count for ever, since the day
+  // only moves forward - so it reads as no day at all.
+  const latest = usageDay(new Date(nowMs + ONE_DAY_MS))
+  const day = typeof parsed.day === 'string' && QUEUE_DAY.test(parsed.day) && parsed.day <= latest ? parsed.day : ''
   const count = day && Number.isInteger(parsed.count) && parsed.count >= 0 ? parsed.count : 0
   const checks = ownChecks(config, nowMs)
   const orders = parsed.orders

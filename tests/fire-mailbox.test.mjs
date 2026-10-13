@@ -189,7 +189,8 @@ test('the gates come first: a wrong fire key, or another site, queues nothing an
 /* ---------- what is not configured, said plainly ---------- */
 
 test('in mailbox mode a fire key under 24 characters is not configured - the placeholder FILL-ME-IN above all', async () => {
-  for (const short of ['FILL-ME-IN', 'x'.repeat(23)]) {
+  // A short key that is no placeholder holds the length rule to account; spaces round a key are not part of it.
+  for (const short of ['FILL-ME-IN', 'x'.repeat(23), 'abcdefghij', `abcdefghij${' '.repeat(14)}`, ' '.repeat(24)]) {
     const { response, fake } = await fire({ action: 'task', title: 'Chase the invoice' }, { env: { FIRE_KEY: short }, headers: { 'x-fire-key': short } })
     assert.equal(response.statusCode, 503, short)
     assert.match(response.body.error, /FIRE_KEY must be 24 characters or more/)
@@ -197,14 +198,18 @@ test('in mailbox mode a fire key under 24 characters is not configured - the pla
     assert.equal(fake.calls.put.length, 0)
   }
   // Long, and still a placeholder: the same rule MAILBOX_SECRET and MAILBOX_KEY are held to.
-  for (const placeholder of ['FILL-ME-IN-FILL-ME-IN-FILL-ME-IN', 'your-long-passphrase-goes-here', 'replace-me-with-a-long-passphrase', 'an-example-fire-key-of-some-length']) {
+  // A long key of a handful of different characters is a filler, not a passphrase.
+  for (const placeholder of ['FILL-ME-IN-FILL-ME-IN-FILL-ME-IN', 'your-long-passphrase-goes-here', 'replace-me-with-a-long-passphrase', 'an-example-fire-key-of-some-length',
+    'FILL-IN-FILL-IN-FILL-IN-FILL-IN', 'insert-key-here-insert-key', 'REPLACE_THIS_WITH_A_KEY_123', 'changeit-changeit-changeit-1',
+    'TODO-TODO-TODO-TODO-TODO-TODO', 'set-me-set-me-set-me-set-me', '*'.repeat(24), 'y'.repeat(24)]) {
     const { response, fake } = await fire({ action: 'task', title: 'Chase the invoice' }, { env: { FIRE_KEY: placeholder }, headers: { 'x-fire-key': placeholder } })
     assert.equal(response.statusCode, 503, placeholder)
     assert.match(response.body.error, /FIRE_KEY must be 24 characters or more, and not a placeholder/)
     assert.ok(!response.body.error.includes(placeholder), 'the key was echoed')
     assert.equal(fake.calls.put.length, 0)
   }
-  const exactly = 'y'.repeat(24)
+  const exactly = 'k7Qm2xLp9vRt4wNs8bYc3hJd'
+  assert.equal(exactly.length, 24)
   const ok = await fire({ action: 'task', title: 'Chase the invoice' }, { env: { FIRE_KEY: exactly }, headers: { 'x-fire-key': exactly } })
   assert.equal(ok.response.statusCode, 200)
   // PUBLIC_FIRE waives the fire key, as in the cloud: then no key, short or long, is needed.

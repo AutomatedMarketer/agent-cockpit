@@ -221,6 +221,25 @@ test('a queue file written by a stranger is cleaned, not trusted: only orders th
   assert.equal(saved.extra, undefined)
 })
 
+test('a queue day later than tomorrow is a stranger\'s, not believed: it cannot hold the day\'s count for ever', async () => {
+  const config = mailboxConfig(ENV)
+  const good = makeOrder(PAYLOAD, config, NOW).envelope
+  // Tomorrow is a day this board writes: another instance whose clock is already past midnight.
+  const tomorrow = { version: 1, day: '2026-10-13', count: 8, orders: [good] }
+  assert.deepEqual(parseQueue(JSON.stringify(tomorrow), config, NOW.getTime()), { day: '2026-10-13', count: 8, orders: [good] })
+  // Further on is not: the day and its count read as no day at all, and the signed orders are kept.
+  for (const day of ['2026-10-14', '9999-12-31']) {
+    assert.deepEqual(parseQueue(JSON.stringify({ version: 1, day, count: 8, orders: [good] }), config, NOW.getTime()), { day: '', count: 0, orders: [good] }, day)
+  }
+  const { fake, store } = connected()
+  fake.files.set(MAILBOX_QUEUE_PATH, { bytes: Buffer.from(JSON.stringify({ version: 1, day: '9999-12-31', count: 8, orders: [good] })), contentType: 'application/json', etag: '"planted"', access: 'private' })
+  const sent = await queueOrder(store, config, PAYLOAD, NOW)
+  assert.match(sent.id, MAILBOX_CONTRACT.idShape)
+  assert.equal(queueFile(fake).day, '2026-10-12')
+  assert.equal(queueFile(fake).count, 1)
+  assert.deepEqual(queueFile(fake).orders[0], good)
+})
+
 test('the ninth order of a UTC day is refused with a sentence and nothing is saved; the next day starts again', async () => {
   assert.equal(MAILBOX_ORDERS_PER_DAY, 8)
   const { fake, store, config } = connected()
