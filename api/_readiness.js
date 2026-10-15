@@ -92,8 +92,8 @@ export const READINESS_WORDS = {
   noSummary: 'The run did not say why.',
   failedExit: '{name} stopped with error code {code}. The Mac does not say why; its log on the Mac has the reason.',
   // Said of a failure that came right after the Mac started. "Restarted" is what the file shows; why it
-  // restarted is not in it, so no cause is stated - "after a power cut" is what to do, not what happened.
-  failedAfterRestart: '{name} stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a power cut.',
+  // restarted is not in it, so no cause is stated - "after a restart" is what to do, not what happened.
+  failedAfterRestart: '{name} stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a restart.',
   restartedAt: 'Mac restarted at {stamp}',
   hermesFailed: '{name} did not finish at {time}. Hermes keeps the reason; open Hermes to read it.',
   hermesEndedUnknown: "Hermes did not say how {name}'s last run, at {time}, ended.",

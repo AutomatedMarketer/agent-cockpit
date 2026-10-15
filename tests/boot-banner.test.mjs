@@ -94,7 +94,7 @@ test('a boot time that is not what the collector writes is ignored, and the rest
 test('words: the sentence says restarted, as fact, and keeps the power-cut phrasing as guidance only', () => {
   assert.equal(
     READINESS_WORDS.failedAfterRestart,
-    '{name} stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a power cut.'
+    '{name} stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a restart.'
   )
   assert.equal(RESTART_FAILURE_WINDOW_MINUTES, 10)
   assert.equal(RESTART_BANNER_DAYS, 7)
@@ -104,7 +104,7 @@ test('the incident: a report job whose log was last written 27 seconds after the
   const card = owner(reading())
   assert.equal(card.light, 'no-go')
   assert.deepEqual(card.sentence, {
-    text: `Substack weekly briefing stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a power cut. ${READINESS_WORDS.unknownSchedule}`,
+    text: `Substack weekly briefing stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a restart. ${READINESS_WORDS.unknownSchedule}`,
     at: BOOT
   })
   // It is still the job's own last report that the card shows.
@@ -159,12 +159,12 @@ test('a job with set times that failed after the restart is NO GO with the new s
   const kept = owner(reading({ launchd: [failed(27, { cadence: daily, dueAt: '2026-10-13T19:55:00Z', dueBeforeAt: '2026-10-12T19:55:00Z' })] }))
   assert.equal(kept.light, 'no-go')
   assert.equal(kept.faded, false)
-  assert.deepEqual(kept.sentence, { text: 'Substack weekly briefing stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a power cut.', at: BOOT })
+  assert.deepEqual(kept.sentence, { text: 'Substack weekly briefing stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a restart.', at: BOOT })
   // Its newest slot was missed but the one before was kept: faded, and it says so after the new sentence.
   const faded = owner(reading({ launchd: [failed(27, { cadence: daily, dueAt: '2026-10-13T20:30:00Z', dueBeforeAt: '2026-10-13T19:55:00Z' })] }))
   assert.equal(faded.light, 'no-go')
   assert.equal(faded.faded, true)
-  assert.equal(faded.sentence.text, `Substack weekly briefing stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a power cut. ${READINESS_WORDS.faded}`)
+  assert.equal(faded.sentence.text, `Substack weekly briefing stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a restart. ${READINESS_WORDS.faded}`)
   // Both of its last slots missed: the board cannot vouch for it, as before this change.
   const lost = owner(reading({ launchd: [failed(27, { cadence: daily, dueAt: '2026-10-13T22:00:00Z', dueBeforeAt: '2026-10-13T21:00:00Z' })] }))
   assert.equal(lost.light, 'silent')
@@ -278,7 +278,7 @@ test('the failed job on the screen reads the new sentence, with the restart time
   const card = withClass(page.node('readiness'), 'rd-card').find((node) => node.attributes['data-id'] === OWNER_ID)
   assert.ok(card, 'the card is on the wall')
   const when = page.exposed.readinessWhen(bootIso, 'time', Date.now())
-  assert.equal(textOf(withClass(card, 'rd-sentence')[0]), `Substack weekly briefing stopped right after the Mac restarted at ${when}. Jobs like this need a person to check them after a power cut. ${READINESS_WORDS.unknownSchedule}`)
+  assert.equal(textOf(withClass(card, 'rd-sentence')[0]), `Substack weekly briefing stopped right after the Mac restarted at ${when}. Jobs like this need a person to check them after a restart. ${READINESS_WORDS.unknownSchedule}`)
 })
 
 test('without a boot time, or with an old one, the screen has no restart line', async () => {

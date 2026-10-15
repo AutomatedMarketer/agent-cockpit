@@ -115,7 +115,7 @@ happened.
 The same time words one more sentence. A job whose last run failed (exit code not 0), and whose log
 was last written from that boot minute to 10 minutes after it, while the restart is under 7 days old,
 reads "... stopped right after the Mac restarted at ... Jobs like this need a person to check them
-after a power cut." instead of "stopped with error code N". The last half is advice, not a finding.
+after a restart." instead of "stopped with error code N". The last half is advice, not a finding.
 Any other failure keeps the error-code wording.
 
 Not checked here: Windows Task Scheduler, n8n, Trigger.dev and Codex automations.
