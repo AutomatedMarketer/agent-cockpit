@@ -102,6 +102,22 @@ it is rate limiting, the board passes on how long to wait and the page waits at 
 check that works puts it back to a minute. The Mac's own data still arrives every three hours with
 the collector, and the line above the lights says when.
 
+**"Mac restarted at ..." line.** The Mac's collector writes `bootedAt` in the jobs file: when the
+computer last started, rounded down to the minute. It comes from the Mac itself (`sysctl -n
+kern.boottime`); a Mac that cannot say leaves it out. The board reads it like every other time in
+that file - an exact whole-minute UTC time, after 2000, not in the future and not later than the file
+itself - and ignores it if it is anything else. While the restart is **less than 7 days old** the top
+of the Readiness screen says "Mac restarted at 7:03 PM on Wed, Oct 14" in your own clock (with
+several Macs, each line starts with the computer's name); after 7 days, or with no `bootedAt`, the
+line is not there. The board only says it restarted. It cannot see why, so it never says a power cut
+happened.
+
+The same time words one more sentence. A job whose last run failed (exit code not 0), and whose log
+was last written from that boot minute to 10 minutes after it, while the restart is under 7 days old,
+reads "... stopped right after the Mac restarted at ... Jobs like this need a person to check them
+after a power cut." instead of "stopped with error code N". The last half is advice, not a finding.
+Any other failure keeps the error-code wording.
+
 Not checked here: Windows Task Scheduler, n8n, Trigger.dev and Codex automations.
 
 ### Hermes
@@ -993,7 +1009,7 @@ Locally:
 npm test
 ```
 
-2182 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2186 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -

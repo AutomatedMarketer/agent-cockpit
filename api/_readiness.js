@@ -445,7 +445,8 @@ function launchdCard(job, ctx, lookup) {
   }
   if (failed) {
     const reportMs = Date.parse(job.lastReportAt)
-    const afterRestart = ctx.bootMs !== null && reportMs >= ctx.bootMs && reportMs <= ctx.bootMs + minutes(RESTART_FAILURE_WINDOW_MINUTES)
+    // The same 7 days as the banner: a restart too old to be on the wall does not explain a failure either.
+    const afterRestart = ctx.bootMs !== null && now - ctx.bootMs <= RESTART_BANNER_DAYS * 86400_000 && reportMs >= ctx.bootMs && reportMs <= ctx.bootMs + minutes(RESTART_FAILURE_WINDOW_MINUTES)
     const words = afterRestart ? fill(READINESS_WORDS.failedAfterRestart, { name: safe, time: '{time}' }) : fill(READINESS_WORDS.failedExit, { name: safe, code: job.lastExit })
     return card({ ...shared, light: 'no-go', sentence: withFaded(sentence(`${words}${note}`, afterRestart ? ctx.bootedAt : job.lastReportAt), faded) })
   }

@@ -124,6 +124,18 @@ test('a failure logged before the restart is an ordinary failure: nothing about 
   }
 })
 
+test('the restart has to be on the wall too: a boot more than 7 days old does not explain a failure, however close the log', () => {
+  const day = 86400_000
+  const bootAt = (daysAgo, extraMinutes = 0) => new Date(Math.floor((NOW - daysAgo * day) / MINUTE) * MINUTE - extraMinutes * MINUTE).toISOString().replace('.000Z', 'Z')
+  const case1 = (bootIso) => owner(reading({ bootedAt: bootIso, taken: TAKEN, launchd: [failed(180, {}, bootIso)] }))
+  // 20 days ago, log 3 minutes after, exit 1: the old wording.
+  assert.match(case1(bootAt(20)).sentence.text, /^Substack weekly briefing stopped with error code 1. /)
+  assert.deepEqual(wall(reading({ bootedAt: bootAt(20), launchd: [failed(180, {}, bootAt(20))] })).restarts, [])
+  // Exactly 7 days ago is still on the wall, and still explains it; a minute older is neither.
+  assert.match(case1(bootAt(7)).sentence.text, /stopped right after the Mac restarted/)
+  assert.match(case1(bootAt(7, 1)).sentence.text, /stopped with error code 1/)
+})
+
 test('only a failure gets it: a clean exit, or a job that never said how it ended, keeps its own sentence', () => {
   const clean = owner(reading({ launchd: [failed(27, { lastExit: 0 })] }))
   assert.equal(clean.light, 'go')
@@ -315,4 +327,32 @@ test('the restart line goes once it is more than 7 days old by the readers clock
   assert.equal(withClass(page.node('readiness'), 'rd-restart').length, 1)
   page.exposed.renderReadiness(Date.now() + 8 * 24 * 3600_000)
   assert.equal(withClass(page.node('readiness'), 'rd-restart').length, 0)
+})
+
+test('with two computers each line starts with its name; with one it does not', async () => {
+  const base = live()
+  const second = isoOf(Math.floor((base.now - 5 * 3600_000) / MINUTE) * MINUTE)
+  const payload = payloadFor(base)
+  payload.readiness.restarts = [
+    { where: 'Studio', text: 'Mac restarted at {stamp}', at: base.bootIso },
+    { where: 'Mac Mini', text: 'Mac restarted at {stamp}', at: second }
+  ]
+  const page = await boot(payload)
+  const lines = withClass(page.node('readiness'), 'rd-restart').map(textOf)
+  assert.deepEqual(lines, [`Studio: Mac restarted at ${stampOf(base.bootIso)}`, `Mac Mini: Mac restarted at ${stampOf(second)}`])
+  // One of the two too old by the reader's clock: the other is the only line, so it has no name in front.
+  payload.readiness.restarts[1].at = isoOf(base.now - 9 * 86400_000)
+  const one = await boot(payload)
+  assert.deepEqual(withClass(one.node('readiness'), 'rd-restart').map(textOf), [`Mac restarted at ${stampOf(base.bootIso)}`])
+})
+
+test('the holder for the restart lines is hidden when there is no line, and shown when there is', async () => {
+  const none = await boot(payloadFor(live({ bootedAt: ABSENT })))
+  const [emptyHolder] = withClass(none.node('readiness'), 'rd-restarts')
+  assert.equal(emptyHolder.hidden, true)
+  assert.equal(emptyHolder.children.length, 0)
+  const some = await boot(payloadFor(live()))
+  const [holder] = withClass(some.node('readiness'), 'rd-restarts')
+  assert.equal(holder.hidden, false)
+  assert.equal(holder.children.length, 1)
 })
