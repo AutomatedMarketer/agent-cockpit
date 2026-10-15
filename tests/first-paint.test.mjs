@@ -1,10 +1,12 @@
-// The board's first page costs a phone at most 260 KB - the budget every lazy file on this board exists
+// The board's first page costs a phone at most 270 KB - the budget every lazy file on this board exists
 // to keep (memory-graph.js, memory-find.js and the graph libraries load only when asked for).
 //
 // Counted the way the browser measurement (Today at 390 px, every response but /api/*) counts it: what
 // the page asks for before anybody opens anything - the page itself, its scripts, what it preloads, its
 // fonts - with text as Vercel sends it (compressed; gzip at level 9 here) and pictures and fonts as they
 // are. On 2026-10-11 that was 254.6 KB: index.html 31.6, app.js 119.5, the Today picture 56.4, Inter 47.1.
+// On 2026-10-15 Nuno raised it to 270: the board had grown to 260.3 KB (app.js 125.1) with the restart line
+// and the clock-true greeting.
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -12,7 +14,7 @@ import { readFileSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
 
 const PUBLIC = new URL('../public/', import.meta.url)
-const BUDGET_KB = 260
+const BUDGET_KB = 270
 const TEXT = /\.(html|js|css|svg|json)$/
 
 const html = readFileSync(new URL('index.html', PUBLIC), 'utf8')

@@ -721,6 +721,7 @@ function armBannerClock(now = new Date()) {
 const wakeBannerClock = () => { refreshBannerWords(); armBannerClock() }
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wakeBannerClock() })
 window.addEventListener('pageshow', wakeBannerClock)
+window.addEventListener('focus', wakeBannerClock)
 armBannerClock()
 
 // A smooth line through the values with the area under it washed in the card's colour, drawn
