@@ -6851,10 +6851,20 @@ function readinessScheduleText(schedule, nowMs, zone = readinessClock.zone) {
   }
 }
 
+// "7:56 PM on Tue, Oct 13": the clock time and the short date together, always - the line at the top of the
+// wall that says the Mac restarted is read days later as often as minutes later.
+function readinessStamp(iso) {
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) return 'an unknown time'
+  const clock = readinessFormat({ hour: 'numeric', minute: '2-digit' }).format(ms)
+  return `${clock} on ${readinessFormat({ weekday: 'short', day: 'numeric', month: 'short' }).format(ms)}`
+}
+
 function readinessSentence(sentence, nowMs) {
   const at = sentence?.at ?? null
-  return String(sentence?.text ?? '').replace(/\{(time|date|hours)\}/g, (token, kind) => {
+  return String(sentence?.text ?? '').replace(/\{(time|date|hours|stamp)\}/g, (token, kind) => {
     if (!at) return ''
+    if (kind === 'stamp') return readinessStamp(at)
     if (kind === 'hours') return String(Math.max(0, Math.floor((nowMs - Date.parse(at)) / 3600_000)))
     return readinessWhen(at, kind, nowMs)
   })
@@ -6915,10 +6925,11 @@ function readinessShell(container) {
   const stamp = readinessNode('p', { cls: 'rd-stamp small muted' })
   const counters = readinessNode('p', { cls: 'rd-counters', attrs: { role: 'status' } })
   const note = readinessNode('p', { cls: 'rd-note small muted' })
+  const restarts = readinessNode('div', { cls: 'rd-restarts', attrs: { hidden: '' } })
   const refresh = readinessNode('button', { cls: 'fire rd-refresh', text: 'Refresh', attrs: { type: 'button' } })
   const body = readinessNode('div', { cls: 'rd-body' })
-  readinessReplace(container, [readinessNode('div', { cls: 'rd-head' }, stamp, counters, note, refresh), body])
-  readinessRefs = { container, stamp, counters, note, refresh, body }
+  readinessReplace(container, [readinessNode('div', { cls: 'rd-head' }, restarts, stamp, counters, note, refresh), body])
+  readinessRefs = { container, restarts, stamp, counters, note, refresh, body }
   refresh.addEventListener('click', () => checkReadiness())
   return readinessRefs
 }
@@ -7043,6 +7054,23 @@ async function checkReadiness() {
 window.addEventListener('hashchange', () => readinessSync(true))
 document.addEventListener('visibilitychange', () => readinessSync(true))
 
+// The lines at the top that say a computer restarted: "Mac restarted at 7:56 PM on Tue, Oct 13". The server
+// sends one per computer that reported a boot time in the last 7 days; the page judges the 7 days again by its
+// own clock, so a board left open for a week stops saying it, and draws only entries it can read. With more
+// than one computer each line starts with its name, which is text like everything else here.
+const READINESS_RESTART_DAYS = 7
+function readinessRestartLines(restarts, nowMs) {
+  const readable = (Array.isArray(restarts) ? restarts : []).filter((entry) => {
+    if (!entry || typeof entry !== 'object' || typeof entry.text !== 'string' || typeof entry.at !== 'string') return false
+    const ms = Date.parse(entry.at)
+    return Number.isFinite(ms) && ms <= nowMs + 60_000 && nowMs - ms <= READINESS_RESTART_DAYS * 86400_000
+  })
+  return readable.map((entry) => {
+    const said = readinessSentence({ text: entry.text, at: entry.at }, nowMs)
+    return readable.length > 1 && typeof entry.where === 'string' && entry.where ? `${entry.where}: ${said}` : said
+  })
+}
+
 function readinessCountsText(counts) {
   return `${counts.noGo} NO GO · ${counts.silent} SILENT · ${counts.go} GO`
 }
@@ -7067,6 +7095,9 @@ function renderReadiness(nowMs = Date.now()) {
     data.commit ? `REFRESH ${readinessDelayWords()} auto` : 'REFRESH BY BUTTON',
     readinessFailed ? 'COULD NOT CHECK' : null
   ].filter(Boolean).join(' · ')
+  const restartLines = readinessRestartLines(readiness.restarts, nowMs)
+  readinessReplace(refs.restarts, restartLines.map((line) => readinessNode('p', { cls: 'rd-restart', text: line })))
+  refs.restarts.hidden = restartLines.length === 0
   // The counters are a live region: touched only when they change, so a screen reader hears a change
   // and not the page being drawn again.
   const counters = readinessCountsText(aged.counts)

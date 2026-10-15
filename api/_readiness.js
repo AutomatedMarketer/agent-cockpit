@@ -31,6 +31,11 @@ export const COLLECTOR_EVERY_MINUTES = 180
 // one that matters; a computer that has not reported on an order for this long cannot be vouched for.
 export const MAILBOX_LOOKBACK_HOURS = 24
 export const MAILBOX_SILENT_HOURS = 24
+// The Mac says when it last started (`bootedAt`, to the minute). A restart is shown at the top of the
+// wall for this many days, and a job whose last run failed within this many minutes AFTER it - its log
+// last written between the boot minute and then - is worded as a failure that followed the restart.
+export const RESTART_BANNER_DAYS = 7
+export const RESTART_FAILURE_WINDOW_MINUTES = 10
 export const READINESS_NAME_MAX = 80
 export const READINESS_SUMMARY_MAX = 160
 
@@ -86,6 +91,10 @@ export const READINESS_WORDS = {
   failedFinish: '{name} did not finish at {time}. {summary}',
   noSummary: 'The run did not say why.',
   failedExit: '{name} stopped with error code {code}. The Mac does not say why; its log on the Mac has the reason.',
+  // Said of a failure that came right after the Mac started. "Restarted" is what the file shows; why it
+  // restarted is not in it, so no cause is stated - "after a power cut" is what to do, not what happened.
+  failedAfterRestart: '{name} stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a power cut.',
+  restartedAt: 'Mac restarted at {stamp}',
   hermesFailed: '{name} did not finish at {time}. Hermes keeps the reason; open Hermes to read it.',
   hermesEndedUnknown: "Hermes did not say how {name}'s last run, at {time}, ended.",
   hermesRunning: 'Hermes was running when the Mac checked at {time}.',
@@ -375,7 +384,8 @@ function macContext(computer, now) {
   const takenMs = Date.parse(computer.takenAt)
   const stale = computer.freshness === 'stale'
   const where = computer.computer ?? 'Mac'
-  return { computer, takenAt: computer.takenAt, takenMs, stale, where, now }
+  const bootMs = computer.bootedAt ? Date.parse(computer.bootedAt) : NaN
+  return { computer, takenAt: computer.takenAt, takenMs, stale, where, now, bootedAt: Number.isFinite(bootMs) ? computer.bootedAt : null, bootMs: Number.isFinite(bootMs) ? bootMs : null }
 }
 
 // Of the two most recent expected runs, how many did the last report miss? Tolerance as in workflows.
@@ -434,7 +444,10 @@ function launchdCard(job, ctx, lookup) {
     return card({ light: 'silent', lastReport: report, sentence: sentence(`${fill(READINESS_WORDS.launchdEndedUnknown, { name: safe, time: '{time}' })}${note}`, job.lastReportAt) })
   }
   if (failed) {
-    return card({ ...shared, light: 'no-go', sentence: withFaded(sentence(`${fill(READINESS_WORDS.failedExit, { name: safe, code: job.lastExit })}${note}`, job.lastReportAt), faded) })
+    const reportMs = Date.parse(job.lastReportAt)
+    const afterRestart = ctx.bootMs !== null && reportMs >= ctx.bootMs && reportMs <= ctx.bootMs + minutes(RESTART_FAILURE_WINDOW_MINUTES)
+    const words = afterRestart ? fill(READINESS_WORDS.failedAfterRestart, { name: safe, time: '{time}' }) : fill(READINESS_WORDS.failedExit, { name: safe, code: job.lastExit })
+    return card({ ...shared, light: 'no-go', sentence: withFaded(sentence(`${words}${note}`, afterRestart ? ctx.bootedAt : job.lastReportAt), faded) })
   }
   if (job.state === 'running') {
     return card({ ...shared, light: 'go', sentence: withFaded(sentence(`${fill(READINESS_WORDS.running, { name: safe, time: '{time}' })}${note}`, ctx.takenAt), faded) })
@@ -589,6 +602,18 @@ export function countCards(cards) {
   return counts
 }
 
+// One line per computer that says when it last started and did so within the last week, newest first.
+// The board's clock decides "within the last week", never the file's.
+function restartLines(computers, now) {
+  const lines = []
+  for (const computer of computers) {
+    const bootMs = computer.bootedAt ? Date.parse(computer.bootedAt) : NaN
+    if (!Number.isFinite(bootMs) || bootMs > now || now - bootMs > RESTART_BANNER_DAYS * 86400_000) continue
+    lines.push({ where: computer.computer ?? 'Mac', text: READINESS_WORDS.restartedAt, at: computer.bootedAt })
+  }
+  return lines.sort((a, b) => Date.parse(b.at) - Date.parse(a.at) || a.where.localeCompare(b.where))
+}
+
 export function shapeReadiness({ workflows = [], routines = null, jobs = null, hermes = null, mailbox = null, overrides = null, now = Date.now() } = {}) {
   const lookup = overridesLookup(overrides)
   const cards = []
@@ -664,10 +689,12 @@ export function shapeReadiness({ workflows = [], routines = null, jobs = null, h
 
   const ordered = orderCards(cards)
   const counts = countCards(ordered)
+  const restarts = restartLines(computers, now)
   const newest = computers.length ? computers.reduce((best, computer) => (Date.parse(computer.takenAt) > Date.parse(best) ? computer.takenAt : best), computers[0].takenAt) : null
   return {
     checkedAt: isoOf(now),
     macCheckedAt: newest,
+    restarts,
     badge: counts.noGo + counts.silent,
     counts: { ...counts, switchedOff: switchedOff.length, hiddenBySafety },
     cards: ordered,

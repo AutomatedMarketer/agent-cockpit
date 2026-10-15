@@ -1473,6 +1473,11 @@
      contrast. Nothing moves, so there is nothing for reduced motion to turn off. */
   .rd-head { display: grid; gap: .35rem; margin: 0 0 1rem; }
   .rd-head > p { margin: 0; }
+  .rd-restarts { display: grid; gap: .35rem; }
+  .rd-restarts[hidden] { display: none; }
+  /* A notice, not an alarm: a bar of the warning colour beside plain ink text, so it reads as a fact about the Mac
+     and the colour is never the only thing saying it. */
+  .rd-restart { margin: 0; padding: .5rem .75rem; border-left: .25rem solid var(--warn); background: var(--panel); border-radius: 0 .5rem .5rem 0; font-weight: 600; overflow-wrap: anywhere; }
   .rd-stamp { letter-spacing: .04em; overflow-wrap: anywhere; }
   .rd-counters { font-size: 1.1875rem; font-weight: 700; letter-spacing: -.01em; overflow-wrap: anywhere; }
   .rd-note { overflow-wrap: anywhere; }

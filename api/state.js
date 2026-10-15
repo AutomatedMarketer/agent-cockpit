@@ -1087,7 +1087,7 @@ export const JOBS_CADENCE = {
 }
 // What the board reads, and nothing else. The output is built from these, key by key.
 export const JOBS_ALLOWED_KEYS = {
-  file: ['schema', 'takenAt', 'computer', 'timezone', 'launchd', 'hermes'],
+  file: ['schema', 'takenAt', 'computer', 'timezone', 'bootedAt', 'launchd', 'hermes'],
   blockFound: ['status', 'items', 'hidden', 'more'],
   blockNotFound: ['status', 'why'],
   launchdItem: ['label', 'cadence', 'state', 'lastExit', 'lastReportAt', 'dueAt', 'dueBeforeAt', 'self', 'disabled'],
@@ -1100,6 +1100,9 @@ export const JOBS_REQUIRED_KEYS = {
   launchdItem: ['label', 'cadence', 'state'],
   hermesItem: ['profile', 'id', 'name', 'enabled', 'cadence', 'lastResult']
 }
+// When the computer last started, as the collector writes it: an ISO time in UTC to the whole minute.
+// Optional - a Mac that cannot say leaves the key out. The board's own rules for it are in jobBootTime.
+export const JOBS_BOOT = { key: 'bootedAt', roundedToSeconds: 60, earliest: '2000-01-01T00:00:00Z' }
 export const JOBS_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,59}$/
 // Exactly what Hermes makes (uuid4().hex[:12]). An id that spells out a word is not one it made.
 export const JOBS_HERMES_ID = /^[0-9a-f]{12}$/
@@ -1161,6 +1164,21 @@ function jobDueTimes(raw, cadence, off, takenMs, now) {
   if (dueMs > takenMs - JOBS_GRACE_MINUTES * 60_000 || dueMs < takenMs - JOBS_LOOKBACK_DAYS * 86400_000) return none
   const before = jobTime(raw.dueBeforeAt, now)
   return { dueAt, dueBeforeAt: before !== null && Date.parse(before) < dueMs ? before : null }
+}
+
+// When the computer last started, or null. Held to what the collector writes, and a little more: a file
+// is only a file, so a time that is not to the whole minute, is before 2000, is later than now or later
+// than the reading it came in is not a restart anybody could have seen. It is ignored, and the rest of
+// the file is read as it always was - a missing time is never a wrong one.
+const WHOLE_MINUTE_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/
+function jobBootTime(value, takenMs, now) {
+  // The collector's exact form (no offset, no milliseconds), and a day that exists: Date.parse rolls
+  // 2026-02-31 over into March, so the time has to survive the round trip.
+  if (typeof value !== 'string' || !WHOLE_MINUTE_UTC.test(value)) return null
+  const ms = Date.parse(value)
+  if (!Number.isFinite(ms) || isoSeconds(ms) !== value || ms % (JOBS_BOOT.roundedToSeconds * 1000) !== 0) return null
+  if (ms < Date.parse(JOBS_BOOT.earliest) || ms > now || ms > takenMs) return null
+  return isoSeconds(ms)
 }
 
 function launchdJob(raw, takenMs, now) {
@@ -1240,6 +1258,7 @@ function readJobsFile(body, now) {
       takenAt: isoSeconds(takenMs),
       freshness: stale ? 'stale' : 'fresh',
       timezone: jobsTimezone(parsed.timezone),
+      bootedAt: jobBootTime(parsed.bootedAt, takenMs, now),
       launchd: jobsBlock(parsed.launchd, { read: (item) => launchdJob(item, takenMs, now), keyOf: (job) => job.label }, JOBS_CAPS.launchd),
       hermes: jobsBlock(parsed.hermes, { read: (item) => hermesJob(item, takenMs, now), keyOf: (job) => `${job.profile}/${job.id}` }, JOBS_CAPS.hermes)
     }
