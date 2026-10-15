@@ -658,15 +658,29 @@ function setupRingHtml(setup) {
     <span>${words}</span></div>`
 }
 
+function ownerFirstName() {
+  const name = typeof data?.owner?.name === 'string' ? data.owner.name.trim() : ''
+  return name.split(/\s+/)[0] ?? ''
+}
+
+// The banner's words for a moment, as plain text. One function for the first draw and the
+// in-place update, so they cannot disagree.
+function bannerWords(now, first) {
+  const part = (options) => now.toLocaleDateString(undefined, options)
+  return {
+    greeting: `${greetingFor(now.getHours())}${first ? `, ${first}` : ''}.`,
+    day: `${part({ weekday: 'long' })} · ${part({ day: 'numeric', month: 'long' })}`
+  }
+}
+
 // The picture is the one image on the board fetched at once rather than when it scrolls into view:
 // it is the first thing Today shows, the head preloads it, and its size is written down so
 // nothing jumps when it lands. The owner's own banner, when they have put one in, takes its place
 // and keeps all of that - only the address changes.
 function bannerHtml(now = new Date()) {
-  const name = typeof data.owner?.name === 'string' ? data.owner.name.trim() : ''
-  const first = name.split(/\s+/)[0] ?? ''
-  const greeting = `${greetingFor(now.getHours())}${first ? `, ${escapeHtml(first)}` : ''}.`
-  const day = `${now.toLocaleDateString(undefined, { weekday: 'long' })} &middot; ${now.toLocaleDateString(undefined, { day: 'numeric', month: 'long' })}`
+  const words = bannerWords(now, ownerFirstName())
+  const greeting = escapeHtml(words.greeting)
+  const day = escapeHtml(words.day).replace('·', '&middot;')
   return pictureSwap(`<section class="banner"${artMark('today')}>
     <img src="/art/today-harbour.webp" alt="" width="1600" height="686" fetchpriority="high" decoding="async" />
     <div class="banner-text">
@@ -679,6 +693,35 @@ function bannerHtml(now = new Date()) {
     </div>
   </section>`, '/art/today-harbour.webp', 'today')
 }
+
+// Keeps the greeting and the day line true to the clock while a tab stays open: the board redraws
+// only when the repo changes. Just those two are rewritten - a full redraw wipes half-typed text.
+function refreshBannerWords(root = document, now = new Date(), first = ownerFirstName()) {
+  const heading = root.querySelector('#today .banner .greeting')
+  const eyebrow = root.querySelector('#today .banner .eyebrow')
+  const words = bannerWords(now, first)
+  if (heading?.firstChild?.nodeType === 3) heading.firstChild.nodeValue = `${words.greeting} `
+  if (eyebrow) eyebrow.textContent = words.day
+}
+
+// Next 5:00, 12:00, 18:00 or midnight; hour 24 is the next midnight, so there is always one.
+function nextBannerChange(now = new Date()) {
+  return [5, 12, 18, 24].map((hour) => new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour)).find((moment) => moment > now)
+}
+
+// One timer, re-armed each time. The 500 ms pad stops an early wake-up landing on the old words.
+// globalThis, so the polling tests' fake timers do not count this one; unref lets Node exit.
+const bannerClock = { timer: null, set: (fn, ms) => globalThis.setTimeout(fn, ms), clear: (id) => globalThis.clearTimeout(id) }
+function armBannerClock(now = new Date()) {
+  bannerClock.clear(bannerClock.timer)
+  bannerClock.timer = bannerClock.set(() => { refreshBannerWords(); armBannerClock() }, nextBannerChange(now) - now + 500)
+  bannerClock.timer?.unref?.()
+}
+// A hidden tab's timers stall, and a cached page never reloads: re-read the clock on return.
+const wakeBannerClock = () => { refreshBannerWords(); armBannerClock() }
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wakeBannerClock() })
+window.addEventListener('pageshow', wakeBannerClock)
+armBannerClock()
 
 // A smooth line through the values with the area under it washed in the card's colour, drawn
 // across a 400x80 box the card stretches to its own width. One point per value, so fourteen days
