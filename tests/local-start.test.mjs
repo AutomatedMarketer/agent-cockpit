@@ -560,3 +560,26 @@ test('start window: says in plain words where to look, short, for a first start 
 test('files: .gitignore keeps board.json (this computer\'s team folder) out of commits', () => {
   assert.match(readFileSync(join(ROOT, '.gitignore'), 'utf8'), /^board\.json\s*$/m)
 })
+
+// ---- the browser the starter opens does not inherit the board's secrets ----------------------------------
+
+test('opening the browser: it is given a short allowlist of the environment, never a key, token or board setting', () => {
+  const source = {
+    SystemRoot: String.raw`C:\Windows`, windir: String.raw`C:\Windows`, USERPROFILE: String.raw`C:\Users\a`, LOCALAPPDATA: 'l', APPDATA: 'a', TEMP: 't', TMP: 't', PATH: 'p', HOME: '/home/a', LANG: 'en_US.UTF-8', LC_ALL: 'C', DISPLAY: ':0', XDG_RUNTIME_DIR: '/run/user/1000', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/x',
+    OPENAI_API_KEY: 'sk-secret', VIEW_KEY: 'view-secret', PUBLIC_FIRE: 'true', FISH_API_KEY: 'f', OPENROUTER_API_KEY: 'o', GITHUB_TOKEN: 'g', ANTHROPIC_API_KEY: 'a', MAILBOX_SECRET: 'm', N8N_API_KEY: 'n', HASS_TOKEN: 'h', REPO_FOLDER: '/team', PICTURE_FOLDER: '/pics', BOARD_PASSWORD: 'p', EDIT_KEY: 'e', RANDOM_SECRET: 'r', NODE_OPTIONS: '--require /evil.js', ELECTRON_RUN_AS_NODE: '1'
+  }
+  for (const platform of ['win32', 'darwin', 'linux']) {
+    const opener = openerFor({ platform, env: source, file: '/tmp/x.html' })
+    const names = Object.keys(opener.env)
+    for (const secret of ['OPENAI_API_KEY', 'VIEW_KEY', 'PUBLIC_FIRE', 'FISH_API_KEY', 'OPENROUTER_API_KEY', 'GITHUB_TOKEN', 'ANTHROPIC_API_KEY', 'MAILBOX_SECRET', 'N8N_API_KEY', 'HASS_TOKEN', 'REPO_FOLDER', 'PICTURE_FOLDER', 'BOARD_PASSWORD', 'EDIT_KEY', 'RANDOM_SECRET', 'NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE']) {
+      assert.ok(!names.includes(secret), `${secret} reached the browser on ${platform}`)
+    }
+    assert.ok(!JSON.stringify(opener.env).includes('secret'), 'a secret value reached the browser')
+    for (const needed of ['PATH', 'HOME', 'LANG']) assert.ok(names.includes(needed), `${needed} was dropped on ${platform}`)
+  }
+  const win = openerFor({ platform: 'win32', env: source, file: 'x' })
+  for (const needed of ['SystemRoot', 'windir', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP']) assert.ok(needed in win.env, `${needed} was dropped`)
+  assert.equal(win.env.NoDefaultCurrentDirectoryInExePath, '1')
+  const linux = openerFor({ platform: 'linux', env: source, file: 'x' })
+  for (const needed of ['DISPLAY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS']) assert.ok(needed in linux.env, `${needed} (a Linux browser needs it) was dropped`)
+})

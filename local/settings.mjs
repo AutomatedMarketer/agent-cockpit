@@ -24,6 +24,8 @@ const isSlot = (name) => typeof name === 'string' && Object.hasOwn(SLOTS, name)
 
 export const SAY = Object.freeze({
   notAKey: (slot) => `That does not look like ${SLOTS[slot].label.replace(/ \(.*\)$/, '')}. ${SLOTS[slot].hint}`,
+  anthropicKey: 'That looks like an Anthropic (Claude) key. The OpenAI box takes only an OpenAI key, which starts with sk- and is made at platform.openai.com.',
+  openrouterKey: 'That looks like an OpenRouter key. Paste it in the OpenRouter box, not here.',
   whitespace: 'That has a space or a new line in it. Paste only the key.',
   unknownSlot: 'The board does not keep that setting.',
   badRequest: 'The board could not read that request.',
@@ -80,6 +82,9 @@ function writeKeys(file, keys) {
   }
 }
 
+// Two things worth knowing, both accepted: Remove clears the computer's own variable of the same name
+// (OPENAI_API_KEY...) for as long as the board runs - a restart brings back whatever the computer had; and
+// two boards run by one student share settings.json (the second to start reads the same file). Both are rare.
 export function createSettings({ file, env = process.env, fetchImpl = fetch, openaiBase = 'https://api.openai.com', openrouterBase = 'https://openrouter.ai', testTimeoutMs = 10_000 } = {}) {
   if (typeof file !== 'string' || !file) throw new Error('createSettings needs the settings file path.')
   let keys = readFileKeys(file)
@@ -101,6 +106,9 @@ export function createSettings({ file, env = process.env, fetchImpl = fetch, ope
     if (typeof value !== 'string') return SAY.notAKey(slot)
     if (value.length > 400) return SAY.tooBig
     if (hasSpaceOrControl(value)) return SAY.whitespace
+    // Other services' keys have the same sk- start, so the shape alone would let them in.
+    if (slot === 'OPENAI_API_KEY' && value.startsWith('sk-ant-')) return SAY.anthropicKey
+    if (slot === 'OPENAI_API_KEY' && value.startsWith('sk-or-')) return SAY.openrouterKey
     if (!SLOTS[slot].shape.test(value)) return SAY.notAKey(slot)
     return null
   }

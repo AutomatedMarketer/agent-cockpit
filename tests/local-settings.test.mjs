@@ -475,3 +475,25 @@ test('the guards that back up the key shape also hold on their own: spaces, cont
   assert.match(source, /if \(hasSpaceOrControl\(value\)\) return SAY\.whitespace/)
   assert.match(source, /if \(value\.length > 400\) return SAY\.tooBig/)
 })
+
+test('shapes: another service\'s key in the OpenAI box is refused with a sentence that names the right box', async () => {
+  const { file, done } = folder()
+  try {
+    const env = {}
+    const settings = createSettings({ file, env })
+    const anthropic = 'sk-ant-api03-' + 'a1B2c3D4'.repeat(8)
+    const openrouter = 'sk-or-v1-' + 'a1b2c3d4'.repeat(4)
+    const claude = await call(settings, { action: 'save', slot: 'OPENAI_API_KEY', value: anthropic })
+    assert.equal(claude.status, 400)
+    assert.match(claude.body.error, /Anthropic|Claude/)
+    assert.match(claude.body.error, /OpenAI box/)
+    const router = await call(settings, { action: 'save', slot: 'OPENAI_API_KEY', value: openrouter })
+    assert.equal(router.status, 400)
+    assert.match(router.body.error, /OpenRouter box/)
+    assert.equal(env.OPENAI_API_KEY, undefined)
+    for (const answer of [claude, router]) assert.ok(!JSON.stringify(answer).includes('a1B2c3D4') && !JSON.stringify(answer).includes('a1b2c3d4'))
+    assert.equal((await call(settings, { action: 'save', slot: 'OPENROUTER_API_KEY', value: openrouter })).status, 200)
+  } finally {
+    done()
+  }
+})

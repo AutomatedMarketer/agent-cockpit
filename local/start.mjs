@@ -146,6 +146,23 @@ export function applyStudentEnv(env, { teamFolder, pictureFolder }) {
 
 // ---- opening the browser -------------------------------------------------------------------------------
 
+// What a browser (or the program that opens one) needs to start - and nothing else. The board's own
+// environment holds keys and the per-run key; none of that has any business in the student's browser,
+// which would pass it on to everything it starts.
+const OPENER_NEEDS = new Set([
+  'PATH', 'PATHEXT', 'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432',
+  'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'USERNAME', 'USER', 'LOGNAME', 'USERDOMAIN', 'LANG', 'TZ',
+  'DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME', 'XDG_DATA_DIRS', 'XDG_CURRENT_DESKTOP', 'XDG_SESSION_TYPE'
+])
+export function openerEnvironment(source) {
+  const env = {}
+  for (const [name, value] of Object.entries(source)) {
+    const upper = name.toUpperCase()
+    if (value !== undefined && (OPENER_NEEDS.has(upper) || upper.startsWith('LC_'))) env[name] = value
+  }
+  return env
+}
+
 export function openerFor({ platform, env, file }) {
   if (platform === 'win32') {
     if (!env.SystemRoot) throw new Error('SystemRoot is not set, so the browser cannot be opened safely.')
@@ -154,10 +171,10 @@ export function openerFor({ platform, env, file }) {
       command: `${system}\\rundll32.exe`,
       args: ['url.dll,FileProtocolHandler', file],
       cwd: system,
-      env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' }
+      env: { ...openerEnvironment(env), NoDefaultCurrentDirectoryInExePath: '1' }
     }
   }
-  return { command: platform === 'darwin' ? '/usr/bin/open' : '/usr/bin/xdg-open', args: [file], cwd: '/', env }
+  return { command: platform === 'darwin' ? '/usr/bin/open' : '/usr/bin/xdg-open', args: [file], cwd: '/', env: openerEnvironment(env) }
 }
 
 export async function openFileWith({ platform = process.platform, env = process.env, file, spawnImpl = spawn }) {
