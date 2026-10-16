@@ -62,18 +62,22 @@ export function parseBody(bytes, contentType = '') {
   return undefined
 }
 
-// Adds query and body to the request. Throws BodyError (status 400 / 413) for the server to send.
-export async function shimRequest(request, { limit = BODY_LIMIT_BYTES } = {}) {
-  const url = new URL(request.url, 'http://board.invalid')
-  request.query = parseQuery(url.searchParams)
-  // On Vercel these three are set by the platform and overwrite whatever a caller sends. Here the
-  // caller is the connection itself: take what it sent away and say who actually connected, or a
-  // rotating X-Forwarded-For would dodge login.js's guess limit and x-forwarded-host would
-  // override the same-site check in _lib.js.
+// On Vercel these three are set by the platform and overwrite whatever a caller sends. Here the
+// caller is the connection itself: take what it sent away and say who actually connected, or a
+// rotating X-Forwarded-For would dodge login.js's guess limit and x-forwarded-host would
+// override the same-site check in _lib.js. Called first thing for every request, so the gate and
+// the handlers alike see the cleaned headers.
+export function cleanForwardingHeaders(request) {
   const peer = request.socket?.remoteAddress ?? 'unknown'
   delete request.headers['x-forwarded-host']
   request.headers['x-real-ip'] = peer
   request.headers['x-forwarded-for'] = peer
+}
+
+// Adds query and body to the request. Throws BodyError (status 400 / 413) for the server to send.
+export async function shimRequest(request, { limit = BODY_LIMIT_BYTES } = {}) {
+  const url = new URL(request.url, 'http://board.invalid')
+  request.query = parseQuery(url.searchParams)
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     request.body = parseBody(await readBody(request, limit), request.headers['content-type'])
   }

@@ -746,3 +746,50 @@ test('an error on the response is written to the window, not thrown', async () =
   }
   assert.match(logged.join('\n'), /socket trouble/)
 })
+
+// ---- round 2 minors ---------------------------------------------------------------------------
+
+test('the gate and page requests see cleaned forwarding headers, not the caller\'s', async () => {
+  let seenByGate
+  const board = await running({ gate: (request) => { seenByGate = { ...request.headers }; return true } })
+  try {
+    await fetch(board.url('/'), { headers: { 'X-Forwarded-For': '9.9.9.9', 'X-Real-IP': '8.8.8.8', 'X-Forwarded-Host': 'evil.example' } })
+  } finally {
+    await board.stop()
+  }
+  assert.equal(seenByGate['x-forwarded-for'], '127.0.0.1')
+  assert.equal(seenByGate['x-real-ip'], '127.0.0.1')
+  assert.equal(seenByGate['x-forwarded-host'], undefined)
+})
+
+test('port 80 is refused with a plain sentence (its Host header has no port to check)', async () => {
+  await assert.rejects(startBoardServer({ port: 80 }), /port 80/i)
+  const { spawnSync } = await import('node:child_process')
+  const run = spawnSync(process.execPath, [join(ROOT, 'local', 'server.mjs'), '--port', '80'], { encoding: 'utf8', timeout: 20000 })
+  assert.equal(run.status, 1)
+  assert.match(run.stderr, /port 80/i)
+})
+
+test('a handler is told when its time ran out (request.signal), and a 504 has gone out', async () => {
+  let signal
+  const board = await running({ handlerTimeoutMs: 100, loadHandler: async () => (request) => { signal = request.signal; return new Promise(() => {}) } })
+  try {
+    assert.equal((await fetch(board.url('/api/state'))).status, 504)
+  } finally {
+    await board.stop()
+  }
+  assert.ok(signal instanceof AbortSignal)
+  assert.equal(signal.aborted, true)
+})
+
+test('request.signal is not aborted for a handler that answers in time', async () => {
+  let signal
+  const board = await running({ handlerTimeoutMs: 1000, loadHandler: async () => (request, response) => { signal = request.signal; response.status(200).json({}) } })
+  try {
+    await fetch(board.url('/api/state'))
+    await new Promise((done) => setTimeout(done, 100))
+  } finally {
+    await board.stop()
+  }
+  assert.equal(signal.aborted, false)
+})

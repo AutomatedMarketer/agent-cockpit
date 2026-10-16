@@ -20,7 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
 import { loadVercelConfig } from './headers.mjs'
 import { routeNameFor } from './routes.mjs'
-import { BodyError, shimRequest, shimResponse } from './vercel-shim.mjs'
+import { BodyError, cleanForwardingHeaders, shimRequest, shimResponse } from './vercel-shim.mjs'
 import { serveStatic } from './static.mjs'
 
 export const LOOPBACK = '127.0.0.1'
@@ -75,6 +75,7 @@ export function createBoardServer({
       response.end()
       return
     }
+    cleanForwardingHeaders(request)
     if ((await gate(request, response)) === false) return
 
     // Cut by hand: new URL('//x', base) reads "x" as a web address and loses the path.
@@ -96,7 +97,13 @@ export function createBoardServer({
         throw failure
       }
       const handler = await loadHandler(name)
+      // After a 504 the handler is NOT stopped - JavaScript cannot stop it - so it may still finish
+      // its work (a write, a call that costs money) with nobody listening. request.signal tells
+      // it the time is up; no handler reads it yet, and one that does should stop what it is doing.
+      const timeUp = new AbortController()
+      Object.defineProperty(request, 'signal', { value: timeUp.signal, configurable: true })
       const timer = setTimeout(() => {
+        timeUp.abort()
         logLine(request, `took longer than ${handlerTimeoutMs} ms`)
         sendError(response, 504, 'The board took too long to answer.')
       }, handlerTimeoutMs)
@@ -123,6 +130,8 @@ export function createBoardServer({
 
 export async function startBoardServer({ port = DEFAULT_PORT, host = LOOPBACK, build = createBoardServer, ...options } = {}) {
   assertLoopback(host)
+  // A browser leaves the port out of Host on port 80, which the Host check cannot tell apart.
+  if (port === 80) throw new Error('The board will not use port 80. Pick another with --port, for example --port 4317.')
   const server = build(options)
   return new Promise((resolve, reject) => {
     server.once('error', reject)
