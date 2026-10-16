@@ -154,7 +154,9 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     // Orders: what /api/fire is sent (answered by `dispatch`, or as a success), whether the fire key is
     // already in this tab, and the device's log of orders sent, newest first.
     async dispatch(body, options) {
-      state.dispatched.push({ body, options })
+      // The request id is the card's own (checked in its own test); the body is what the card says.
+      const { requestId, ...rest } = body
+      state.dispatched.push({ body: rest, requestId, options })
       return dispatch ? dispatch(body, options) : { ok: true, status: 200, payload: { ok: true, accepted: true } }
     },
     fireKeyHeld: () => keyHeld,

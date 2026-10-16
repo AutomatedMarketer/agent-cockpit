@@ -6136,9 +6136,12 @@ function openVoice(deps, ui) {
     const order = card.order
     const forAgent = order.kind === 'task' && owner && card.words.owners.some((one) => one.value === owner) ? owner : ''
     const tier = order.kind === 'task' && model && card.words.models.some((one) => one.value === model) ? model : ''
+    // The card's own id, with this call's: the board fires an id it has already answered only once, so a
+    // double yes or a retry that reaches it twice starts one run (api/_once.js).
+    const requestId = `${session.claims.sid}-${card.id}`
     const body = order.kind === 'task'
-      ? { action: 'task', title: order.title, ...(order.details ? { details: order.details } : {}), ...(forAgent ? { for: forAgent } : {}), ...(tier ? { model: tier } : {}) }
-      : { workflow: order.slug, action: 'run' }
+      ? { requestId, action: 'task', title: order.title, ...(order.details ? { details: order.details } : {}), ...(forAgent ? { for: forAgent } : {}), ...(tier ? { model: tier } : {}) }
+      : { requestId, workflow: order.slug, action: 'run' }
     const sent = { key: orderKey(order), at: deps.now() }
     session.sent.push(sent)
     let result

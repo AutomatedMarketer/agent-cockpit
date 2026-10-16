@@ -41,6 +41,7 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 // too, and a second copy of either is a second place to get it wrong.
 import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest } from './_lib.js'
 import { viewGate } from './_gate.js'
+import { readRequestId, once, REQUEST_ID_WORDS } from './_once.js'
 import { mailboxConfig, queueOrder, mailboxFireKeyOk, MAILBOX_FIRE_KEY_MIN } from './_mailbox.js'
 import { pictureStore, failureAnswer } from './_picture-store.js'
 export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
@@ -594,6 +595,17 @@ async function handle(request, response, { loadSdk }) {
     return
   }
 
+  // An id from the voice card (api/_once.js): the same id twice fires, files or queues once.
+  const requestId = readRequestId(body.requestId)
+  if (requestId === null) {
+    response.status(400).json({ error: REQUEST_ID_WORDS })
+    return
+  }
+  if (requestId) return once(requestId, response, proceed)
+  return proceed(response)
+
+  // Everything from here to the end of the handler, run once per id when there is one.
+  async function proceed(response) {
   const action = body.action ?? 'run'
   if (!ACTIONS.includes(action)) {
     response.status(400).json({ error: 'action must be "run", "pause" or "arm" — or "task" to file a task card, "move" to change a card status, "approve" to record a yes on a proposal, or "skill" / "agent" to create one from a sentence.' })
@@ -894,6 +906,7 @@ async function handle(request, response, { loadSdk }) {
       ? { ok: true, workflow: slug, action, sessionUrl }
       : { ok: true, workflow: slug, action, accepted: true }
   )
+  }
 }
 
 // Retry-After as whole seconds from now, from either form the header takes (seconds, or an HTTP
