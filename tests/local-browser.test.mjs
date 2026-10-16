@@ -15,7 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { createServer } from 'node:http'
-import { cpSync, existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -65,10 +65,11 @@ async function runJourneyOnce(mode) {
   let dom = ''
   let result
   let boardPort
+  let apiToken
   const other = createServer((request, response) => {
     seen.push({ path: 'OTHER-SITE ' + request.url, status: 200 })
     response.setHeader('Content-Type', 'text/html')
-    response.end(`<!doctype html><p>a page on another site</p><meta http-equiv="refresh" content="0;url=http://127.0.0.1:${boardPort}/#readiness">`)
+    response.end(`<!doctype html><p>a page on another site</p><meta http-equiv="refresh" content="0;url=http://127.0.0.1:${boardPort}/${mode === 'forged' ? '#bt=forgedforgedforgedforgedforgedforged' : '#readiness'}">`)
   })
   await new Promise((done) => other.listen(0, '127.0.0.1', done))
   try {
@@ -77,14 +78,14 @@ async function runJourneyOnce(mode) {
     writeFileSync(join(boardRoot, 'vercel.json'), readFileSync(join(ROOT, 'vercel.json')))
     // On the first visit it leaves for the other site; on the return visit (it has a #fragment) it reports what
     // the page shows - Chrome's own dump of the page is not reliable across several navigations.
-    if (mode === 'full') writeFileSync(join(boardRoot, 'public', 'leave.js'), [
-      "if (location.hash === '') setTimeout(function () { location.href = 'http://localhost:" + other.address().port + "/' }, 1200)",
+    if (mode !== 'poison') writeFileSync(join(boardRoot, 'public', 'leave.js'), [
+      "if (!sessionStorage.getItem('left-once')) { sessionStorage.setItem('left-once', '1'); setTimeout(function () { location.href = 'http://localhost:" + other.address().port + "/' }, 1200) }",
       "else setTimeout(function () { fetch('/report?hash=' + encodeURIComponent(location.hash) + '&active=' + encodeURIComponent((document.getElementById('readiness') || {}).className || '') + '&title=' + encodeURIComponent(document.title) + '&mode=' + encodeURIComponent(document.documentElement.getAttribute('data-board-mode') || '')) }, 2500)",
       ''
     ].join(String.fromCharCode(10)))
     const index = readFileSync(join(ROOT, 'public', 'index.html'), 'utf8')
     assert.ok(index.includes('<script src="/app.js"></script>'))
-    if (mode === 'full') {
+    if (mode !== 'poison') {
       writeFileSync(join(boardRoot, 'public', 'index.html'), index.replace('<script src="/app.js"></script>', '<script src="/app.js"></script><script src="/leave.js"></script>'))
     } else {
       // The page's key goes bad before the page asks for anything (as after the board was restarted behind an open tab):
@@ -120,13 +121,26 @@ async function runJourneyOnce(mode) {
         const loadHandler = async (name) => (name === 'state' ? stateStub : (await import(`../api/${name}.js`)).default)
         const board = await startLocalBoard({ ...options, root: boardRoot, loadHandler })
         boardPort = board.port
+        apiToken = board.apiToken
         board.server.prependListener('request', (request, response) => {
           response.on('finish', () => seen.push({ status: response.statusCode, method: request.method, path: request.url.split('?')[0], query: request.url.includes('?') ? request.url.split('?')[1] : '', site: request.headers['sec-fetch-site'], cookie: Boolean(request.headers.cookie), token: Boolean(request.headers['x-board-token']) }))
         })
         return board
       }
     })
-    return { seen, dom, title: /<title>([^<]+)<\/title>/.exec(readFileSync(join(ROOT, 'public', 'index.html'), 'utf8'))?.[1] }
+    // Chrome has exited: search everything it wrote to disk for the page's key. Its own storage for the
+    // page (Local Storage) is where the key is MEANT to be; everywhere else (History, Favicons, the
+    // usage database, the cache...) it must not be.
+    const leaks = []
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name)
+        if (entry.isDirectory()) { if (entry.name !== 'Local Storage') walk(path); continue }
+        try { if (statSync(path).size < 300 * 1024 * 1024 && readFileSync(path).includes(apiToken)) leaks.push(path.slice(profile.length)) } catch { /* locked or gone */ }
+      }
+    }
+    if (existsSync(profile)) walk(profile)
+    return { seen, dom, leaks, apiToken, title: /<title>([^<]+)<\/title>/.exec(readFileSync(join(ROOT, 'public', 'index.html'), 'utf8'))?.[1] }
   } finally {
     other.close()
     await result?.close?.()
@@ -192,4 +206,22 @@ test('real Chrome: a board page whose key is no good shows "Open the board again
   assert.match(said.get('words'), /Start Board/)
   const refused = seen.filter((entry) => entry.path === '/api/state')
   assert.ok(refused.length >= 1 && refused.every((entry) => entry.status === 401), 'the board should have refused the bad key')
+})
+
+test('real Chrome: the key is never written to the browser\'s history, favicons, usage data or cache', { skip, timeout: 170000 }, async () => {
+  const { leaks, apiToken } = await runJourney()
+  assert.ok(apiToken && apiToken.length >= 40)
+  assert.deepEqual(leaks, [], `the key was found in the browser's files: ${leaks.join(', ')}`)
+  const poisoned = await runJourney('poison')
+  assert.deepEqual(poisoned.leaks, [])
+})
+
+test('real Chrome: a link to the board with a forged #bt= does not replace the key (the student stays signed in)', { skip, timeout: 170000 }, async () => {
+  const { seen } = await runJourney('forged')
+  const report = seen.find((entry) => entry.path === '/report')
+  assert.ok(report, `the page never reported: ${JSON.stringify(seen)}`)
+  assert.equal(new URLSearchParams(report.query).get('hash'), '', 'the forged fragment was left in the address bar')
+  const calls = seen.filter((entry) => entry.path === '/api/state')
+  assert.ok(calls.length >= 2, `the page made too few calls: ${JSON.stringify(seen)}`)
+  for (const call of calls) assert.equal(call.status, 200, 'the forged key replaced the good one: the board refused a call')
 })

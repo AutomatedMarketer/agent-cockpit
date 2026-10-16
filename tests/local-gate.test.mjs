@@ -26,7 +26,7 @@ async function withBoard(run, options = {}) {
   const open = async (link) => {
     const answer = await fetch(link, { redirect: 'manual' })
     const setCookie = answer.headers.get('set-cookie')
-    const token = /#bt=([\w-]+)/.exec(await answer.clone().text())?.[1] ?? null
+    const token = /<meta name="board-token" content="([\w-]+)">/.exec(await answer.clone().text())?.[1] ?? null
     return { answer, cookie: setCookie ? setCookie.split(';')[0] : null, setCookie, token }
   }
   try {
@@ -58,8 +58,12 @@ test('the link opens the board once: a cookie is set, a page moves the browser o
     assert.equal(answer.headers.get('location'), null, 'a redirect reaches the board before the new cookie counts (Chrome), and is refused')
     assert.match(answer.headers.get('content-type'), /^text\/html/)
     const body = await answer.text()
-    assert.match(body, /<meta http-equiv="refresh" content="0;url=\/#bt=[\w-]{20,}">/, 'the page must move the browser on to / by itself, carrying the key in the #fragment')
-    assert.doesNotMatch(body, /<script|[?&]t=/, 'no inline script (the page rules block it) and no one-time link in the page')
+    assert.match(body, /<meta name="board-token" content="[\w-]{20,}">/, 'the key travels in the page, never in an address')
+    assert.match(body, /<script src="\/key-handoff\.js"><\/script>/)
+    assert.match(body, /<meta http-equiv="refresh" content="6;url=\/">/, 'the fallback goes to / and carries nothing')
+    assert.doesNotMatch(body, /#bt=|bt=/, 'the key must never be part of an address (browsers keep addresses in their history)')
+    assert.equal(answer.headers.get('cache-control'), 'no-store', 'the page holding the key must not be kept by the browser')
+    assert.doesNotMatch(body.replace('<script src="/key-handoff.js"></script>', ''), /<script|[?&]t=/, 'no inline script (the page rules block it) and no one-time link in the page')
     assert.equal(answer.headers.get('cache-control'), 'no-store')
     assert.match(setCookie, new RegExp(`^${cookieName(board.port)}=`))
     const page = await fetch(url('/'), { headers: { Cookie: cookie } })
@@ -515,12 +519,32 @@ test('the page shell and the starter endpoint do not need the key', async () => 
   })
 })
 
-test('local-mode.js: keeps the key in localStorage, sends it only on this origin\'s /api calls, and says why', () => {
+test('local-mode.js: reads the key from its own origin storage, sends it only on its own api calls, and says why', () => {
   const source = readFileSync(join(ROOT, 'local', 'page', 'local-mode.js'), 'utf8')
-  assert.match(source, /localStorage\.setItem\(TOKEN_KEY/)
-  assert.match(source, /history\.replaceState\(null, '', location\.pathname \+ location\.search\)/, 'the key must leave the address bar')
+  assert.match(source, /localStorage\.getItem\(TOKEN_KEY\)/)
   assert.match(source, /target\.origin === location\.origin && target\.pathname\.indexOf\('\/api\/'\) === 0/)
   assert.match(source, /x-board-token/)
   assert.match(source, /on purpose/)
   assert.doesNotMatch(source, /document\.cookie/)
+})
+
+test('the key hand-off script: copies the key to this origin storage and goes to /, and needs no cookie', async () => {
+  await withBoard(async ({ url }) => {
+    const script = await fetch(url('/key-handoff.js'), { headers: { 'Sec-Fetch-Site': 'same-origin' } })
+    assert.equal(script.status, 200)
+    assert.match(script.headers.get('content-type'), /javascript/)
+    const text = await script.text()
+    assert.match(text, /meta\[name="board-token"\]/)
+    assert.match(text, /localStorage\.setItem\('board-api-token'/)
+    assert.match(text, /location\.replace\('\/'\)/)
+    assert.doesNotMatch(text.split(String.fromCharCode(10)).filter((line) => !line.startsWith('//')).join(' '), /cookie|bt=/i)
+  })
+})
+
+test('local-mode.js ignores a #bt= fragment (a forged link cannot replace the key) and strips it', () => {
+  const source = readFileSync(join(ROOT, 'local', 'page', 'local-mode.js'), 'utf8')
+  const code = source.split(String.fromCharCode(10)).filter((line) => !line.trim().startsWith('//')).join(' ')
+  assert.doesNotMatch(code, /setItem\(TOKEN_KEY/, 'local-mode.js must not store a key from the address')
+  assert.match(code, /\^#bt=/, 'a #bt= fragment is recognised only to be removed')
+  assert.match(code, /replaceState/)
 })

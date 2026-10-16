@@ -22,6 +22,7 @@ export const OPEN_PATH = '/open-board'
 export const cookieName = (port) => `board_local_${port}`
 export const HOP_SCRIPT = '/hop.js'
 export const LOCAL_MODE_SCRIPT = '/local-mode.js'
+export const KEY_HANDOFF_SCRIPT = '/key-handoff.js'
 export const STARTER_PATH = '/starter/open-link'
 export const LINK_LIFETIME_MS = 2 * 60 * 1000
 
@@ -106,8 +107,8 @@ export function createLocalGate({ now = Date.now } = {}) {
     const isApi = pathname === '/api' || pathname.startsWith('/api/')
     const opensLink = pathname === OPEN_PATH && request.method === 'GET'
 
-    // The hop page's script: no data, no cookie needed, a plain GET only.
-    if (pathname === HOP_SCRIPT && request.method === 'GET') return true
+    // The hop page's and the key page's scripts: no data, no cookie needed, a plain GET only.
+    if ((pathname === HOP_SCRIPT || pathname === KEY_HANDOFF_SCRIPT) && request.method === 'GET') return true
 
     // A page on another site - or on another port of this computer, which counts as "same-site" -
     // may not make the browser call the board at all, reads included (a read can cost money). A
@@ -164,14 +165,14 @@ export function createLocalGate({ now = Date.now } = {}) {
       }
       const nonce = randomBytes(24).toString('base64url')
       response.setHeader('Set-Cookie', `${cookieName(request.socket.localPort)}=${nonce}.${mac(nonce)}; Path=/; HttpOnly; SameSite=Strict`)
-      response.setHeader('Cache-Control', 'no-store')
+      response.setHeader('Cache-Control', 'no-store') // this page holds the key: the browser must not keep it
       // Not a redirect: Chrome treats the chain file -> link -> board as cross-site all the way, and a
       // redirect would reach the board BEFORE the new SameSite=Strict cookie counts, be refused, and
       // leave the one-time link spent. A page that moves on by itself starts a fresh navigation from
       // the board's own address (the page's rules allow this; they only block inline script).
       response.setHeader('Content-Type', 'text/html; charset=utf-8')
       response.statusCode = 200
-      response.end('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/#bt=' + apiToken + '"><title>Opening the board</title><p>Opening the board...</p>')
+      response.end('<!doctype html><meta charset="utf-8"><meta name="board-token" content="' + apiToken + '"><meta http-equiv="refresh" content="6;url=/"><title>Opening the board</title><p>Opening the board...</p><script src="' + KEY_HANDOFF_SCRIPT + '"></script>')
       return false
     }
 

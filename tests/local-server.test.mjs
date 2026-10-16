@@ -799,3 +799,24 @@ test('local page: the board\'s page gets local-mode.js in front of app.js - only
     await local.stop()
   }
 })
+
+test('local page: EVERY address that serves the page gets local-mode.js (or is sent to /), none serves it bare', async () => {
+  const local = await running({ localPage: true })
+  const index = readFileSync(join(ROOT, 'public', 'index.html'), 'utf8')
+  try {
+    for (const path of ['/', '/index', '/INDEX', '/Index', '/iNdEx', '/index/', '/index.html', '/INDEX.HTML', '/Index.Html', '/index.htm', '/index?x=1', '/%69ndex', '/%49NDEX', '/index%2ehtml', '/index.html/', '//index', '/./index']) {
+      const answer = await fetch(local.url(path), { redirect: 'manual' })
+      const text = await answer.text()
+      if (answer.status === 200 && text.includes('<script src="/app.js">')) {
+        assert.ok(text.includes('<script src="/local-mode.js"></script>'), `${path} served the page WITHOUT local-mode.js`)
+        assert.ok(text.indexOf('/local-mode.js') < text.indexOf('/app.js'), `${path}: local-mode.js comes after app.js`)
+        assert.equal(text.split('/local-mode.js').length - 1, 1)
+      } else {
+        assert.ok([301, 302, 307, 308, 400, 404].includes(answer.status), `${path} gave ${answer.status}`)
+      }
+      assert.ok(answer.status !== 200 || text !== index, `${path} served the website's page unchanged`)
+    }
+  } finally {
+    await local.stop()
+  }
+})

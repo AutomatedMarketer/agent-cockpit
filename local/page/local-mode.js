@@ -1,14 +1,16 @@
 // Added to the board's page by the local server, in front of app.js, and only there: the website's
 // page never gets this file. Plain old-style script; it runs before the page does.
 (function () {
-  var TOKEN_KEY = 'board-api-token'
+  var TOKEN_KEY = 'board-api-token' // key-handoff.js stores it under this name
 
   // 1. The page knows it is the board on this computer (app.js reads this).
   window.__BOARD_LOCAL__ = true
   document.documentElement.setAttribute('data-board-mode', 'local')
 
-  // 2. The key for calls to /api. The one-time link's page hands it over in the #fragment, which a
-  //    browser never sends to any server; it is taken here, kept, and removed from the address bar.
+  // 2. The key for calls to /api. It is handed over inside the page a one-time link opens, in its body
+  //    (key-handoff.js stores it); it is NEVER in an address, because a browser writes every address into
+  //    its history and other databases, and an address anyone can type must not be able to set it (a link
+  //    with a made-up key would sign the student out). So a #bt= in the address is ignored and removed.
   //
   //    Kept in localStorage - not sessionStorage, not memory - on purpose:
   //    - it belongs to THIS origin, host AND port, so a web server the student opens on another
@@ -20,12 +22,8 @@
   //    A script on this page could read it, as it could read anything on the page: the page holds no
   //    third-party script (the page's rules allow only its own files).
   try {
-    var given = /^#bt=([\w-]{20,128})$/.exec(location.hash)
-    if (given) {
-      localStorage.setItem(TOKEN_KEY, given[1])
-      history.replaceState(null, '', location.pathname + location.search)
-    }
-  } catch (error) { /* no storage: the page will say it needs opening again */ }
+    if (/^#bt=/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search)
+  } catch (error) { /* nothing to remove */ }
 
   // 3. Where the "arriving from another page" hop (hop.js) left the #fragment the visitor asked for.
   try {

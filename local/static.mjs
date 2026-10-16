@@ -70,6 +70,7 @@ export async function serveStatic(publicRootInput, method, pathname) {
       'Content-Type': TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
       'Cache-Control': 'public, max-age=0, must-revalidate'
     },
+    isPage: extname(file).toLowerCase() === '.html',
     body: await readFile(file)
   }
 }

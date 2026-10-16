@@ -196,7 +196,7 @@ test('start with a team folder: the board shows the real team, and nothing about
       })()
       const opened = await realFetch(link, { redirect: 'manual' })
       const cookie = opened.headers.get('set-cookie').split(';')[0]
-      const boardToken = /#bt=([\w-]+)/.exec(await opened.text())[1]
+      const boardToken = /<meta name="board-token" content="([\w-]+)">/.exec(await opened.text())[1]
       globalThis.fetch = (input, init) => {
         const target = String(input?.url ?? input)
         if (target.startsWith(`http://127.0.0.1:${result.port}/`)) return realFetch(input, init)

@@ -26,7 +26,7 @@ import { loadVercelConfig } from './headers.mjs'
 import { routeNameFor } from './routes.mjs'
 import { BodyError, cleanForwardingHeaders, shimRequest, shimResponse } from './vercel-shim.mjs'
 import { serveStatic } from './static.mjs'
-import { HOP_SCRIPT, LOCAL_MODE_SCRIPT, OPEN_PATH, applyLocalEnv, createLocalGate } from './gate.mjs'
+import { HOP_SCRIPT, KEY_HANDOFF_SCRIPT, LOCAL_MODE_SCRIPT, OPEN_PATH, applyLocalEnv, createLocalGate } from './gate.mjs'
 import { readFileSync } from 'node:fs'
 
 export const LOOPBACK = '127.0.0.1'
@@ -36,7 +36,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'page')
 const PAGE_SCRIPTS = new Map([
   [HOP_SCRIPT, readFileSync(join(PAGE_DIR, 'hop.js'))],
-  [LOCAL_MODE_SCRIPT, readFileSync(join(PAGE_DIR, 'local-mode.js'))]
+  [LOCAL_MODE_SCRIPT, readFileSync(join(PAGE_DIR, 'local-mode.js'))],
+  [KEY_HANDOFF_SCRIPT, readFileSync(join(PAGE_DIR, 'key-handoff.js'))]
 ])
 const APP_TAG = '<script src="/app.js"></script>'
 
@@ -138,7 +139,9 @@ export function createBoardServer({
     for (const [key, value] of Object.entries(served.headers)) response.setHeader(key, value)
     response.statusCode = served.status
     let body = served.body
-    if (localPage && served.status === 200 && pathname === '/' && Buffer.isBuffer(body)) {
+    // Whatever address the page was reached by (/, /index, /INDEX on a computer that ignores case...):
+    // it is the page that counts, not the address.
+    if (localPage && served.status === 200 && served.isPage && Buffer.isBuffer(body)) {
       const html = body.toString('utf8')
       if (!html.includes(APP_TAG)) throw new Error('public/index.html no longer loads /app.js in the expected way, so the local page script cannot be added')
       body = Buffer.from(html.replace(APP_TAG, `<script src="${LOCAL_MODE_SCRIPT}"></script>${APP_TAG}`), 'utf8')
@@ -184,7 +187,7 @@ export async function startLocalBoard({ now, ...options } = {}) {
   applyLocalEnv(login.viewKey)
   const board = await startBoardServer({ ...options, gate: login.gate, localPage: true })
   const openLink = () => `http://${board.host}:${board.port}${OPEN_PATH}?t=${login.issueOpenToken()}`
-  return { ...board, openLink, starterSecret: login.starterSecret }
+  return { ...board, openLink, starterSecret: login.starterSecret, apiToken: login.apiToken }
 }
 
 function readArgs(argv) {

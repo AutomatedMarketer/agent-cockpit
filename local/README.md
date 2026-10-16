@@ -39,8 +39,10 @@ The cookie and the page's key (T9):
   shell. Calls to `/api` also need a per-run key, `x-board-token`, which the page keeps in **localStorage**
   (kept there, not in sessionStorage or memory, because storage belongs to the origin *including the port*,
   so another port cannot read it; and because it must survive a new tab, a reload and a link from another page).
-  It reaches the page once, in the `#fragment` of the page the one-time link opens (a fragment goes nowhere but
-  the browser), and is removed from the address bar. It is new for each run of the board.
+  It reaches the page once, in the **body** of the page the one-time link opens (a `<meta>` tag that a small
+  script copies to storage) - never in an address, because a browser writes every address into its history,
+  favicon and usage databases, and an address anyone can type must not be able to set it. A `#bt=` in an
+  address is ignored and removed. The page holding the key is `no-store`. It is new for each run of the board.
 - Still true: a web page running **in the same browser origin** (the board's own) can read it, as it could read
   anything on the page; the board loads no third-party script.
 - The page knows it is the local board (`local/page/local-mode.js` is added in front of `app.js` by the local
