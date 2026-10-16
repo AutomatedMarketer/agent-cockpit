@@ -726,6 +726,9 @@ Fish Audio can speak the answers in a voice you pick from its library.
 - Free-plan voices are for **personal use only**. Using one for a business needs a paid Fish plan
 - With Fish, OpenAI answers in text and Fish speaks it, a sentence at a time, so the first words can
   take a moment longer
+- If Fish refuses during a call (it does not accept the key, the account has no credit, or it cannot be
+  reached), the call moves to OpenAI's voice for the rest of that call and the panel says so in one
+  line. The next call tries Fish again. Nothing changes if Fish was never set up.
 
 ### What goes where
 
@@ -1009,7 +1012,7 @@ Locally:
 npm test
 ```
 
-2200 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2207 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -

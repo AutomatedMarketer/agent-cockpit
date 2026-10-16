@@ -208,6 +208,9 @@ export function makeHandler({ store, env, now = () => new Date(), loadSdk, sessi
       name,
       idleMinutes: config.idleMinutes,
       captions: config.captions,
+      // With Fish the call is text-only; this is what the page needs to move it to OpenAI's voice if
+      // Fish refuses mid-call. A name and a number, never a key.
+      ...(config.mouth === 'fish' ? { fallback: { voice: config.voice, replyTokens: config.replyTokens } } : {}),
       echoGuard: config.echoGuard,
       // Which order cards the page may show - kinds and job slugs only, never a link or a key.
       orders: ordersView(orders)

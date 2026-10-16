@@ -110,6 +110,8 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     const speech = {
       body, signal,
       answer: (ok = true) => resolve({ ok, status: ok ? 200 : 502, arrayBuffer: async () => ({ text: body.text }) }),
+      // A refusal as /api/speak words it: a status, and a code when the page should switch voices.
+      refuse: (status, code) => resolve({ ok: false, status, json: async () => ({ error: 'Fish said no.', ...(code ? { code } : {}) }) }),
       broken: () => resolve({ ok: true, status: 200, arrayBuffer: async () => ({ broken: true }) })
     }
     signal?.addEventListener?.('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))

@@ -9,7 +9,8 @@ import { flush } from './helpers/page-harness.mjs'
 import { REPLY_USAGE } from './helpers/voice-fixtures.mjs'
 import { connected, ticketFor } from './helpers/voice-browser.mjs'
 
-const fish = () => connected({ answer: { ticket: ticketFor('fish'), mouth: 'fish' } })
+const FALLBACK = { voice: 'cedar', replyTokens: 400 }
+const fish = () => connected({ answer: { ticket: ticketFor('fish'), mouth: 'fish', fallback: FALLBACK } })
 const text = (browser, delta) => browser.emit({ type: 'response.output_text.delta', delta })
 const pieces = (browser) => browser.speeches.filter((speech) => !speech.body.warm).map((speech) => speech.body.text)
 
@@ -274,4 +275,57 @@ test('25 Fish pieces queued at once keep the microphone rested until the last ha
   tail.fn()
   assert.deepEqual(mic(), [true])
   assert.equal(browser.lastState(), 'listening')
+})
+
+/* ---------- Fish refuses: the call goes on in OpenAI's voice ---------- */
+
+const updates = (browser) => browser.state.channel.sent.filter((event) => event.type === 'session.update')
+
+for (const [what, status, code] of [['a bad key', 502, 'key'], ['no credit', 402, 'credit'], ['Fish unreachable', 502, 'unreachable']]) {
+  test(`${what}: the session switches to OpenAI's voice, says so once, and stops asking Fish`, async () => {
+    const browser = await fish()
+    browser.emit({ type: 'response.created' })
+    text(browser, 'Three jobs are due today, and one has gone quiet. The brief runs at six.')
+    const [first, second] = browser.speeches
+    first.refuse(status, code)
+    await flush()
+    assert.equal(updates(browser).length, 1, 'the session was not switched to OpenAI voice')
+    assert.deepEqual(updates(browser)[0].session, {
+      type: 'realtime', output_modalities: ['audio'], max_output_tokens: 400, audio: { output: { voice: 'cedar' } }
+    })
+    assert.match(browser.ui.notes.at(-1), /Fish/, 'the page did not say what happened')
+    assert.match(browser.ui.notes.at(-1), /OpenAI/)
+    assert.equal(second.signal.aborted, true, 'a piece still on its way to Fish was not dropped')
+    // The rest of this reply is not sent to Fish, and nor is the next one; OpenAI speaks it.
+    const before = browser.speeches.length
+    text(browser, ' More words. And more.')
+    browser.emit({ type: 'response.output_text.done' })
+    browser.emit({ type: 'response.done', response: { status: 'completed', output: [], usage: REPLY_USAGE } })
+    browser.emit({ type: 'response.created' })
+    text(browser, 'Next reply. Still going.')
+    assert.equal(browser.speeches.length, before, 'Fish was asked again after it refused')
+    assert.equal(browser.lastState() === 'speaking' || browser.lastState() === 'listening' || browser.lastState() === 'thinking', true)
+    // A second refusal (a late piece) does not switch twice.
+    second.refuse(status, code)
+    await flush()
+    assert.equal(updates(browser).length, 1, 'switched to OpenAI voice twice')
+  })
+}
+
+test('a busy or one-off Fish failure skips the piece but keeps the Fish voice', async () => {
+  const browser = await fish()
+  browser.emit({ type: 'response.created' })
+  text(browser, 'Three jobs are due today, and one has gone quiet. ')
+  browser.speeches[0].refuse(429)
+  await flush()
+  assert.equal(updates(browser).length, 0)
+})
+
+test('a switch with no OpenAI voice to go to (an old answer) changes nothing but the piece skipped', async () => {
+  const browser = await connected({ answer: { ticket: ticketFor('fish'), mouth: 'fish' } })
+  browser.emit({ type: 'response.created' })
+  text(browser, 'Three jobs are due today, and one has gone quiet. ')
+  browser.speeches[0].refuse(402, 'credit')
+  await flush()
+  assert.equal(updates(browser).length, 0)
 })

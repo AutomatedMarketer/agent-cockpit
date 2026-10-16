@@ -208,6 +208,27 @@ test('Fish\'s refusals are our sentences, naming the setting to check, never Fis
   assert.equal(slow.statusCode, 504)
 })
 
+test('a refusal that will not get better names itself, so the page can switch to OpenAI\'s voice', async (t) => {
+  const refusal = (status) => () => new Response('{}', { status })
+  for (const [status, code] of [[401, 'key'], [403, 'key'], [402, 'credit']]) {
+    stubFish(t, refusal(status))
+    const response = await speaker().speak({ ticket: ticketFor(), text: 'Hello.' })
+    assert.equal(response.body.code, code, `Fish ${status}`)
+  }
+  // Fish not answering at all (the network failed, not a timeout) is the third.
+  stubFish(t, () => { throw new TypeError('fetch failed') })
+  const unreachable = await speaker().speak({ ticket: ticketFor(), text: 'Hello.' })
+  assert.equal(unreachable.body.code, 'unreachable')
+  // A busy Fish, a slow one or a one-off failure may be fine on the next piece: no code, no switch.
+  for (const status of [429, 500, 503]) {
+    stubFish(t, refusal(status))
+    const response = await speaker().speak({ ticket: ticketFor(), text: 'Hello.' })
+    assert.equal(response.body.code, undefined, `Fish ${status} should not switch the voice`)
+  }
+  stubFish(t, () => { throw new DOMException('timed out', 'TimeoutError') })
+  assert.equal((await speaker().speak({ ticket: ticketFor(), text: 'Hello.' })).body.code, undefined)
+})
+
 test('the Fish key is never in any answer or any log, whatever Fish sends back', async (t) => {
   const logged = []
   for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
