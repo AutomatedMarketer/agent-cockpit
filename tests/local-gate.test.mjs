@@ -26,7 +26,8 @@ async function withBoard(run, options = {}) {
   const open = async (link) => {
     const answer = await fetch(link, { redirect: 'manual' })
     const setCookie = answer.headers.get('set-cookie')
-    return { answer, cookie: setCookie ? setCookie.split(';')[0] : null, setCookie }
+    const token = /#bt=([\w-]+)/.exec(await answer.clone().text())?.[1] ?? null
+    return { answer, cookie: setCookie ? setCookie.split(';')[0] : null, setCookie, token }
   }
   try {
     await run({ board, url, clock, tokenOf, open })
@@ -57,8 +58,8 @@ test('the link opens the board once: a cookie is set, a page moves the browser o
     assert.equal(answer.headers.get('location'), null, 'a redirect reaches the board before the new cookie counts (Chrome), and is refused')
     assert.match(answer.headers.get('content-type'), /^text\/html/)
     const body = await answer.text()
-    assert.match(body, /<meta http-equiv="refresh" content="0;url=\/">/, 'the page must move the browser on to / by itself')
-    assert.doesNotMatch(body, /<script|[?&]t=/, 'no inline script (the page rules block it) and no link in the page')
+    assert.match(body, /<meta http-equiv="refresh" content="0;url=\/#bt=[\w-]{20,}">/, 'the page must move the browser on to / by itself, carrying the key in the #fragment')
+    assert.doesNotMatch(body, /<script|[?&]t=/, 'no inline script (the page rules block it) and no one-time link in the page')
     assert.equal(answer.headers.get('cache-control'), 'no-store')
     assert.match(setCookie, new RegExp(`^${cookieName(board.port)}=`))
     const page = await fetch(url('/'), { headers: { Cookie: cookie } })
@@ -152,9 +153,9 @@ test('two gates never accept each other\'s cookies or links', () => {
 
 test('a change from another site is refused, even with the cookie', async () => {
   await withBoard(async ({ board, url, open }) => {
-    const { cookie } = await open(board.openLink())
+    const { cookie, token } = await open(board.openLink())
     const own = `http://127.0.0.1:${board.port}`
-    const post = (headers) => fetch(url('/api/fire'), { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, ...headers }, body: '{}' })
+    const post = (headers) => fetch(url('/api/fire'), { method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie, 'x-board-token': token, ...headers }, body: '{}' })
     for (const headers of [{ Origin: 'https://evil.example' }, { Origin: 'null' }, { Origin: `${own}.evil.example` }, { Origin: `http://localhost:${board.port + 1}` }, { Origin: own, 'Sec-Fetch-Site': 'cross-site' }, { Origin: own, 'Sec-Fetch-Site': 'same-site' }, {}]) {
       const answer = await post(headers)
       assert.equal(answer.status, 403, `${JSON.stringify(headers)} gave ${answer.status}`)
@@ -193,8 +194,8 @@ test('the handlers get the per-run view key, and a key the caller sends never co
 test('the gate gives handlers the view key and replaces one the caller sent', async () => {
   const handlerSees = []
   await withBoard(async ({ board, url, open }) => {
-    const { cookie } = await open(board.openLink())
-    await fetch(url('/api/state'), { headers: { Cookie: cookie, 'x-view-key': 'caller-chose-this' } })
+    const { cookie, token } = await open(board.openLink())
+    await fetch(url('/api/state'), { headers: { Cookie: cookie, 'x-board-token': token, 'x-view-key': 'caller-chose-this' } })
     assert.equal(handlerSees.length, 1)
     assert.equal(handlerSees[0]['x-view-key'], process.env.VIEW_KEY)
     assert.notEqual(handlerSees[0]['x-view-key'], 'caller-chose-this')
@@ -204,17 +205,17 @@ test('the gate gives handlers the view key and replaces one the caller sent', as
 test('the board\'s real handlers accept the signed-in browser (view gate and fire gate pass)', async () => {
   const realFetch = globalThis.fetch
   await withBoard(async ({ board, url, open }) => {
-    const { cookie } = await open(board.openLink())
+    const { cookie, token } = await open(board.openLink())
     globalThis.fetch = (input, init) => {
       const target = String(input?.url ?? input)
       if (target.startsWith(`http://127.0.0.1:${board.port}/`)) return realFetch(input, init)
       throw new Error('blocked in test')
     }
     try {
-      const state = await fetch(url('/api/state'), { headers: { Cookie: cookie } })
+      const state = await fetch(url('/api/state'), { headers: { Cookie: cookie, 'x-board-token': token } })
       assert.notEqual(state.status, 401, 'the board refused its own signed-in page')
       assert.notEqual(state.status, 503, 'the view gate says the board is not configured')
-      const fire = await fetch(url('/api/fire'), { method: 'POST', headers: { Cookie: cookie, Origin: `http://127.0.0.1:${board.port}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ target: 'nothing' }) })
+      const fire = await fetch(url('/api/fire'), { method: 'POST', headers: { Cookie: cookie, 'x-board-token': token, Origin: `http://127.0.0.1:${board.port}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ target: 'nothing' }) })
       assert.notEqual(fire.status, 401)
       assert.notEqual(fire.status, 403, 'the same-origin check refused the own page')
       // 503 here is only 'no routines set up in this test': the gates in front of it passed.
@@ -434,4 +435,92 @@ test('the hop script keeps the #fragment: it sends the browser to its own full a
     assert.equal((await fetch(url('/hop.js'), { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 200)
     assert.equal((await fetch(url('/hop.js'), { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } })).status, 401, 'only a GET of the script is open')
   })
+})
+
+// ---- T9: the cookie alone no longer opens /api ----------------------------------------------------------
+
+test('/api needs the page\'s key as well as the cookie: the cookie alone, a wrong key and the key alone are all refused', async () => {
+  await withBoard(async ({ board, url, open }) => {
+    const { cookie, token } = await open(board.openLink())
+    assert.ok(token && token.length >= 40)
+    const call = (headers) => fetch(url('/api/state'), { headers })
+    const refused = [
+      { Cookie: cookie },
+      { Cookie: cookie, 'x-board-token': '' },
+      { Cookie: cookie, 'x-board-token': 'wrong' },
+      { Cookie: cookie, 'x-board-token': token.slice(0, -1) },
+      { Cookie: cookie, 'x-board-token': `${token}x` },
+      { 'x-board-token': token },
+      {}
+    ]
+    for (const headers of refused) {
+      const answer = await call(headers)
+      assert.equal(answer.status, 401, JSON.stringify(headers))
+      assert.equal((await answer.json()).error, 'Double-click Start Board again to open the board.')
+    }
+    assert.notEqual((await call({ Cookie: cookie, 'x-board-token': token })).status, 401)
+  }, { loadHandler: async () => echo })
+})
+
+test('another server on 127.0.0.1 that was handed the cookie cannot call the API with it, however it dresses the request', async () => {
+  await withBoard(async ({ board, url, open }) => {
+    const { cookie } = await open(board.openLink())
+    // What a rogue server on another port can do: replay the cookie it received, with any headers it likes.
+    const dressed = { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin', Origin: `http://127.0.0.1:${board.port}`, Referer: `http://127.0.0.1:${board.port}/`, 'Sec-Fetch-Mode': 'cors' }
+    for (const [method, path] of [['GET', '/api/state'], ['GET', '/api/file'], ['POST', '/api/fire'], ['POST', '/api/upload']]) {
+      const answer = await fetch(url(path), { method, headers: { ...dressed, 'Content-Type': 'application/json' }, body: method === 'POST' ? '{}' : undefined })
+      assert.equal(answer.status, 401, `${method} ${path} answered a replayed cookie with ${answer.status}`)
+    }
+    // It can still fetch the page shell, which holds nothing of the board's data.
+    assert.equal((await fetch(url('/'), { headers: dressed })).status, 200)
+  }, { loadHandler: async () => echo })
+})
+
+test('the page\'s key appears in one place only: the fragment of the page the one-time link opens', async () => {
+  const noisy = { log: console.log, error: console.error }
+  const logged = []
+  console.log = (...parts) => logged.push(parts.join(' '))
+  console.error = (...parts) => logged.push(parts.join(' '))
+  try {
+    await withBoard(async ({ board, url, open }) => {
+      const { answer, cookie, token } = await open(board.openLink())
+      const headers = { ...Object.fromEntries(answer.headers) }
+      assert.ok(!JSON.stringify(headers).includes(token), 'the key is in a response header')
+      assert.ok(!(answer.headers.get('location') ?? '').includes(token))
+      const shown = [await fetch(url('/'), { headers: { Cookie: cookie } }), await fetch(url('/local-mode.js'), { headers: { Cookie: cookie } }), await fetch(url('/api/state'), { headers: { Cookie: cookie, 'x-board-token': token } }), await fetch(url('/hop.js'))]
+      for (const one of shown) assert.ok(!(await one.text()).includes(token), 'the key came back in a later response')
+      const second = await open(board.openLink())
+      assert.equal(second.token, token, 'every sign-in of one run hands over the same key, so tabs agree')
+    }, { loadHandler: async () => (request, response) => response.status(200).json({ ok: true }) })
+  } finally {
+    console.log = noisy.log
+    console.error = noisy.error
+  }
+  assert.ok(logged.every((line) => !/#bt=|board-api-token/.test(line)), 'the key reached a log line')
+})
+
+test('a new run has a new key, so an old tab\'s key opens nothing', async () => {
+  let oldToken
+  await withBoard(async ({ board, open }) => { oldToken = (await open(board.openLink())).token })
+  await withBoard(async ({ board, url, open }) => {
+    const { cookie } = await open(board.openLink())
+    assert.equal((await fetch(url('/api/state'), { headers: { Cookie: cookie, 'x-board-token': oldToken } })).status, 401)
+  }, { loadHandler: async () => echo })
+})
+
+test('the page shell and the starter endpoint do not need the key', async () => {
+  await withBoard(async ({ board, url, open }) => {
+    const { cookie } = await open(board.openLink())
+    for (const path of ['/', '/app.js', '/local-mode.js', '/manifest.webmanifest']) assert.equal((await fetch(url(path), { headers: { Cookie: cookie } })).status, 200, path)
+  })
+})
+
+test('local-mode.js: keeps the key in localStorage, sends it only on this origin\'s /api calls, and says why', () => {
+  const source = readFileSync(join(ROOT, 'local', 'page', 'local-mode.js'), 'utf8')
+  assert.match(source, /localStorage\.setItem\(TOKEN_KEY/)
+  assert.match(source, /history\.replaceState\(null, '', location\.pathname \+ location\.search\)/, 'the key must leave the address bar')
+  assert.match(source, /target\.origin === location\.origin && target\.pathname\.indexOf\('\/api\/'\) === 0/)
+  assert.match(source, /x-board-token/)
+  assert.match(source, /on purpose/)
+  assert.doesNotMatch(source, /document\.cookie/)
 })

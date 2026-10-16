@@ -72,7 +72,7 @@ export const flush = async (times = 6) => {
 // else an empty object. `given` is handed to `after`, a line of code run inside the page's own scope
 // once the script has loaded - the way a test sets a page variable the person would have set.
 // `source` is the page's code to run: all of it by default, or `app` for the page before Graph is opened.
-export function loadPage({ source = script, payload = {}, fetch, storage = {}, expose = [], after = '', given = {}, hash = '', media = {}, prompt, confirm, hostname = 'board.example', scrollY = 0, timers, date } = {}) {
+export function loadPage({ source = script, payload = {}, fetch, storage = {}, expose = [], after = '', given = {}, hash = '', media = {}, prompt, confirm, hostname = 'board.example', scrollY = 0, timers, date, windowExtras = {} } = {}) {
   for (const name of expose) assert.match(name, /^[A-Za-z_$][\w$]*$/, `${name} is not a name`)
   const nodes = new Map()
   const node = (id) => {
@@ -126,7 +126,8 @@ export function loadPage({ source = script, payload = {}, fetch, storage = {}, e
       scrollTo(...position) { scrolls.push(position) },
       requestAnimationFrame: (fn) => fn(),
       prompt,
-      confirm
+      confirm,
+      ...windowExtras
     },
     // reload() is counted, never done: a test reads how many times the page asked to load again.
     location: { hash, search: '', pathname: '/', hostname, reloads: 0, reload() { this.reloads += 1 } },

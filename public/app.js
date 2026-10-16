@@ -2312,6 +2312,11 @@ el('viewer-close').addEventListener('click', () => el('viewer').classList.remove
 // cookie (moveSavedKey, at boot), then deleted.
 const VIEW_KEY_STORE = 'agent-cockpit-view-key'
 
+// The board on a student's own computer: its server adds a small script (local/page/local-mode.js) that
+// sets this before the page runs. The website never has it, so none of the local wording below is ever
+// used there.
+const LOCAL_BOARD = window.__BOARD_LOCAL__ === true
+
 // redirect: 'manual', because with Vercel Authentication on, a Vercel sign-in that has run out
 // answers with a redirect to vercel.com. Followed, that is a failed fetch - the same as a dropped
 // connection, which is retried. Not followed, it can be told apart, and the page says to reload.
@@ -3731,8 +3736,10 @@ let editKeyHeld = ''
 const editKey = () => readStore(EDIT_KEY_STORE) || editKeyHeld
 const EDIT_KEY_ASK = 'Changing this board needs its edit key.\n\n' +
   'Paste the EDIT_KEY you set in Vercel. It is kept on this device, like the view key, and never appears in this page.'
-const SWITCH_ON = 'Personalising is off: to switch it on, create a Private Blob store in Vercel (your project, then ' +
-  'Storage, Create Storage, Blob), connect it to this project and redeploy.'
+const SWITCH_ON = LOCAL_BOARD
+  ? 'Personalising is off: the board could not use its pictures folder. Look in the Start Board window for the reason.'
+  : 'Personalising is off: to switch it on, create a Private Blob store in Vercel (your project, then ' +
+    'Storage, Create Storage, Blob), connect it to this project and redeploy.'
 
 let brandPanelOpen = false
 
@@ -7388,6 +7395,7 @@ async function signInWith(username, password) {
 }
 
 function renderSignIn(message = '') {
+  if (LOCAL_BOARD) return renderLocalClosed()
   document.body.innerHTML = SIGN_IN_HTML
   el('sign-in-note').textContent = message
   const send = async (event, { username, password, button, retry }) => {
@@ -7426,10 +7434,23 @@ function renderSignIn(message = '') {
   el('sign-in-user').focus()
 }
 
+// On a student's own computer there is no username, password or Vercel: a board that cannot tell it is
+// them (the tab was left open while the board was restarted, or the page was opened some other way)
+// only needs to be opened again from Start Board.
+function renderLocalClosed() {
+  document.body.innerHTML = `${UNLOCK_SCENE_HTML}<main class="unlock" aria-labelledby="closed-title">
+    <p class="eyebrow">Agent OS</p>
+    <h1 id="closed-title">Open the board again</h1>
+    <p id="closed-note" role="status" aria-live="polite"></p>
+  </main>`
+  el('closed-note').textContent = 'Double-click Start Board to open it again. If it was already open, close this tab first.'
+}
+
 // With Vercel Authentication on, Vercel's own sign-in can run out while the board is open: the board
 // cannot tell from here whether it is signed out, only that it was sent elsewhere. Reloading the
 // page goes through Vercel's sign-in, and then the board's.
 function renderReload() {
+  if (LOCAL_BOARD) return renderLocalClosed()
   document.body.innerHTML = `${UNLOCK_SCENE_HTML}<main class="unlock" aria-labelledby="reload-title">
     <p class="eyebrow">Agent OS</p>
     <h1 id="reload-title">Reload to sign in</h1>

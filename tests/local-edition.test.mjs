@@ -196,19 +196,20 @@ test('start with a team folder: the board shows the real team, and nothing about
       })()
       const opened = await realFetch(link, { redirect: 'manual' })
       const cookie = opened.headers.get('set-cookie').split(';')[0]
+      const boardToken = /#bt=([\w-]+)/.exec(await opened.text())[1]
       globalThis.fetch = (input, init) => {
         const target = String(input?.url ?? input)
         if (target.startsWith(`http://127.0.0.1:${result.port}/`)) return realFetch(input, init)
         throw new Error(`the board tried to reach ${target}`)
       }
-      const state = await realFetch(`http://127.0.0.1:${result.port}/api/state`, { headers: { Cookie: cookie } })
+      const state = await realFetch(`http://127.0.0.1:${result.port}/api/state`, { headers: { Cookie: cookie, 'x-board-token': boardToken } })
       assert.equal(state.status, 200, await state.clone().text())
       const body = await state.json()
       const text = JSON.stringify(body)
       assert.ok(/research/.test(text), 'the committed agent should be on the board')
       assert.ok(!text.includes(process.env.VIEW_KEY), 'the per-run key reached the page')
       // The pictures folder works: the brand answer names the store as connected.
-      const brand = await realFetch(`http://127.0.0.1:${result.port}/api/brand`, { headers: { Cookie: cookie } })
+      const brand = await realFetch(`http://127.0.0.1:${result.port}/api/brand`, { headers: { Cookie: cookie, 'x-board-token': boardToken } })
       assert.equal(brand.status, 200)
     })
   } finally {

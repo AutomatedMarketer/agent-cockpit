@@ -42,21 +42,21 @@ const ENV_KEYS = ['VIEW_KEY', 'PUBLIC_FIRE', 'PUBLIC_DASHBOARD', 'EDIT_KEY', 'BO
 
 // Runs the whole journey once and hands back what the board saw and what Chrome ended on. Shared by the
 // tests below so Chrome starts once.
-let journey = null
-async function runJourney() {
-  if (journey) return journey
+const journeys = {}
+async function runJourney(mode = 'full') {
+  if (journeys[mode]) return journeys[mode]
   // Chrome's virtual clock sometimes runs a page's timer before its network has caught up; a journey
   // that did not get all the way round is simply run again (fresh board, fresh link, fresh profile).
   let last
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    last = await runJourneyOnce()
+    last = await runJourneyOnce(mode)
     if (last.seen.some((entry) => entry.path === '/report')) break
   }
-  journey = last
-  return journey
+  journeys[mode] = last
+  return last
 }
 
-async function runJourneyOnce() {
+async function runJourneyOnce(mode) {
   const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]))
   const home = mkdtempSync(join(tmpdir(), 'board-chrome-'))
   const profile = join(home, 'chrome-profile')
@@ -77,14 +77,26 @@ async function runJourneyOnce() {
     writeFileSync(join(boardRoot, 'vercel.json'), readFileSync(join(ROOT, 'vercel.json')))
     // On the first visit it leaves for the other site; on the return visit (it has a #fragment) it reports what
     // the page shows - Chrome's own dump of the page is not reliable across several navigations.
-    writeFileSync(join(boardRoot, 'public', 'leave.js'), [
+    if (mode === 'full') writeFileSync(join(boardRoot, 'public', 'leave.js'), [
       "if (location.hash === '') setTimeout(function () { location.href = 'http://localhost:" + other.address().port + "/' }, 1200)",
-      "else setTimeout(function () { fetch('/report?hash=' + encodeURIComponent(location.hash) + '&active=' + encodeURIComponent((document.getElementById('readiness') || {}).className || '') + '&title=' + encodeURIComponent(document.title)) }, 2500)",
+      "else setTimeout(function () { fetch('/report?hash=' + encodeURIComponent(location.hash) + '&active=' + encodeURIComponent((document.getElementById('readiness') || {}).className || '') + '&title=' + encodeURIComponent(document.title) + '&mode=' + encodeURIComponent(document.documentElement.getAttribute('data-board-mode') || '')) }, 2500)",
       ''
     ].join(String.fromCharCode(10)))
     const index = readFileSync(join(ROOT, 'public', 'index.html'), 'utf8')
     assert.ok(index.includes('<script src="/app.js"></script>'))
-    writeFileSync(join(boardRoot, 'public', 'index.html'), index.replace('<script src="/app.js"></script>', '<script src="/app.js"></script><script src="/leave.js"></script>'))
+    if (mode === 'full') {
+      writeFileSync(join(boardRoot, 'public', 'index.html'), index.replace('<script src="/app.js"></script>', '<script src="/app.js"></script><script src="/leave.js"></script>'))
+    } else {
+      // The page's key goes bad before the page asks for anything (as after the board was restarted behind an open tab):
+      // this script runs BEFORE local-mode.js, and makes the stored key read back wrong, then reports what the page shows.
+      writeFileSync(join(boardRoot, 'public', 'poison.js'), [
+        "var realGet = Storage.prototype.getItem",
+        "Storage.prototype.getItem = function (key) { return key === 'board-api-token' ? 'a-key-from-an-earlier-run-0123456789' : realGet.call(this, key) }",
+        "setTimeout(function () { fetch('/report?closed=' + (document.body.innerHTML.indexOf('Open the board again') >= 0) + '&form=' + (document.body.innerHTML.indexOf('sign-in-form') >= 0) + '&words=' + encodeURIComponent(document.body.innerText.slice(0, 200))) }, 2500)",
+        ''
+      ].join(String.fromCharCode(10)))
+      writeFileSync(join(boardRoot, 'public', 'index.html'), index.replace('<script src="/app.js"></script>', '<script src="/poison.js"></script><script src="/app.js"></script>'))
+    }
 
     result = await runStart({
       platform: process.platform,
@@ -155,4 +167,29 @@ test('real Chrome: arriving from another site shows the board (not the refusal),
   assert.match(said.get('active'), /\bactive\b/, `the Readiness screen is not the one shown: ${report.query}`)
   assert.ok(said.get('title').length > 0)
   assert.ok(!dom.includes('That did not come from the board'), 'the refusal text was shown to the student')
+})
+
+test('real Chrome: the page knows it is the local board, and every call it makes to /api carries its key and is answered', { skip, timeout: 170000 }, async () => {
+  const { seen } = await runJourney()
+  const calls = seen.filter((entry) => entry.path.startsWith('/api/'))
+  assert.ok(calls.length >= 2, `the page made no /api calls: ${JSON.stringify(seen)}`)
+  for (const call of calls) {
+    assert.equal(call.token, true, `${call.path} went without the key`)
+    assert.equal(call.status, 200, `${call.path} was refused: ${call.status}`)
+  }
+  const said = new URLSearchParams(seen.find((entry) => entry.path === '/report').query)
+  assert.equal(said.get('mode'), 'local', 'the page did not know it was the local board')
+})
+
+test('real Chrome: a board page whose key is no good shows "Open the board again", not a username and password', { skip, timeout: 170000 }, async () => {
+  const { seen } = await runJourney('poison')
+  const report = seen.find((entry) => entry.path === '/report')
+  assert.ok(report, `the page never reported: ${JSON.stringify(seen)}`)
+  const said = new URLSearchParams(report.query)
+  assert.equal(said.get('closed'), 'true', `the page did not say to open the board again: ${said.get('words')}`)
+  assert.equal(said.get('form'), 'false', 'the website sign-in form was shown')
+  assert.doesNotMatch(said.get('words'), /Vercel|password|username/i)
+  assert.match(said.get('words'), /Start Board/)
+  const refused = seen.filter((entry) => entry.path === '/api/state')
+  assert.ok(refused.length >= 1 && refused.every((entry) => entry.status === 401), 'the board should have refused the bad key')
 })

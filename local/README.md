@@ -32,15 +32,20 @@ What exists (T1 and T4):
 - It replaces any `X-Forwarded-For` / `X-Real-IP` / `X-Forwarded-Host` a caller sends with the real connection address.
 - No new dependencies.
 
-Known limits:
+The cookie and the page's key (T9):
 
-- **Cookies are shared across ports on 127.0.0.1.** A browser sends the board's cookie to any other web
-  server the student opens at `127.0.0.1:<other port>`, and such a server can also plant a cookie. Done
-  here: the port is in the cookie name (two boards do not sign each other out), any valid value counts
-  (a planted junk one cannot sign the student out), and a request that says it comes from another site
-  or port is refused. Not done: that other server still *receives* the cookie. Planned fix (T9): the
-  page's api calls carry a header token kept in the board page's own storage, not a cookie, and the
-  cookie opens only the page shell.
+- A browser sends the sign-in cookie to **every** server on 127.0.0.1, whatever its port, so another local
+  web server the student opens could receive it (and replay it). That is why the cookie opens only the page
+  shell. Calls to `/api` also need a per-run key, `x-board-token`, which the page keeps in **localStorage**
+  (kept there, not in sessionStorage or memory, because storage belongs to the origin *including the port*,
+  so another port cannot read it; and because it must survive a new tab, a reload and a link from another page).
+  It reaches the page once, in the `#fragment` of the page the one-time link opens (a fragment goes nowhere but
+  the browser), and is removed from the address bar. It is new for each run of the board.
+- Still true: a web page running **in the same browser origin** (the board's own) can read it, as it could read
+  anything on the page; the board loads no third-party script.
+- The page knows it is the local board (`local/page/local-mode.js` is added in front of `app.js` by the local
+  server only; the website's page is untouched): no username and password screen, no "set this in Vercel"
+  words, no sign-out buttons. A board whose key is no good says "Open the board again: double-click Start Board".
 
 What the board shows (student edition, started by Start Board):
 

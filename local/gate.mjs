@@ -57,6 +57,11 @@ export function createLocalGate({ now = Date.now } = {}) {
   const runSecret = randomBytes(32) // cookies are only good for the run that made them
   const viewKey = randomBytes(24).toString('hex') // what the handlers' own view gate is given
   const starterSecret = randomBytes(24).toString('hex') // how a second double-click asks for a fresh link
+  // The page's own key for calls to /api: handed over once, inside the page a one-time link opens (in the
+  // #fragment, which goes nowhere but the browser), and kept by the board's page. The cookie alone is
+  // not enough for /api: a cookie is also sent to ANY other server on 127.0.0.1 (cookies ignore ports),
+  // so that server could replay it. It never sees this key.
+  const apiToken = randomBytes(32).toString('base64url')
   const links = [] // { hash, expires, used }
   const askedNonces = new Map() // a starter's ask is good once
 
@@ -166,7 +171,7 @@ export function createLocalGate({ now = Date.now } = {}) {
       // the board's own address (the page's rules allow this; they only block inline script).
       response.setHeader('Content-Type', 'text/html; charset=utf-8')
       response.statusCode = 200
-      response.end('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/"><title>Opening the board</title><p>Opening the board...</p>')
+      response.end('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/#bt=' + apiToken + '"><title>Opening the board</title><p>Opening the board...</p>')
       return false
     }
 
@@ -178,11 +183,17 @@ export function createLocalGate({ now = Date.now } = {}) {
     if (request.method !== 'GET' && request.method !== 'HEAD' && !isSameOrigin(request)) {
       return refuse(response, 403, 'That did not come from the board\'s own page.', isApi)
     }
+    if (isApi) {
+      const given = request.headers['x-board-token']
+      if (typeof given !== 'string' || !sameSecret(given, apiToken)) {
+        return refuse(response, 401, 'Double-click Start Board again to open the board.', true)
+      }
+    }
     request.headers['x-view-key'] = viewKey
     return true
   }
 
-  return { gate, issueOpenToken, viewKey, starterSecret }
+  return { gate, issueOpenToken, viewKey, starterSecret, apiToken }
 }
 
 const htmlEscape = (text) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`)
