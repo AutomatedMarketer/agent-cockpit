@@ -69,7 +69,7 @@ test('the planted line reaches the model only inside a tool result, as a quoted 
   assert.ok(!sent.some((event) => event.type === 'response.create' && Object.keys(event).length > 1), 'a response was started with extra instructions')
 })
 
-test('after a Fish switch, or an order\'s outcome, the notes the model gets are still only the board\'s own words', async () => {
+test('a refusal carrying the planted line is shown to the owner, but the model note stays the board own words', async () => {
   const browser = await connected({
     answer: { orders: { on: true, tasks: true, jobs: ['morning-intel'], key: 'fire-key', spokenYes: true, jev: false } },
     data: planted(),
