@@ -441,7 +441,7 @@ On your own computer there is no Vercel Blob. Set `PICTURE_STORE=folder` and `PI
 
 ### Reading the team repo from a folder (Student Edition)
 
-On your own computer the board can read your team repo from a clone on disk instead of GitHub. Set `REPO_SOURCE=folder` and `REPO_FOLDER=<an absolute path to the clone>`; without both, nothing changes. It shows what is **committed and pushed** on the branch: a file you edited but did not commit, a staged or untracked file, and a commit you have not pushed are never shown (`api/_repo.js`). It fetches at most once every 30 seconds with your own git sign-in, never runs git through a shell, drops every `GIT_*` variable, checks every branch name, commit id and path before git sees it, and gives each call a time limit. A folder with no `origin` is read at its own branch, and the board then tells the page "Jobs are off: this folder is not on GitHub" (`repo.note` in `/api/state`, folder mode only). It starts git by its full path found on `PATH`, never from the team folder, with hooks switched off, and only fetches from a GitHub address. `tests/repo-folder.test.mjs` uses real git repos.
+On your own computer the board can read your team repo from a clone on disk instead of GitHub. Set `REPO_SOURCE=folder` and `REPO_FOLDER=<an absolute path to the clone>`; without both, nothing changes. It shows what is **committed and pushed** on the branch: a file you edited but did not commit, a staged or untracked file, and a commit you have not pushed are never shown (`api/_repo.js`). It fetches at most once every 30 seconds with your own git sign-in, never runs git through a shell, hands git only a short allowlist of environment variables (home, PATH, system folders; never a key or token) and no `GIT_*` variable, checks every branch name, commit id and path before git sees it, and gives each call a time limit. A folder with no `origin` is read at its own branch, and the board then tells the page "Jobs are off: this folder is not on GitHub" (`repo.note` in `/api/state`, folder mode only). It starts git by its full path found on `PATH`, never from the team folder, with hooks switched off, and only fetches from a GitHub address. `tests/repo-folder.test.mjs` uses real git repos.
 
 ### The picture store's free limit, and why the caps are where they are
 
@@ -1017,7 +1017,7 @@ Locally:
 npm test
 ```
 
-2290 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2367 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -

@@ -12,7 +12,7 @@ import { startLocalBoard } from '../local/server.mjs'
 import { LINK_LIFETIME_MS, OPEN_PATH, cookieName, createLocalGate, applyLocalEnv } from '../local/gate.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
-const ENV_KEYS = ['VIEW_KEY', 'PUBLIC_FIRE', 'PUBLIC_DASHBOARD', 'EDIT_KEY', 'BOARD_PASSWORD', 'BOARD_USERNAME']
+const ENV_KEYS = ['VIEW_KEY', 'PUBLIC_FIRE', 'PUBLIC_DASHBOARD', 'EDIT_KEY', 'BOARD_PASSWORD', 'BOARD_USERNAME', 'REPO_SOURCE', 'REPO_FOLDER', 'PICTURE_STORE', 'PICTURE_FOLDER']
 
 // The handlers read process.env, so a run that sets it must put it back.
 async function withBoard(run, options = {}) {

@@ -16,7 +16,7 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const require = createRequire(import.meta.url)
 const { nodeIsNewEnough, MIN_MAJOR } = require('../local/check-node.cjs')
 
-const ENV_KEYS = ['VIEW_KEY', 'PUBLIC_FIRE', 'PUBLIC_DASHBOARD', 'EDIT_KEY', 'BOARD_PASSWORD', 'BOARD_USERNAME']
+const ENV_KEYS = ['VIEW_KEY', 'PUBLIC_FIRE', 'PUBLIC_DASHBOARD', 'EDIT_KEY', 'BOARD_PASSWORD', 'BOARD_USERNAME', 'REPO_SOURCE', 'REPO_FOLDER', 'PICTURE_STORE', 'PICTURE_FOLDER']
 
 // Runs one or more starts against a private state folder. `opened` records what the "browser" was asked to open.
 async function withStarter(run) {

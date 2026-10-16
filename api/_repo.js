@@ -17,8 +17,9 @@
 // - execFile, never a shell, with a fixed list of options first. Every name is checked before it is
 //   put in the list: a branch against a strict pattern, a commit against 40 hex digits, a path
 //   against "plain repo path". Nothing that starts with "-" can reach git as an option.
-// - Every GIT_* variable of the board's own environment is dropped (GIT_DIR, GIT_SSH_COMMAND and the
-//   like would redirect git), and git never asks anything on a terminal.
+// - Git gets a short allowlist of the environment (home, PATH, system folders - see gitEnvironment),
+//   never the board's keys or per-run key, and no GIT_* variable (GIT_DIR, GIT_SSH_COMMAND and the
+//   like would redirect git); git never asks anything on a terminal.
 // - Each call has a time limit and an output limit, and at most MAX_AT_ONCE run together.
 
 import { execFile } from 'node:child_process'
@@ -93,12 +94,22 @@ export const FOLDER_NOTES = {
 export const FOLDER_UNREADABLE =
   'The board could not read the team folder with git, so check that the folder is a clone of your team repo and that git is installed.'
 
-// The environment git runs in: the board's own, minus every GIT_* variable, plus the two that keep
-// it quiet. (HOME / USERPROFILE stay, so git finds the student's own sign-in for a fetch.)
+// The environment git runs in. A short list of what git and its helpers need to find the student's
+// own sign-in (their home and profile folders, PATH, the system folders Windows needs, the language,
+// an ssh agent), and nothing else: the board's own environment holds keys, tokens and the per-run
+// view key, and none of that has any business in a child process that talks to a remote. Plus the
+// three variables that keep git quiet. Names are compared without regard to case (Windows).
+const GIT_NEEDS = new Set([
+  'PATH', 'PATHEXT', 'HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA', 'PROGRAMDATA',
+  'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432', 'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'COMSPEC',
+  'TEMP', 'TMP', 'TMPDIR', 'USERNAME', 'USER', 'LOGNAME', 'USERDOMAIN', 'LANG', 'TZ',
+  'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'SSH_AUTH_SOCK'
+])
 export function gitEnvironment(source = process.env) {
   const env = {}
   for (const [name, value] of Object.entries(source)) {
-    if (!name.toUpperCase().startsWith('GIT_') && value !== undefined) env[name] = value
+    const upper = name.toUpperCase()
+    if (value !== undefined && (GIT_NEEDS.has(upper) || upper.startsWith('LC_'))) env[name] = value
   }
   env.GIT_TERMINAL_PROMPT = '0'
   env.GIT_OPTIONAL_LOCKS = '0'

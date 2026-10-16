@@ -345,7 +345,7 @@ test('a request-controlled name cannot make git run a program, even from a repo 
 
 test('git runs without any of the board\'s GIT_ variables, and asks nothing on a terminal', async () => {
   const env = gitEnvironment({ PATH: '/bin', HOME: '/home/x', GIT_DIR: '/evil', git_work_tree: '/evil', GIT_SSH_COMMAND: 'evil', GIT_CONFIG_COUNT: '1', GITHUB_TOKEN: 'keep-me-not-a-git-var', GIT_TERMINAL_PROMPT: '1' })
-  assert.deepEqual(Object.keys(env).sort(), ['GCM_INTERACTIVE', 'GIT_OPTIONAL_LOCKS', 'GIT_TERMINAL_PROMPT', 'GITHUB_TOKEN', 'HOME', 'PATH'].sort())
+  assert.deepEqual(Object.keys(env).sort(), ['GCM_INTERACTIVE', 'GIT_OPTIONAL_LOCKS', 'GIT_TERMINAL_PROMPT', 'HOME', 'PATH'].sort(), 'only what git needs; GITHUB_TOKEN is not one of them')
   assert.equal(env.GIT_TERMINAL_PROMPT, '0')
   assert.equal(env.GCM_INTERACTIVE, 'never')
   // And for real: a poisoned process environment does not redirect the read.

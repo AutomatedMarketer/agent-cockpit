@@ -16,10 +16,10 @@
 
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { dirname, isAbsolute, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { startLocalBoard } from './server.mjs'
 import { OPEN_PATH, STARTER_PATH } from './gate.mjs'
 
@@ -57,6 +57,67 @@ export function readRunning(stateDir) {
   } catch {
     return null
   }
+}
+
+// ---- what the board reads and keeps ------------------------------------------------------------------
+
+// Pictures live inside the user's own state folder (private to them).
+export const picturesDirFor = (stateDir) => join(stateDir, 'pictures')
+
+// Where the team repo is on this computer, or { folder: null, why } saying what to do. In order:
+// board.json next to the starter, board.json in the state folder, or - when the board sits inside
+// the team folder - the folder above it. board.json looks like { "teamFolder": "C:\Users\me\my-team" }.
+export function resolveTeamFolder({ boardDir, stateDir }) {
+  const ask = 'Tell the board where your team folder is: make a file called board.json next to Start Board, containing {"teamFolder": "the full path of your team folder"}.'
+  const check = (candidate, source) => {
+    if (typeof candidate !== 'string' || !isAbsolute(candidate)) return { folder: null, why: `${source}: teamFolder must be the full path of a folder. ${ask}` }
+    let real
+    try {
+      real = realpathSync(candidate)
+      if (!statSync(real).isDirectory()) throw new Error('not a folder')
+    } catch {
+      return { folder: null, why: `${source}: the team folder ${candidate} does not exist or is not a folder. ${ask}` }
+    }
+    try {
+      statSync(join(real, '.git'))
+    } catch {
+      return { folder: null, why: `${source}: ${candidate} is not a git clone of your team repo (it has no .git). ${ask}` }
+    }
+    return { folder: real }
+  }
+  for (const [dir, source] of [[boardDir, 'board.json next to Start Board'], [stateDir, 'board.json in the state folder']]) {
+    let text
+    try {
+      text = readFileSync(join(dir, 'board.json'), 'utf8')
+    } catch {
+      continue
+    }
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      return { folder: null, why: `${source} is not valid JSON. ${ask}` }
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !('teamFolder' in parsed)) return { folder: null, why: `${source} has no teamFolder. ${ask}` }
+    return check(parsed.teamFolder, source)
+  }
+  const parent = dirname(boardDir)
+  try {
+    statSync(join(parent, '.git'))
+    return check(parent, 'the folder above the board')
+  } catch {
+    return { folder: null, why: `I could not find your team folder. ${ask}` }
+  }
+}
+
+// The settings the board's handlers read, set so a student's board uses the folder modes: the team
+// repo is read with git from their own clone, and pictures are kept in a folder - no GitHub token,
+// no Vercel. Replaces whatever the computer already had under these names.
+export function applyStudentEnv(env, { teamFolder, pictureFolder }) {
+  env.REPO_SOURCE = 'folder'
+  env.REPO_FOLDER = teamFolder
+  env.PICTURE_STORE = 'folder'
+  env.PICTURE_FOLDER = pictureFolder
 }
 
 // ---- opening the browser -------------------------------------------------------------------------------
@@ -154,7 +215,10 @@ export async function runStart({
   fetchImpl = fetch,
   openFile = (file) => openFileWith({ platform, env, file }),
   lingerMs = LINGER_MS,
-  log = console.log
+  log = console.log,
+  boardDir = join(dirname(fileURLToPath(import.meta.url)), '..'),
+  teamFolder, // undefined: leave the settings alone (tests); null: not found, so stop; a path: use it
+  teamFolderWhy = 'I could not find your team folder.'
 } = {}) {
   privateDir(stateDir)
 
@@ -165,7 +229,13 @@ export async function runStart({
     return { mode: 'reopened', port: already.port }
   }
   rmSync(join(stateDir, STATE_FILE), { force: true }) // a board that is gone, or not ours
+  if (teamFolder === null) throw new Error(teamFolderWhy)
 
+  if (teamFolder) {
+    const pictureFolder = picturesDirFor(stateDir)
+    privateDir(pictureFolder)
+    applyStudentEnv(process.env, { teamFolder, pictureFolder })
+  }
   const board = await pickPort(basePort, tries, (port) => startBoard({ port }))
   const stateFile = join(stateDir, STATE_FILE)
   writePrivateFile(stateFile, JSON.stringify({ port: board.port, secret: board.starterSecret, startedAt: new Date().toISOString() }))
@@ -184,7 +254,10 @@ export async function runStart({
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    const board = await runStart()
+    const boardDir = join(dirname(fileURLToPath(import.meta.url)), '..')
+    const stateDir = stateDirFor({ platform: process.platform, env: process.env, home: homedir() })
+    const found = resolveTeamFolder({ boardDir, stateDir })
+    const board = await runStart({ boardDir, stateDir, teamFolder: found.folder, teamFolderWhy: found.why })
     if (board.mode === 'started') {
       const stop = () => board.close().finally(() => process.exit(0))
       process.on('SIGINT', stop)

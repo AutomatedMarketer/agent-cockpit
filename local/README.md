@@ -1,6 +1,6 @@
 # Board on this computer (Student Edition) - not ready for students yet
 
-Status: the server (T1), the sign-in wall (T4) and the start files (T5) are done. **T2 and T3 are not, so do not hand this to students yet.**
+Status: the server (T1), the team-folder reader (T2), the picture folder (T3), the sign-in wall (T4) and the start files (T5) are done. **Not handed to students until a real Mac and Windows double-click test (below) has been done.**
 
 Starting it (T5): double-click **`Start Board.command`** (Mac) or **`Start Board.bat`** (Windows). Both
 check for Node 20 or newer and say in plain words if it is missing, run Node by its full path from an
@@ -42,11 +42,18 @@ Known limits:
   page's api calls carry a header token kept in the board page's own storage, not a cookie, and the
   cookie opens only the page shell.
 
-What is missing:
+What the board shows (student edition, started by Start Board):
 
-- **T2**, reading the team folder with git instead of GitHub. Today the handlers still read GitHub, so
-  `GITHUB_OWNER`, `GITHUB_REPO` and a token must be in the environment.
-- **T3**, pictures in a folder instead of Vercel Blob.
+- **Team data:** read with git from a clone of the team repo on this computer (`REPO_SOURCE=folder`,
+  `REPO_FOLDER`). It shows what is committed and pushed on the branch. The clone is found from
+  `board.json` next to Start Board (`{"teamFolder": "<full path>"}`), else `board.json` in the state
+  folder, else the folder above the board if the board sits inside the team folder. Without one the
+  board does not start and says what to do. Git gets only a short list of environment variables
+  (home, PATH, system folders), never the board's keys or its per-run key.
+- **Pictures:** kept in `<state folder>/pictures` (`PICTURE_STORE=folder`, `PICTURE_FOLDER`), no Vercel.
+- To show real data a person needs: Node 20+, git, a clone of their team repo with a GitHub `origin`
+  that has been pushed (a folder with no remote is read at its own branch and says "jobs are off"),
+  and the folder named in `board.json` (or the board inside it).
 
 Only a double-click proves (not checkable from node, to be tried on a real Mac and a real Windows PC):
 
