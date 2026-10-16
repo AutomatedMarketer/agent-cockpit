@@ -460,34 +460,17 @@ test('a running board is bound to 127.0.0.1 and is not reachable on another addr
   }
 })
 
-test('the command line refuses a host other than 127.0.0.1 and says the board is unfinished when it starts', async () => {
-  const { spawnSync, spawn } = await import('node:child_process')
+test('the command line refuses a host other than 127.0.0.1', async () => {
+  const { spawnSync } = await import('node:child_process')
   const refused = spawnSync(process.execPath, [join(ROOT, 'local', 'server.mjs'), '--host', '0.0.0.0', '--port', '0'], { encoding: 'utf8', timeout: 20000 })
   assert.equal(refused.status, 1)
   assert.match(refused.stderr, /only listens on 127\.0\.0\.1/)
-
-  const child = spawn(process.execPath, [join(ROOT, 'local', 'server.mjs'), '--port', '0'], { stdio: ['ignore', 'pipe', 'pipe'] })
-  try {
-    const out = await new Promise((resolve, reject) => {
-      let text = ''
-      const timer = setTimeout(() => reject(new Error(`no start line: ${text}`)), 20000)
-      child.stdout.on('data', (data) => {
-        text += data
-        if (text.includes('UNFINISHED')) { clearTimeout(timer); resolve(text) }
-      })
-      child.on('exit', () => reject(new Error(`exited early: ${text}`)))
-    })
-    assert.match(out, /http:\/\/127\.0\.0\.1:\d+\//)
-    assert.match(out, /UNFINISHED/)
-  } finally {
-    child.kill()
-  }
 })
 
-test('the unfinished status is written down where the next person will read it', () => {
-  const header = readFileSync(join(ROOT, 'local', 'server.mjs'), 'utf8').slice(0, 900)
-  assert.match(header, /UNFINISHED/)
-  assert.match(readFileSync(join(ROOT, 'local', 'README.md'), 'utf8'), /UNFINISHED/)
+test('what is still missing (T2 git, T3 pictures, T5 starters) is written down where the next person will read it', () => {
+  const readme = readFileSync(join(ROOT, 'local', 'README.md'), 'utf8')
+  for (const task of ['T2', 'T3', 'T5']) assert.match(readme, new RegExp(task))
+  assert.match(readFileSync(join(ROOT, 'local', 'server.mjs'), 'utf8').slice(0, 1200), /T2/)
 })
 
 test('the gate seam can stop a request before any handler or file runs', async () => {

@@ -1,15 +1,19 @@
 // The board on this computer: a small Node server that runs the SAME api/*.js files the website
 // runs on Vercel, and serves public/. No dependencies.
 //
-// STATUS: UNFINISHED (task T1 of the Student Edition plan). There is no sign-in wall yet - that is
-// T4 (one-time link and cookie). Until it lands, the protection is: the server listens on
-// 127.0.0.1 and refuses to start anywhere else, and it answers only requests whose Host is
-// 127.0.0.1:<port> or localhost:<port> (so a web page cannot reach it through a name it controls).
-// Another program on this same computer can still talk to it. Do not give this to students yet.
+// STATUS: the server (T1) and the sign-in wall (T4) are done. Still to come: T2 (git instead of
+// GitHub), T3 (pictures in a folder), T5 (double-click starters). Until T2 and T3 land the handlers
+// still need GitHub and Blob settings, so this is not ready to hand to students.
+//
+// How it is protected: it listens on 127.0.0.1 only; it answers only Host 127.0.0.1:<port> or
+// localhost:<port>; and startLocalBoard() adds the sign-in wall (local/gate.mjs): a one-time,
+// two-minute link swapped for an HttpOnly, SameSite=Strict cookie tied to this run, and an Origin
+// check on every change. createBoardServer() alone has no wall (tests use it that way): always
+// start the board for a person through startLocalBoard() or the command line.
 //
 // Seams for the next tasks, arguments of createBoardServer, so nothing here changes then:
-//   gate(request, response) -> false once it has answered, anything else to carry on   (T4;
-//                              runs after the Host check, which cannot be switched off)
+//   gate(request, response) -> false once it has answered, anything else to carry on
+//                              (runs after the Host check, which cannot be switched off)
 //   loadHandler(name)       -> the handler for /api/<name>                              (tests)
 //   handlerTimeoutMs        -> how long a handler may take before a 504                 (default 60 s)
 // T2 (repo source) and T3 (picture folder) need no seam here: they work through settings the
@@ -22,6 +26,7 @@ import { loadVercelConfig } from './headers.mjs'
 import { routeNameFor } from './routes.mjs'
 import { BodyError, cleanForwardingHeaders, shimRequest, shimResponse } from './vercel-shim.mjs'
 import { serveStatic } from './static.mjs'
+import { OPEN_PATH, applyLocalEnv, createLocalGate } from './gate.mjs'
 
 export const LOOPBACK = '127.0.0.1'
 export const DEFAULT_PORT = 4317
@@ -148,6 +153,16 @@ export async function startBoardServer({ port = DEFAULT_PORT, host = LOOPBACK, b
   })
 }
 
+// The board as a person gets it: the server plus the sign-in wall. Returns openLink(), which makes
+// a NEW one-time link each time it is called - print it once and do not log it anywhere else.
+export async function startLocalBoard({ now, ...options } = {}) {
+  const login = createLocalGate({ now })
+  applyLocalEnv(login.viewKey)
+  const board = await startBoardServer({ ...options, gate: login.gate })
+  const openLink = () => `http://${board.host}:${board.port}${OPEN_PATH}?t=${login.issueOpenToken()}`
+  return { ...board, openLink }
+}
+
 function readArgs(argv) {
   const args = { port: DEFAULT_PORT, host: LOOPBACK }
   for (let index = 0; index < argv.length; index += 1) {
@@ -164,9 +179,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   process.on('uncaughtException', (failure) => console.error(`[board] unexpected error, still running: ${failure?.message ?? failure}`))
   process.on('unhandledRejection', (failure) => console.error(`[board] unexpected error, still running: ${failure?.message ?? failure}`))
   try {
-    const { port, host } = await startBoardServer(readArgs(process.argv.slice(2)))
-    console.log(`Board running at http://${host}:${port}/  (this computer only)`)
-    console.log('UNFINISHED: there is no sign-in wall yet. Do not hand this to students. Press Ctrl+C to stop.')
+    const board = await startLocalBoard(readArgs(process.argv.slice(2)))
+    console.log(`Board running on this computer only (port ${board.port}). Open it with this link, once, within 2 minutes:`)
+    console.log(board.openLink())
+    console.log('Press Ctrl+C to stop. Stopping and starting again makes a new link; old links and sign-ins stop working.')
   } catch (failure) {
     console.error(failure.message)
     process.exit(1)
