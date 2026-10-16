@@ -73,8 +73,13 @@ export function folderConfigured(env = process.env) {
   return env.PICTURE_STORE === 'folder' && typeof env.PICTURE_FOLDER === 'string' && path.isAbsolute(env.PICTURE_FOLDER)
 }
 
+// Asking for the folder at all (PICTURE_STORE=folder) counts as connected even when the folder
+// setting is wrong, so the person is told about the folder in plain words (see storeFailure) and not
+// sent to Vercel's Storage tab.
+export const folderRequested = (env = process.env) => env.PICTURE_STORE === 'folder'
+
 export function storeConnected(env = process.env) {
-  return Boolean(env.BLOB_STORE_ID || env.BLOB_READ_WRITE_TOKEN) || folderConfigured(env)
+  return Boolean(env.BLOB_STORE_ID || env.BLOB_READ_WRITE_TOKEN) || folderRequested(env)
 }
 
 export const isPictureVersion = (value) => typeof value === 'string' && VERSION_SHAPE.test(value)
@@ -164,9 +169,20 @@ function picturePath(slot, version, type) {
 // the narrowest match that still catches either way of putting it.
 const PUBLIC_STORE = /\bpublic store\b|\bstore is public\b/i
 
+// On a folder there is no Vercel, no token and no free allowance: what went wrong is the folder.
+const FOLDER_FAILURE =
+  'The picture folder on this computer did not accept that, so check that the folder exists, that you can write to it, and that the disk is not full.'
+
 export function storeFailure(error, sdk = {}) {
   const is = (name) => typeof sdk[name] === 'function' && error instanceof sdk[name]
   const text = error instanceof Error ? error.message : ''
+  if (sdk.isFolder === true) {
+    if (is('BlobPreconditionFailedError')) {
+      return { status: 409, error: 'These settings were changed somewhere else at the same moment, so try again.' }
+    }
+    if (typeof error?.say === 'string' && error.say) return { status: 503, error: error.say }
+    return { status: 502, error: FOLDER_FAILURE }
+  }
   if (is('BlobError') && PUBLIC_STORE.test(text)) {
     return {
       status: 503,
@@ -541,7 +557,7 @@ const loadRealSdk = () => import('@vercel/blob')
 const folderLoaders = new Map()
 function folderLoader(folder) {
   if (!folderLoaders.has(folder)) {
-    folderLoaders.set(folder, async () => (await import('./_picture-store-folder.js')).folderSdk(folder))
+    folderLoaders.set(folder, async () => (await import('./_picture-store-folder.js')).folderSdkSafe(folder))
   }
   return folderLoaders.get(folder)
 }
@@ -591,7 +607,7 @@ function takeTurn(key, work) {
 export function pictureStore(env = process.env, loadSdk = loadRealSdk, { pause = sleep, random = Math.random } = {}) {
   if (!storeConnected(env)) return null
   // A test that hands in its own loader keeps it; only the default one is swapped for the folder.
-  if (loadSdk === loadRealSdk && folderConfigured(env)) loadSdk = folderLoader(env.PICTURE_FOLDER)
+  if (loadSdk === loadRealSdk && folderRequested(env)) loadSdk = folderLoader(env.PICTURE_FOLDER)
 
   let loading = null
   const sdk = () => (loading ??= Promise.resolve(loadSdk()))

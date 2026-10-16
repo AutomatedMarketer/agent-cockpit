@@ -16,7 +16,8 @@ import {
   MEMORY_INDEX_MAX_BYTES,
   MAILBOX_QUEUE_MAX_BYTES
 } from '../api/_picture-store.js'
-import { folderSdk, allowedName, FOLDER_CAPS } from '../api/_picture-store-folder.js'
+import { folderSdk, allowedName, insideProfile, FOLDER_CAPS } from '../api/_picture-store-folder.js'
+import os from 'node:os'
 import { fakeBlob } from './helpers/fake-blob.mjs'
 
 const V1 = 'abcdefgh1234'
@@ -137,7 +138,9 @@ test('the folder is on only when both settings are plain and the folder is an ab
   assert.equal(folderConfigured({ PICTURE_STORE: 'folder', PICTURE_FOLDER: 'pictures' }), false, 'relative is refused')
   assert.equal(folderConfigured({ PICTURE_STORE: 'folder', PICTURE_FOLDER: '' }), false)
   assert.equal(storeConnected({ PICTURE_STORE: 'folder', PICTURE_FOLDER: absolute }), true)
-  assert.equal(storeConnected({ PICTURE_STORE: 'folder', PICTURE_FOLDER: 'pictures' }), false)
+  // Asked for but unusable still counts as connected, so the person hears about the folder, not about Vercel.
+  assert.equal(storeConnected({ PICTURE_STORE: 'folder', PICTURE_FOLDER: 'pictures' }), true)
+  assert.equal(storeConnected({ PICTURE_STORE: 'folder' }), true)
 })
 
 test('website mode is untouched: without the folder settings, connection and loader are exactly as before', async () => {
@@ -197,6 +200,97 @@ test('the folder holds exactly the caps the Blob store holds', () => {
   assert.equal(FOLDER_CAPS.meter, METER_MAX_BYTES)
   assert.equal(FOLDER_CAPS.index, MEMORY_INDEX_MAX_BYTES)
   assert.equal(FOLDER_CAPS.queue, MAILBOX_QUEUE_MAX_BYTES)
+})
+
+/* ---------- who can open the folder, plain wording, big files ---------- */
+
+test('on Windows the folder must be inside the user\'s own profile; elsewhere file modes do that job', () => {
+  const home = 'C:\\Users\\Nuno'
+  assert.equal(insideProfile('C:\\Users\\Nuno\\AppData\\Local\\Agent Board', home, 'win32'), true)
+  assert.equal(insideProfile('c:\\users\\nuno\\appdata\\x', home, 'win32'), true, 'case does not matter')
+  for (const outside of ['C:\\Users\\Nuno', 'C:\\Users\\Nuno\\..\\Other\\x', 'C:\\Users\\NunoElse\\x', 'C:\\ProgramData\\x', 'D:\\dev\\pictures', 'C:\\']) {
+    assert.equal(insideProfile(outside, home, 'win32'), false, outside)
+  }
+  assert.equal(insideProfile('/var/pictures', '/home/x', 'linux'), true)
+  assert.equal(insideProfile('/var/pictures', '/Users/x', 'darwin'), true)
+})
+
+test('on this computer a folder outside the profile is refused with a sentence, and nothing is made there', { skip: process.platform !== 'win32' }, async () => {
+  const outside = path.join(path.parse(os.homedir()).root, `cockpit-outside-${process.pid}`)
+  const store = pictureStore({ PICTURE_STORE: 'folder', PICTURE_FOLDER: outside })
+  for (const work of [() => store.readSettings({ fresh: true }), () => store.saveSettings((settings) => settings), () => store.putPicture('today', V1, WEBP, 'image/webp')]) {
+    await assert.rejects(work(), (error) => {
+      assert.match(error.message, /inside your own user folder/)
+      assert.doesNotMatch(error.message, /Vercel|Storage/)
+      return true
+    })
+  }
+  await assert.rejects(stat(outside), { code: 'ENOENT' }, 'the folder was made outside the profile')
+})
+
+test('a folder inside the profile that is a link out of it is refused too, and nothing is written outside', { skip: process.platform !== 'win32' }, async () => {
+  const area = await scratch()
+  const target = path.join(path.parse(os.homedir()).root, `cockpit-link-target-${process.pid}`)
+  try {
+    await mkdir(target)
+    await symlink(target, area.root, 'junction')
+    const store = pictureStore({ PICTURE_STORE: 'folder', PICTURE_FOLDER: area.root })
+    await assert.rejects(store.saveSettings((settings) => settings), (error) => /inside your own user folder/.test(error.message))
+    assert.deepEqual(await readdir(target), [], 'something was written through the link')
+  } finally {
+    await rm(target, { recursive: true, force: true })
+    await area.done()
+  }
+})
+
+test('a folder setting that cannot be used is a plain sentence about the folder, never about Vercel', async () => {
+  for (const env of [{ PICTURE_STORE: 'folder' }, { PICTURE_STORE: 'folder', PICTURE_FOLDER: 'relative/path' }, { PICTURE_STORE: 'folder', PICTURE_FOLDER: '' }]) {
+    const store = pictureStore(env)
+    assert.ok(store, 'asked for, so there is a store to tell the person')
+    await assert.rejects(store.readSettings({ fresh: true }), (error) => {
+      assert.equal(error.status, 503)
+      assert.match(error.message, /PICTURE_FOLDER/)
+      assert.doesNotMatch(error.message, /Vercel|Storage|redeploy/i)
+      return true
+    })
+  }
+})
+
+test('every other failure on a folder is one local sentence, and a clash is still a clash', async () => {
+  const area = await scratch()
+  try {
+    const sdk = folderSdk(area.root)
+    const store = pictureStore({ BLOB_STORE_ID: 'x' }, async () => sdk)
+    // A disk problem: the settings file's place is taken by a folder, so reading it fails.
+    await mkdir(path.join(area.root, 'agent-cockpit', 'settings.json'), { recursive: true })
+    await assert.rejects(store.readSettings({ fresh: true }), (error) => {
+      assert.equal(error.status, 502)
+      assert.match(error.message, /picture folder on this computer/)
+      assert.doesNotMatch(error.message, /Vercel|Storage|token|redeploy/i)
+      assert.ok(!error.message.includes(area.base))
+      return true
+    })
+  } finally {
+    await area.done()
+  }
+})
+
+test('replacing a file bigger than its cap is decided without reading it', async () => {
+  const area = await scratch()
+  try {
+    const sdk = folderSdk(area.root)
+    await mkdir(path.join(area.root, 'agent-cockpit'), { recursive: true })
+    await writeFile(path.join(area.root, 'agent-cockpit', 'settings.json'), Buffer.alloc(SETTINGS_MAX_BYTES + 10, 0x20))
+    const seen = await sdk.get('agent-cockpit/settings.json')
+    assert.match(seen.blob.etag, /^"big-/)
+    const options = { contentType: 'application/json', allowOverwrite: true }
+    await assert.rejects(sdk.put('agent-cockpit/settings.json', '{}', { ...options, ifMatch: '"sha256-nope"' }), sdk.BlobPreconditionFailedError)
+    // The stand-in etag is what an ifMatch compares, so a save built on the read goes through.
+    await sdk.put('agent-cockpit/settings.json', '{}', { ...options, ifMatch: seen.blob.etag })
+    assert.equal(await readFile(path.join(area.root, 'agent-cockpit', 'settings.json'), 'utf8'), '{}')
+  } finally {
+    await area.done()
+  }
 })
 
 /* ---------- names: only the board's own six shapes ---------- */
@@ -385,7 +479,7 @@ test('through the store, a refusal is one plain sentence that names no folder', 
     await assert.rejects(store.getPicture('today', V1, 'image/webp'), (error) => {
       assert.equal(typeof error.status, 'number')
       assert.ok(!error.message.includes(area.base), 'the folder path leaked into the sentence')
-      assert.ok(!/link|Picture folder/i.test(error.message), 'the internal reason leaked into the sentence')
+      assert.ok(!/a link inside|Picture folder:/i.test(error.message), 'the internal reason leaked into the sentence')
       return true
     })
   } finally {

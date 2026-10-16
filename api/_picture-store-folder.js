@@ -15,12 +15,20 @@
 //
 // Saves take turns per folder inside this process; one board runs one process, so ifMatch (the
 // file's SHA-256 as its etag) holds the way it does on Blob.
+//
+// What this does not stop, on purpose: someone who is already signed in as the same user on this
+// computer can swap a folder for a link between the board's check and its read or write (a race
+// of microseconds). That person can already open every file in the folder, so it gives them
+// nothing; the checks are here so a stranger's planted link cannot lead the board anywhere.
+//
+// Who can open the folder: 0600 / 0700 mean something only on Mac and Linux. Windows has no such
+// modes, so there the folder is refused unless it is inside the user's own profile
+// (C:\Users\<you>), which Windows already keeps from other users.
 
 import { createHash, randomBytes } from 'node:crypto'
-import { createReadStream } from 'node:fs'
-import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import { lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { Readable } from 'node:stream'
 import { isValidSlug, parseSlot } from './_lib.js'
 
 const ROOT = 'agent-cockpit'
@@ -46,9 +54,11 @@ const ART = /^agent-cockpit\/art\/([a-z0-9-]+)\/([a-z0-9]{8,32})\.(webp|jpeg|png
 
 // Named BlobError so the store's failure mapper turns it into its one plain sentence, never this text.
 export class FolderStoreError extends Error {
-  constructor(message) {
+  // `say`, when given, is a sentence the person may be shown as it is (a setting they can fix).
+  constructor(message, say = null) {
     super(`Picture folder: ${message}`)
     this.name = 'BlobError'
+    this.say = say
   }
 }
 export class FolderPreconditionFailedError extends FolderStoreError {
@@ -65,6 +75,27 @@ export function allowedName(name) {
   if (!parseSlot(slot)) return null
   if (slot.startsWith('agent-') && !isValidSlug(slot.slice('agent-'.length))) return null
   return { cap: FOLDER_CAPS.picture, type: PICTURE_TYPES[extension] }
+}
+
+// Windows only: is `folder` inside `home`? (Case does not matter there.) Elsewhere always true.
+export function insideProfile(folder, home = os.homedir(), platform = process.platform) {
+  if (platform !== 'win32') return true
+  const fold = (value) => path.resolve(value).toLowerCase()
+  const relative = path.relative(fold(home), fold(folder))
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
+}
+export const OUTSIDE_PROFILE =
+  'On Windows the picture folder must be inside your own user folder (for example C:\\Users\\you\\AppData\\Local\\Agent Board), so other users of this computer cannot open it: change PICTURE_FOLDER, then start the board again.'
+
+async function readUpTo(at, limit) {
+  const handle = await open(at, 'r')
+  try {
+    const buffer = Buffer.alloc(limit)
+    const { bytesRead } = await handle.read(buffer, 0, limit, 0)
+    return buffer.subarray(0, bytesRead)
+  } finally {
+    await handle.close()
+  }
 }
 
 const etagOf = (bytes) => `"sha256-${createHash('sha256').update(bytes).digest('hex')}"`
@@ -103,12 +134,17 @@ function inTurn(key, work) {
 
 // `folder` must be an absolute path; the board checks that first (folderConfigured).
 export function folderSdk(folder) {
-  if (typeof folder !== 'string' || !path.isAbsolute(folder)) throw new FolderStoreError('the folder must be an absolute path.')
+  if (typeof folder !== 'string' || !path.isAbsolute(folder)) {
+    throw new FolderStoreError('the folder must be an absolute path.', 'PICTURE_FOLDER must be the full path of a folder on this computer, for example C:\\Users\\you\\AppData\\Local\\Agent Board\\pictures: set it, then start the board again.')
+  }
   let rootReal = null
   async function root() {
     if (rootReal) return rootReal
+    if (!insideProfile(folder)) throw new FolderStoreError('outside the user profile', OUTSIDE_PROFILE)
     await mkdir(folder, { recursive: true, mode: 0o700 })
     rootReal = await realpath(folder)
+    // A link on the way must not carry the folder out of the profile either.
+    if (!insideProfile(rootReal, await realpath(os.homedir()))) throw new FolderStoreError('outside the user profile', OUTSIDE_PROFILE)
     return rootReal
   }
 
@@ -122,23 +158,27 @@ export function folderSdk(folder) {
     return { rule, base, parts, exists: found.exists, info: found.info, at: path.join(base, ...parts) }
   }
 
+  // The etag of a file already on disk. One bigger than the board ever writes is not read at all.
+  async function etagFor(at, info, rule) {
+    return info.size <= rule.cap ? etagOf(await readFile(at)) : `"big-${info.size}-${Math.trunc(info.mtimeMs)}"`
+  }
+
   return {
+    isFolder: true,
     BlobError: FolderStoreError,
     BlobPreconditionFailedError: FolderPreconditionFailedError,
 
     async get(name) {
       const { rule, exists, info, at } = await locate(name)
       if (!exists) return null
-      let etag
-      if (info.size <= rule.cap) {
-        etag = etagOf(await readFile(at))
-      } else {
-        // Too big to be one of the board's files: not hashed, and the caller's size cap refuses it.
-        etag = `"big-${info.size}-${Math.trunc(info.mtimeMs)}"`
-      }
+      // A file too big to be one of the board's is not hashed, and only its first cap + 1 bytes are
+      // read: enough for the caller's size cap to refuse it. The file is closed again before this
+      // returns, so a stream nobody finishes reading cannot hold a Windows file open.
+      const etag = await etagFor(at, info, rule)
+      const bytes = await readUpTo(at, rule.cap + 1)
       return {
         statusCode: 200,
-        stream: Readable.toWeb(createReadStream(at)),
+        stream: new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(bytes)); controller.close() } }),
         headers: new Headers({ etag }),
         blob: { pathname: name, contentType: rule.type, etag, size: info.size }
       }
@@ -151,9 +191,9 @@ export function folderSdk(folder) {
       const bytes = typeof body === 'string' ? Buffer.from(body, 'utf8') : Buffer.from(body)
       if (bytes.length > rule.cap) throw new FolderStoreError('that file is bigger than the board keeps.')
       return inTurn(folder, async () => {
-        const { base, parts, exists, at } = await locate(name)
+        const { base, parts, exists, info, at } = await locate(name)
         if (options.ifMatch !== undefined) {
-          const current = exists ? etagOf(await readFile(at)) : null
+          const current = exists ? await etagFor(at, info, rule) : null
           if (current !== options.ifMatch) throw new FolderPreconditionFailedError()
         } else if (exists && !options.allowOverwrite) {
           throw new FolderStoreError('this file already exists.')
@@ -182,5 +222,16 @@ export function folderSdk(folder) {
         })
       }
     }
+  }
+}
+
+// What the board uses: the same, except that a folder setting that cannot be used gives a store whose
+// every call fails with the sentence about it, rather than an error thrown before any call is made.
+export function folderSdkSafe(folder) {
+  try {
+    return folderSdk(folder)
+  } catch (error) {
+    const fail = async () => { throw error }
+    return { isFolder: true, BlobError: FolderStoreError, BlobPreconditionFailedError: FolderPreconditionFailedError, get: fail, put: fail, del: fail }
   }
 }
