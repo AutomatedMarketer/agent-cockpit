@@ -5410,9 +5410,13 @@ const VOICE_NO_REPLY = 'No reply came back. Say it again.'
 // A reply OpenAI stopped at its length limit (VOICE_REPLY_TOKENS): said under it, until the next reply.
 const VOICE_CUT_SHORT = 'That answer was cut short. Ask me to go on.'
 // Fish refused (its key, its credit, or no answer at all) and the call moved to OpenAI's voice. One line, once.
-const VOICE_FISH_FELL_BACK = 'Your Fish voice is not working, so this call now uses the OpenAI voice.'
+const VOICE_FISH_FELL_BACK = 'Your Fish voice is not working, so the rest of that answer was not spoken. Ask me again and it will use the OpenAI voice.'
+// OpenAI did not take the voice switch: the call carries on in text.
+const VOICE_TEXT_ONLY = 'OpenAI would not switch voices, so this call is text only. The answers are on screen.'
 // What /api/speak calls a refusal that will not get better within a call.
-const FISH_GIVES_UP = ['key', 'credit', 'unreachable']
+const FISH_GIVES_UP = ['key', 'credit']
+// 'down' (no answer, or a 5xx) counts: the call switches on the second in a row.
+const FISH_DOWN_LIMIT = 2
 // What it is doing while it looks something up: a short line for each tool it asked for, in the
 // state line, so the wait between a question and its answer is not a blank on screen. The board's
 // own words for each tool it defines - never the name the model sent.
@@ -5809,6 +5813,8 @@ function openVoice(deps, ui) {
     })
     ui.note?.(VOICE_FISH_FELL_BACK)
     session.noteIsCut = false
+    // Until OpenAI says session.updated, the switch is unconfirmed; an error in that time is its refusal.
+    session.voiceSwitchPending = true
   }
 
   // No talking for idleMinutes - the person's or the assistant's - ends the call. Not a cap: a
@@ -6389,7 +6395,17 @@ function openVoice(deps, ui) {
         }
         break
       }
+      case 'session.updated':
+        session.voiceSwitchPending = false
+        break
       case 'error':
+        if (session.voiceSwitchPending) {
+          session.voiceSwitchPending = false
+          ui.note?.(VOICE_TEXT_ONLY)
+          session.noteIsCut = false
+          show('listening')
+          break
+        }
         // Cancelling a reply that had already finished is not worth a word.
         if (event.error?.code === 'response_cancel_not_active') break
         // Our request for a tool reply arrived while a response was running: ask again once, after it.
@@ -6568,10 +6584,14 @@ function fishMouth(io) {
     fish.pending += 1
     const fetched = io.speak({ ticket: session.ticket, text: piece }, controller.signal)
       .then(async (response) => {
-        if (response?.ok) return response.arrayBuffer()
+        if (response?.ok) {
+          session.fishDown = 0
+          return response.arrayBuffer()
+        }
         // The board names the refusals that will not get better; any other piece is just skipped.
         const code = await response?.json?.().then((body) => body?.code, () => null)
-        if (FISH_GIVES_UP.includes(code)) session.fishRefused?.()
+        if (code === 'down') session.fishDown = (session.fishDown ?? 0) + 1
+        if (FISH_GIVES_UP.includes(code) || session.fishDown >= FISH_DOWN_LIMIT) session.fishRefused?.()
         return null
       })
       .catch(() => null)

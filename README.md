@@ -732,9 +732,10 @@ Fish Audio can speak the answers in a voice you pick from its library.
 - Free-plan voices are for **personal use only**. Using one for a business needs a paid Fish plan
 - With Fish, OpenAI answers in text and Fish speaks it, a sentence at a time, so the first words can
   take a moment longer
-- If Fish refuses during a call (it does not accept the key, the account has no credit, or it cannot be
-  reached), the call moves to OpenAI's voice for the rest of that call and the panel says so in one
-  line. The next call tries Fish again. Nothing changes if Fish was never set up.
+- If Fish refuses its key or has no credit, the call moves to OpenAI's voice at once. If Fish just does not
+  answer (or errors), it moves after two failures in a row; one only skips a sentence. The panel says the
+  rest of that answer was not spoken and to ask again. If OpenAI will not take the switch, it says the
+  call is text only. The next call tries Fish again. Nothing changes if Fish was never set up.
 
 ### What goes where
 

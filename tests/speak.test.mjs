@@ -215,12 +215,17 @@ test('a refusal that will not get better names itself, so the page can switch to
     const response = await speaker().speak({ ticket: ticketFor(), text: 'Hello.' })
     assert.equal(response.body.code, code, `Fish ${status}`)
   }
-  // Fish not answering at all (the network failed, not a timeout) is the third.
+  // Fish not answering (the network failed) or erroring (5xx) may be a blip: coded 'down', and the page
+  // switches only after two in a row.
   stubFish(t, () => { throw new TypeError('fetch failed') })
   const unreachable = await speaker().speak({ ticket: ticketFor(), text: 'Hello.' })
-  assert.equal(unreachable.body.code, 'unreachable')
-  // A busy Fish, a slow one or a one-off failure may be fine on the next piece: no code, no switch.
-  for (const status of [429, 500, 503]) {
+  assert.equal(unreachable.body.code, 'down')
+  for (const status of [500, 503]) {
+    stubFish(t, refusal(status))
+    assert.equal((await speaker().speak({ ticket: ticketFor(), text: 'Hello.' })).body.code, 'down', `Fish ${status}`)
+  }
+  // A busy Fish or a slow one is neither: no code.
+  for (const status of [429]) {
     stubFish(t, refusal(status))
     const response = await speaker().speak({ ticket: ticketFor(), text: 'Hello.' })
     assert.equal(response.body.code, undefined, `Fish ${status} should not switch the voice`)
