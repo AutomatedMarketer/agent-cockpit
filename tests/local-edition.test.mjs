@@ -7,6 +7,8 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { askCode } from '../local/starter-auth.mjs'
 import { gitEnvironment, findGit } from '../api/_repo.js'
 import { applyLocalEnv } from '../local/gate.mjs'
 import { applyStudentEnv, resolveTeamFolder, runStart, picturesDirFor, readRunning } from '../local/start.mjs'
@@ -187,7 +189,9 @@ test('start with a team folder: the board shows the real team, and nothing about
       // The signed-in browser: open the link the way a browser does, keep the cookie.
       const link = await (async () => {
         const secret = readRunning(stateDir).secret
-        const answer = await realFetch(`http://127.0.0.1:${result.port}/starter/open-link`, { method: 'POST', headers: { 'x-starter-secret': secret } })
+        const nonce = randomBytes(16).toString('hex')
+        const time = String(Date.now())
+        const answer = await realFetch(`http://127.0.0.1:${result.port}/starter/open-link`, { method: 'POST', headers: { 'x-starter-time': time, 'x-starter-nonce': nonce, 'x-starter-code': askCode(secret, time, nonce) } })
         return (await answer.json()).link
       })()
       const opened = await realFetch(link, { redirect: 'manual' })

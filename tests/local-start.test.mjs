@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import net from 'node:net'
+import { randomBytes } from 'node:crypto'
+import { askCode, answerCode } from '../local/starter-auth.mjs'
 import { spawnSync } from 'node:child_process'
 import { runStart, stateDirFor, openerFor, pickPort, readRunning } from '../local/start.mjs'
 import { createRequire } from 'node:module'
@@ -69,7 +71,7 @@ test('start: the board comes up, the "browser" is given a FILE (not the link), a
     assert.ok(link, 'the launcher file should send the browser to the one-time link')
     assert.ok(!opened[0].file.includes('open-board') && !opened[0].file.includes('t='), 'the file NAME must not hold the link')
     const first = await fetch(link, { redirect: 'manual' })
-    assert.equal(first.status, 303)
+    assert.equal(first.status, 200)
     assert.equal((await fetch(link, { redirect: 'manual' })).status, 403)
   })
 })
@@ -121,8 +123,8 @@ test('start: a second double-click gets a fresh link from the running board, not
     assert.equal(opened.length, 2)
     const [one, two] = opened.map((entry) => linkIn(entry.text))
     assert.notEqual(one, two)
-    assert.equal((await fetch(two, { redirect: 'manual' })).status, 303, 'the fresh link should work')
-    assert.equal((await fetch(one, { redirect: 'manual' })).status, 303, 'the first link was not used yet, so it still works too')
+    assert.equal((await fetch(two, { redirect: 'manual' })).status, 200, 'the fresh link should work')
+    assert.equal((await fetch(one, { redirect: 'manual' })).status, 200, 'the first link was not used yet, so it still works too')
   })
 })
 
@@ -161,26 +163,65 @@ test('start: garbage in the state file is ignored', async () => {
 
 // ---- the endpoint a second start uses ---------------------------------------------------------------
 
-test('starter endpoint: needs the run\'s secret, POST only, refuses a browser, and sets no cookie', async () => {
+// What a second Start Board sends: a nonce, the time, and a code made from the run's secret. Never the secret.
+function askHeaders(secret, { time = String(Date.now()), nonce = randomBytes(16).toString('hex'), code } = {}) {
+  return { 'x-starter-time': time, 'x-starter-nonce': nonce, 'x-starter-code': code ?? askCode(secret, time, nonce) }
+}
+
+test('starter endpoint: answers a good ask with a link and a proof only the real board can make', async () => {
   await withStarter(async ({ start, stateDir }) => {
     const { port } = await start()
     const secret = readRunning(stateDir).secret
     const url = `http://127.0.0.1:${port}/starter/open-link`
-    const ask = (init) => fetch(url, { method: 'POST', redirect: 'manual', ...init })
-    assert.equal((await ask({ headers: { 'x-starter-secret': secret } })).status, 200)
-    for (const headers of [{}, { 'x-starter-secret': 'wrong' }, { 'x-starter-secret': secret.slice(0, -1) }, { 'x-starter-secret': secret + 'x' }, { 'x-starter-secret': '' }]) {
-      const answer = await ask({ headers })
+    const nonce = randomBytes(16).toString('hex')
+    const good = await fetch(url, { method: 'POST', headers: askHeaders(secret, { nonce }) })
+    assert.equal(good.status, 200)
+    assert.equal(good.headers.get('set-cookie'), null)
+    assert.equal(good.headers.get('cache-control'), 'no-store')
+    const text = await good.text()
+    assert.ok(!text.includes(secret), 'the secret was sent back')
+    const { link, proof } = JSON.parse(text)
+    assert.match(link, new RegExp(`^http://127\\.0\\.0\\.1:${port}/open-board\\?t=`))
+    assert.equal(proof, answerCode(secret, nonce, link))
+    assert.notEqual(proof, answerCode(secret, nonce, `${link}x`), 'the proof must cover the link')
+  })
+})
+
+test('starter endpoint: refuses a wrong code, a stale or future time, a reused nonce, the bare secret, a GET and a browser', async () => {
+  await withStarter(async ({ start, stateDir }) => {
+    const { port } = await start()
+    const secret = readRunning(stateDir).secret
+    const url = `http://127.0.0.1:${port}/starter/open-link`
+    const ask = (headers) => fetch(url, { method: 'POST', redirect: 'manual', headers })
+    const now = Date.now()
+    const nonce = randomBytes(16).toString('hex')
+    const bad = [
+      {},
+      { 'x-starter-secret': secret },
+      askHeaders('y'.repeat(48)),
+      askHeaders(secret, { code: 'short' }),
+      askHeaders(secret, { code: askCode(secret, String(now), 'someone-elses-nonce-0000') }),
+      askHeaders(secret, { time: String(now - 120_000) }),
+      askHeaders(secret, { time: String(now + 120_000) }),
+      askHeaders(secret, { time: 'soon' }),
+      { ...askHeaders(secret), 'x-starter-nonce': 'tiny' },
+      { ...askHeaders(secret), 'x-starter-nonce': 'x'.repeat(200) },
+      { ...askHeaders(secret), 'x-starter-nonce': 'has spaces in it ... ok?' }
+    ]
+    for (const headers of bad) {
+      const answer = await ask(headers)
       assert.equal(answer.status, 403, JSON.stringify(headers))
       assert.doesNotMatch(await answer.text(), /open-board/)
     }
-    assert.equal((await fetch(url, { headers: { 'x-starter-secret': secret } })).status, 401, 'a GET is not an ask')
+    // A good ask works once; the same ask again (a replay) does not.
+    const once = askHeaders(secret, { nonce })
+    assert.equal((await ask(once)).status, 200)
+    assert.equal((await ask(once)).status, 403, 'a replayed ask was answered')
+    assert.equal((await fetch(url, { headers: askHeaders(secret) })).status, 401, 'a GET is not an ask')
     for (const site of ['same-site', 'cross-site', 'same-origin']) {
-      const answer = await ask({ headers: { 'x-starter-secret': secret, 'Sec-Fetch-Site': site, Origin: 'https://evil.example' } })
-      assert.equal(answer.status, 403, `a browser call (${site}) with the secret was answered`)
+      const answer = await ask({ ...askHeaders(secret), 'Sec-Fetch-Site': site, Origin: 'https://evil.example' })
+      assert.equal(answer.status, 403, `a browser call (${site}) was answered`)
     }
-    const good = await ask({ headers: { 'x-starter-secret': secret } })
-    assert.equal(good.headers.get('set-cookie'), null)
-    assert.equal(good.headers.get('cache-control'), 'no-store')
   })
 })
 
@@ -188,8 +229,9 @@ test('starter endpoint: a wrong Host is refused before anything', async () => {
   await withStarter(async ({ start, stateDir }) => {
     const { port } = await start()
     const secret = readRunning(stateDir).secret
+    const headers = askHeaders(secret)
     const answer = await new Promise((resolve) => {
-      const socket = net.connect(port, '127.0.0.1', () => socket.write(`POST /starter/open-link HTTP/1.1\r\nHost: evil.example\r\nx-starter-secret: ${secret}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`))
+      const socket = net.connect(port, '127.0.0.1', () => socket.write(`POST /starter/open-link HTTP/1.1\r\nHost: evil.example\r\nx-starter-time: ${headers['x-starter-time']}\r\nx-starter-nonce: ${headers['x-starter-nonce']}\r\nx-starter-code: ${headers['x-starter-code']}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`))
       let text = ''
       socket.on('data', (data) => { text += data })
       socket.on('close', () => resolve(text))
@@ -197,6 +239,37 @@ test('starter endpoint: a wrong Host is refused before anything', async () => {
     })
     assert.match(answer, /^HTTP\/1\.1 421/)
     assert.doesNotMatch(answer, /open-board/)
+  })
+})
+
+test('start: the second double-click never sends the secret, and only trusts an answer with the right proof', async () => {
+  await withStarter(async ({ start, stateDir, opened }) => {
+    const first = await start()
+    const secret = readRunning(stateDir).secret
+    const sent = []
+    // A program that took over the port: it answers like the real thing, with a plausible link, but cannot prove it.
+    const impostor = async (url, init) => {
+      sent.push(JSON.stringify({ url, headers: init.headers }))
+      return new Response(JSON.stringify({ link: `http://127.0.0.1:${first.port}/open-board?t=stolen`, proof: 'not-a-real-proof' }), { status: 200 })
+    }
+    const second = await start({ fetchImpl: impostor })
+    assert.equal(second.mode, 'started', 'an answer without the right proof must not be trusted')
+    assert.ok(opened.every((entry) => !entry.text.includes('stolen')), 'the browser was opened on the impostor\'s page')
+    assert.equal(sent.length, 1)
+    assert.ok(!sent[0].includes(secret), 'the secret was sent to whatever listens on the port')
+    const real = await start()
+    assert.equal(real.mode, 'reopened')
+  })
+})
+
+test('start: the ask a real second double-click sends does not contain the secret either', async () => {
+  await withStarter(async ({ start, stateDir }) => {
+    await start()
+    const secret = readRunning(stateDir).secret
+    const sent = []
+    await start({ fetchImpl: async (url, init) => { sent.push(JSON.stringify(init.headers)); return fetch(url, init) } })
+    assert.equal(sent.length, 1)
+    assert.ok(!sent[0].includes(secret))
   })
 })
 
@@ -381,7 +454,11 @@ test('start: a link that does not point back to the board that was asked is not 
   await withStarter(async ({ start, stateDir, opened }) => {
     const first = await start()
     const secret = readRunning(stateDir).secret
-    const lying = async () => new Response(JSON.stringify({ link: 'http://evil.example/steal' }), { status: 200 })
+    // Even with a correct proof for it, a link that points somewhere else is not opened.
+    const lying = async (url, init) => {
+      const link = 'http://evil.example/steal'
+      return new Response(JSON.stringify({ link, proof: answerCode(secret, init.headers['x-starter-nonce'], link) }), { status: 200 })
+    }
     const second = await start({ fetchImpl: lying })
     assert.equal(second.mode, 'started', 'a foreign link must not be trusted; a real board is started instead')
     assert.notEqual(second.port, first.port)
@@ -394,7 +471,8 @@ test('start: a link with quotes or tags in it cannot break out of the launcher p
   await withStarter(async ({ start, stateDir, opened }) => {
     const first = await start()
     const nasty = `http://127.0.0.1:${first.port}/open-board?t=a"><img src=x onerror=alert(1)><script>alert(2)</script>`
-    const second = await start({ fetchImpl: async () => new Response(JSON.stringify({ link: nasty }), { status: 200 }) })
+    const secret = readRunning(stateDir).secret
+    const second = await start({ fetchImpl: async (url, init) => new Response(JSON.stringify({ link: nasty, proof: answerCode(secret, init.headers['x-starter-nonce'], nasty) }), { status: 200 }) })
     assert.equal(second.mode, 'reopened')
     const html = opened.at(-1).text
     assert.ok(!html.includes('"><img'), 'a quote closed the attribute')
@@ -412,5 +490,45 @@ test('state file: a port outside 1-65535 is refused even with a long secret', as
     }
     writeFileSync(join(stateDir, 'running.json'), JSON.stringify({ port: 4317, secret: 'z'.repeat(40) }))
     assert.deepEqual(readRunning(stateDir), { port: 4317, secret: 'z'.repeat(40) })
+  })
+})
+
+// ---- the state folder is for the current user only (Windows) --------------------------------------------
+
+import { lockToCurrentUser } from '../local/start.mjs'
+import { execFileSync } from 'node:child_process'
+import { userInfo } from 'node:os'
+
+test('private folder: icacls is run by its full path from System32, without a shell, for the current user only', () => {
+  const calls = []
+  const state = String.raw`C:\Users\a\AppData\Local\Agent Board\state`
+  lockToCurrentUser(state, { platform: 'win32', env: { SystemRoot: String.raw`C:\Windows` }, user: 'a', run: (...args) => calls.push(args) })
+  assert.equal(calls.length, 1)
+  const [program, args, options] = calls[0]
+  assert.equal(program, String.raw`C:\Windows\System32\icacls.exe`)
+  assert.deepEqual(args, [state, '/inheritance:r', '/grant:r', 'a:(OI)(CI)F'])
+  assert.equal(options.shell, undefined)
+  assert.equal(options.cwd, String.raw`C:\Windows\System32`)
+  assert.equal(options.env.NoDefaultCurrentDirectoryInExePath, '1')
+})
+
+test('private folder: nothing is run off Windows, a missing SystemRoot is refused, and a failure says so plainly', () => {
+  let ran = false
+  lockToCurrentUser('/x', { platform: 'linux', env: {}, user: 'a', run: () => { ran = true } })
+  assert.equal(ran, false)
+  assert.throws(() => lockToCurrentUser('x', { platform: 'win32', env: {}, user: 'a', run: () => {} }), /SystemRoot/)
+  assert.throws(() => lockToCurrentUser('x', { platform: 'win32', env: { SystemRoot: String.raw`C:\Windows` }, user: 'a', run: () => { throw new Error('access denied') } }), /could not make its folder private/)
+})
+
+test('private folder: on this Windows PC the started board\'s state folder is open to the current user alone', { skip: process.platform !== 'win32' }, async () => {
+  await withStarter(async ({ start, stateDir }) => {
+    await start()
+    const system = join(process.env.SystemRoot, 'System32')
+    const shown = execFileSync(join(system, 'icacls.exe'), [stateDir], { encoding: 'utf8', cwd: system })
+    const who = shown.split(/\r?\n/).map((line) => line.replace(stateDir, '').trim()).filter((line) => /:\(/.test(line))
+    assert.ok(who.length >= 1, shown)
+    for (const line of who) assert.ok(line.toLowerCase().includes(userInfo().username.toLowerCase()), `someone else can open the folder: ${line}\n${shown}`)
+    assert.doesNotMatch(shown, /Everyone|Users:|Authenticated Users|CodexSandbox|SYSTEM|Administrators/i)
+    assert.ok(readRunning(stateDir), 'the board still works for its owner')
   })
 })

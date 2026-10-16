@@ -14,14 +14,15 @@
 //
 // Every program started here is an absolute path, from a neutral folder, never through a shell.
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { chmodSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { homedir, userInfo } from 'node:os'
+import { dirname, isAbsolute, join, win32 } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { startLocalBoard } from './server.mjs'
 import { OPEN_PATH, STARTER_PATH } from './gate.mjs'
+import { answerCode, askCode, codesMatch } from './starter-auth.mjs'
 
 export const BASE_PORT = 4317
 export const PORT_TRIES = 10
@@ -36,9 +37,24 @@ export function stateDirFor({ platform, env, home }) {
   return join(env.XDG_STATE_HOME || join(home, '.local', 'state'), 'agent-board')
 }
 
-function privateDir(path) {
+// Windows has no file modes. A folder under the user's profile usually inherits access for other
+// accounts (a sandbox user, a service), so the state folder is cut off from what it inherits and
+// given to the current user only. icacls by its full path, from System32, no shell.
+export function lockToCurrentUser(path, { platform = process.platform, env = process.env, user = userInfo().username, run = execFileSync } = {}) {
+  if (platform !== 'win32') return
+  if (!env.SystemRoot) throw new Error('SystemRoot is not set, so the board cannot make its folder private.')
+  const system = win32.join(env.SystemRoot, 'System32')
+  try {
+    run(win32.join(system, 'icacls.exe'), [path, '/inheritance:r', '/grant:r', `${user}:(OI)(CI)F`], { cwd: system, env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' }, stdio: 'ignore', windowsHide: true })
+  } catch {
+    throw new Error(`The board could not make its folder private to you (${path}). Run it from your own Windows account and try again.`)
+  }
+}
+
+function privateDir(path, { lock = false } = {}) {
   mkdirSync(path, { recursive: true, mode: 0o700 })
-  try { chmodSync(path, 0o700) } catch { /* Windows: the profile is already private */ }
+  try { chmodSync(path, 0o700) } catch { /* Windows: see lockToCurrentUser */ }
+  if (lock) lockToCurrentUser(path)
 }
 
 // Written to a temp name and renamed, so a reader never sees half a file.
@@ -189,15 +205,20 @@ async function askRunningBoard({ stateDir, fetchImpl }) {
   const running = readRunning(stateDir)
   if (!running) return null
   try {
+    // The secret itself is never sent: only a code made from it, over a fresh nonce and the time.
+    const nonce = randomBytes(16).toString('hex')
+    const time = String(Date.now())
     const answer = await fetchImpl(`http://127.0.0.1:${running.port}${STARTER_PATH}`, {
       method: 'POST',
-      headers: { 'x-starter-secret': running.secret },
+      headers: { 'x-starter-time': time, 'x-starter-nonce': nonce, 'x-starter-code': askCode(running.secret, time, nonce) },
       signal: AbortSignal.timeout(3000)
     })
     if (answer.status !== 200) return null
-    const { link } = await answer.json()
-    // Whatever answered must hand back a link to the same place, or it is not our board.
+    const { link, proof } = await answer.json()
+    // Whatever answered must hand back a link to the same place, and prove it knows the secret by a
+    // code over THIS nonce and THIS link - a different program that took over the port cannot.
     if (typeof link !== 'string' || !link.startsWith(`http://127.0.0.1:${running.port}${OPEN_PATH}?t=`)) return null
+    if (!codesMatch(proof, answerCode(running.secret, nonce, link))) return null
     return { link, port: running.port }
   } catch {
     return null
@@ -220,7 +241,7 @@ export async function runStart({
   teamFolder, // undefined: leave the settings alone (tests); null: not found, so stop; a path: use it
   teamFolderWhy = 'I could not find your team folder.'
 } = {}) {
-  privateDir(stateDir)
+  privateDir(stateDir, { lock: true })
 
   const already = await askRunningBoard({ stateDir, fetchImpl })
   if (already) {

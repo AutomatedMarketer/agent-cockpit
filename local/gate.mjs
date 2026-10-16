@@ -14,6 +14,7 @@
 // name never gets this far.
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { ASK_WINDOW_MS, answerCode, askCode, codesMatch } from './starter-auth.mjs'
 
 export const OPEN_PATH = '/open-board'
 // The port is in the name: two boards on one computer keep their own cookies (a browser shares
@@ -55,6 +56,7 @@ export function createLocalGate({ now = Date.now } = {}) {
   const viewKey = randomBytes(24).toString('hex') // what the handlers' own view gate is given
   const starterSecret = randomBytes(24).toString('hex') // how a second double-click asks for a fresh link
   const links = [] // { hash, expires, used }
+  const askedNonces = new Map() // a starter's ask is good once
 
   const mac = (nonce) => createHmac('sha256', runSecret).update(nonce).digest('base64url')
   const valueIsGood = (value) => {
@@ -104,24 +106,31 @@ export function createLocalGate({ now = Date.now } = {}) {
     if (!opensLink) {
       const fetchSite = String(request.headers['sec-fetch-site'] ?? '').toLowerCase()
       if (fetchSite === 'same-site' || fetchSite === 'cross-site') {
-        return refuse(response, 403, 'That did not come from the own page.', isApi)
+        return refuse(response, 403, "That did not come from the board's own page.", isApi)
       }
     }
 
     // The starter (a program, not a browser) asking the running board for a fresh link. It proves
-    // itself with this run's secret, which only the private state file holds. A browser stamps
+    // itself with a code made from this run's secret (which only the private state file holds) and
+    // never sends the secret itself. A browser stamps
     // Sec-Fetch-Site / Origin on what it sends, so anything carrying them is refused outright.
     if (pathname === STARTER_PATH && request.method === 'POST') {
       const fromBrowser = request.headers['sec-fetch-site'] !== undefined || request.headers.origin !== undefined
-      const given = request.headers['x-starter-secret']
-      if (fromBrowser || typeof given !== 'string' || !sameSecret(given, starterSecret)) {
-        return refuse(response, 403, 'No.', true)
-      }
+      const time = Number(request.headers['x-starter-time'])
+      const nonce = request.headers['x-starter-nonce']
+      const given = request.headers['x-starter-code']
+      const fresh = Number.isFinite(time) && Math.abs(now() - time) <= ASK_WINDOW_MS
+      const shapeOk = typeof nonce === 'string' && /^[\w-]{16,64}$/.test(nonce) && typeof given === 'string'
+      // The code is checked first and the nonce is spent only for a good one, so junk cannot fill the list.
+      const good = !fromBrowser && fresh && shapeOk && codesMatch(given, askCode(starterSecret, request.headers['x-starter-time'], nonce))
+      if (!good || askedNonces.has(nonce)) return refuse(response, 403, 'No.', true)
+      for (const [seen, at] of askedNonces) if (now() - at > 2 * ASK_WINDOW_MS) askedNonces.delete(seen)
+      askedNonces.set(nonce, now())
       const link = `http://127.0.0.1:${request.socket.localPort}${OPEN_PATH}?t=${issueOpenToken()}`
       response.statusCode = 200
       response.setHeader('Cache-Control', 'no-store')
       response.setHeader('Content-Type', 'application/json; charset=utf-8')
-      response.end(JSON.stringify({ link }))
+      response.end(JSON.stringify({ link, proof: answerCode(starterSecret, nonce, link) }))
       return false
     }
 
@@ -133,9 +142,13 @@ export function createLocalGate({ now = Date.now } = {}) {
       const nonce = randomBytes(24).toString('base64url')
       response.setHeader('Set-Cookie', `${cookieName(request.socket.localPort)}=${nonce}.${mac(nonce)}; Path=/; HttpOnly; SameSite=Strict`)
       response.setHeader('Cache-Control', 'no-store')
-      response.setHeader('Location', '/')
-      response.statusCode = 303
-      response.end()
+      // Not a redirect: Chrome treats the chain file -> link -> board as cross-site all the way, and a
+      // redirect would reach the board BEFORE the new SameSite=Strict cookie counts, be refused, and
+      // leave the one-time link spent. A page that moves on by itself starts a fresh navigation from
+      // the board's own address (the page's rules allow this; they only block inline script).
+      response.setHeader('Content-Type', 'text/html; charset=utf-8')
+      response.statusCode = 200
+      response.end('<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/"><title>Opening the board</title><p>Opening the board...</p>')
       return false
     }
 

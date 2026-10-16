@@ -49,11 +49,15 @@ test('without the cookie every page and api call is refused and shows nothing of
   })
 })
 
-test('the link opens the board once: a cookie is set, the browser is sent to /, and the cookie then works', async () => {
+test('the link opens the board once: a cookie is set, a page moves the browser on to /, and the cookie then works', async () => {
   await withBoard(async ({ board, url, open }) => {
     const { answer, cookie, setCookie } = await open(board.openLink())
-    assert.equal(answer.status, 303)
-    assert.equal(answer.headers.get('location'), '/', 'the link must not stay in the address bar')
+    assert.equal(answer.status, 200)
+    assert.equal(answer.headers.get('location'), null, 'a redirect reaches the board before the new cookie counts (Chrome), and is refused')
+    assert.match(answer.headers.get('content-type'), /^text\/html/)
+    const body = await answer.text()
+    assert.match(body, /<meta http-equiv="refresh" content="0;url=\/">/, 'the page must move the browser on to / by itself')
+    assert.doesNotMatch(body, /<script|[?&]t=/, 'no inline script (the page rules block it) and no link in the page')
     assert.equal(answer.headers.get('cache-control'), 'no-store')
     assert.match(setCookie, new RegExp(`^${cookieName(board.port)}=`))
     const page = await fetch(url('/'), { headers: { Cookie: cookie } })
@@ -76,7 +80,7 @@ test('a link works only once: the second use is refused and sets no cookie', asy
   await withBoard(async ({ board, url, open }) => {
     const link = board.openLink()
     const first = await open(link)
-    assert.equal(first.answer.status, 303)
+    assert.equal(first.answer.status, 200)
     const second = await open(link)
     assert.equal(second.answer.status, 403)
     assert.equal(second.cookie, null)
@@ -89,7 +93,7 @@ test('a link is refused after 2 minutes, and still good just before', async () =
     const late = board.openLink()
     const justInTime = board.openLink()
     clock.time += LINK_LIFETIME_MS - 1
-    assert.equal((await open(justInTime)).answer.status, 303)
+    assert.equal((await open(justInTime)).answer.status, 200)
     clock.time += 2
     const refused = await open(late)
     assert.equal(refused.answer.status, 403)
@@ -108,7 +112,7 @@ test('a wrong, missing, shortened or reshaped link token is refused', async () =
       assert.equal(answer.headers.get('set-cookie'), null)
     }
     assert.equal((await fetch(url(`${OPEN_PATH}?t=${token}`), { method: 'POST', redirect: 'manual' })).status, 401, 'only a GET may use a link')
-    assert.equal((await fetch(url(`${OPEN_PATH}?t=${token}`), { redirect: 'manual' })).status, 303, 'the right token was spent by a wrong method')
+    assert.equal((await fetch(url(`${OPEN_PATH}?t=${token}`), { redirect: 'manual' })).status, 200, 'the right token was spent by a wrong method')
   })
 })
 
@@ -256,7 +260,7 @@ test('the link is printed once by the command line and appears nowhere else, eve
       child.on('exit', () => reject(new Error(`exited early: ${output}`)))
     })
     const token = new URL(link).searchParams.get('t')
-    assert.equal((await fetch(link, { redirect: 'manual' })).status, 303)
+    assert.equal((await fetch(link, { redirect: 'manual' })).status, 200)
     assert.equal((await fetch(link, { redirect: 'manual' })).status, 403)
     await fetch(`${link}&extra=1`, { redirect: 'manual' })
     await new Promise((done) => setTimeout(done, 300))
@@ -301,7 +305,7 @@ test('the one-time link may be opened from anywhere (a file the starter wrote co
   await withBoard(async ({ board, open }) => {
     const link = board.openLink()
     const answer = await fetch(link, { redirect: 'manual', headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' } })
-    assert.equal(answer.status, 303)
+    assert.equal(answer.status, 200)
     assert.ok(open)
   })
 })
@@ -329,5 +333,25 @@ test('the cookie name carries the port, so two boards on one computer do not kno
       assert.equal((await fetch(firstUrl('/'), { headers: { Cookie: both } })).status, 200)
       assert.equal((await fetch(secondUrl('/'), { headers: { Cookie: both } })).status, 200)
     })
+  })
+})
+
+test('a refusal says "the board\'s own page" in both places it can be given', async () => {
+  await withBoard(async ({ board, url, open }) => {
+    const { cookie } = await open(board.openLink())
+    const fromSite = await fetch(url('/api/state'), { headers: { Cookie: cookie, 'Sec-Fetch-Site': 'cross-site' } })
+    assert.equal((await fromSite.json()).error, "That did not come from the board's own page.")
+    const changed = await fetch(url('/api/fire'), { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json', Origin: 'https://evil.example' }, body: '{}' })
+    assert.equal((await changed.json()).error, "That did not come from the board's own page.")
+  })
+})
+
+test('the manifest link asks for the cookie, so the signed-in board can load it (and the first page stays small)', async () => {
+  const index = readFileSync(join(ROOT, 'public', 'index.html'), 'utf8')
+  assert.match(index, /<link rel="manifest" href="\/manifest\.webmanifest" crossorigin="use-credentials"/)
+  await withBoard(async ({ board, url, open }) => {
+    assert.equal((await fetch(url('/manifest.webmanifest'))).status, 401, 'without the cookie it is refused, like everything else')
+    const { cookie } = await open(board.openLink())
+    assert.equal((await fetch(url('/manifest.webmanifest'), { headers: { Cookie: cookie } })).status, 200)
   })
 })
