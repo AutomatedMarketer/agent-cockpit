@@ -16,6 +16,7 @@ import { isValidSlug } from './_lib.js'
 import { ORDERS_OFF, MAILBOX_ORDERS_OFF } from './_voice.js'
 import { mailboxConfig, mailboxFireKeyOk, MAILBOX_CONTRACT } from './_mailbox.js'
 import { shapeMailbox, MAILBOX_FOLDER } from './state.js'
+import { repoFolder, repoReader } from './_repo.js'
 
 // The jobs the assistant is offered by name. A list it can be shown in one tool, sorted so the
 // session is the same every call.
@@ -91,6 +92,23 @@ export function ordersView(config) {
 const MAC_STATUS_WAIT_MS = 3000
 export async function readMacStatus(env, runner, now = Date.now()) {
   if (typeof runner !== 'string' || !MAILBOX_CONTRACT.runnerShape.test(runner)) return null
+  const folder = repoFolder(env)
+  if (folder) {
+    // The same status file, from the team folder instead of GitHub; the same three-second wait.
+    const branch = (typeof env.GITHUB_BRANCH === 'string' && env.GITHUB_BRANCH.trim()) || 'main'
+    const path = `${MAILBOX_FOLDER}/${runner}.json`
+    try {
+      const body = await Promise.race([
+        repoReader(folder).file(branch, path),
+        new Promise((resolve) => setTimeout(() => resolve(null), MAC_STATUS_WAIT_MS).unref?.())
+      ])
+      if (body === null) return null
+      const shaped = shapeMailbox([[path, body]], now, 1)
+      return shaped.status === 'ok' ? shaped.computers[0] : null
+    } catch {
+      return null
+    }
+  }
   const owner = typeof env.GITHUB_OWNER === 'string' ? env.GITHUB_OWNER.trim() : ''
   const repo = typeof env.GITHUB_REPO === 'string' ? env.GITHUB_REPO.trim() : ''
   if (!MAILBOX_CONTRACT.repoShape.test(`${owner}/${repo}`)) return null

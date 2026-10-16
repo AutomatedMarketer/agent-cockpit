@@ -43,6 +43,7 @@ import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest } from './_l
 import { viewGate } from './_gate.js'
 import { mailboxConfig, queueOrder, mailboxFireKeyOk, MAILBOX_FIRE_KEY_MIN } from './_mailbox.js'
 import { pictureStore, failureAnswer } from './_picture-store.js'
+import { repoFolder, repoReader } from './_repo.js'
 export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
 
 // A routine is fired at its own address on the Claude Code routines API, with its own bearer token
@@ -456,6 +457,8 @@ function githubHeaders() {
 }
 
 async function fetchRepoFile({ owner, repo, branch }, path) {
+  const folder = repoFolder()
+  if (folder) return repoReader(folder).file(branch, path)
   const response = await fetch(
     `${GITHUB}/repos/${owner}/${repo}/contents/${path}?ref=${branch}`,
     { headers: githubHeaders() }
@@ -627,7 +630,7 @@ async function handle(request, response, { loadSdk }) {
       const owner = process.env.GITHUB_OWNER
       const repo = process.env.GITHUB_REPO
       const branch = process.env.GITHUB_BRANCH || 'main'
-      if (!owner || !repo) {
+      if (!repoFolder() && (!owner || !repo)) {
         response.status(500).json({ error: 'Set GITHUB_OWNER and GITHUB_REPO in your hosting environment.' })
         return
       }
@@ -727,7 +730,7 @@ async function handle(request, response, { loadSdk }) {
     const owner = process.env.GITHUB_OWNER
     const repo = process.env.GITHUB_REPO
     const branch = process.env.GITHUB_BRANCH || 'main'
-    if (!owner || !repo) {
+    if (!repoFolder() && (!owner || !repo)) {
       response.status(500).json({ error: 'Set GITHUB_OWNER and GITHUB_REPO in your hosting environment.' })
       return
     }
@@ -855,7 +858,7 @@ async function handle(request, response, { loadSdk }) {
   const owner = process.env.GITHUB_OWNER
   const repo = process.env.GITHUB_REPO
   const branch = process.env.GITHUB_BRANCH || 'main'
-  if (!owner || !repo) {
+  if (!repoFolder() && (!owner || !repo)) {
     response.status(500).json({ error: 'Set GITHUB_OWNER and GITHUB_REPO in your hosting environment.' })
     return
   }

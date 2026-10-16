@@ -9,7 +9,7 @@
 // read from one commit, every answer sits behind the view gate and is kept by nobody.
 
 import { viewGate } from './_gate.js'
-import { config, gh, headCommit, rawFile, sinceOf, READ_FAILED } from './state.js'
+import { config, repoTree, headCommit, rawFile, sinceOf, READ_FAILED } from './state.js'
 import { buildTeamGraph, isTeamNote, noteOrder, TEAM_CAPS } from './_team-graph.js'
 import { shapeVaults, isVaultsFile, VAULTS_MAX_FILES, VAULTS_MAX_BYTES } from './_vaults.js'
 
@@ -51,7 +51,6 @@ export default async function handler(request, response) {
   }
   try {
     const base = config()
-    const { owner, repo } = base
     const head = await headCommit(base)
     if (head !== null && head === sinceOf(request)) {
       response.status(200).json({ unchanged: true, commit: head })
@@ -65,7 +64,7 @@ export default async function handler(request, response) {
       }
     }
     const settings = head === null ? base : { ...base, branch: head }
-    const tree = await gh(`/repos/${owner}/${repo}/git/trees/${settings.branch}?recursive=1`)
+    const tree = await repoTree(settings, settings.branch)
     const blobs = (tree.tree ?? []).filter((node) => node.type === 'blob')
     const sizes = Object.fromEntries(blobs.map((node) => [node.path, node.size ?? null]))
     const paths = blobs.map((node) => node.path)

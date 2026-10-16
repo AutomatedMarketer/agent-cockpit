@@ -34,6 +34,7 @@ import {
 } from './_workflows.js'
 import { parseSimpleYaml } from './_yaml-lite.js'
 import { shapeReadiness } from './_readiness.js'
+import { repoFolder, repoReader } from './_repo.js'
 
 const GITHUB = 'https://api.github.com'
 const AGENT_DIR = '.claude/agents'
@@ -69,6 +70,8 @@ export function config() {
   const owner = process.env.GITHUB_OWNER
   const repo = process.env.GITHUB_REPO
   const branch = process.env.GITHUB_BRANCH || 'main'
+  // Reading a folder on this computer needs no GitHub owner or repo name.
+  if (repoFolder() && (!owner || !repo)) return { owner: owner || 'local', repo: repo || 'team-folder', branch }
   if (!owner || !repo) {
     throw ourError('Set GITHUB_OWNER and GITHUB_REPO in your hosting environment, then redeploy.')
   }
@@ -112,6 +115,14 @@ export async function gh(path) {
 // The id of the commit at the head of the branch, and nothing else: one small call. null when GitHub
 // cannot say - the board is then read from the branch by name, and has no commit to offer.
 export async function headCommit({ owner, repo, branch }) {
+  const folder = repoFolder()
+  if (folder) {
+    try {
+      return await repoReader(folder).head(branch)
+    } catch {
+      return null
+    }
+  }
   try {
     const response = await fetch(`${GITHUB}/repos/${owner}/${repo}/commits/${branch}`, { headers: headers('application/vnd.github.sha') })
     if (!response.ok) return null
@@ -139,7 +150,26 @@ export function sinceOf(request) {
   return typeof value === 'string' && COMMIT_ID.test(value) ? value : null
 }
 
+// Reading a folder with no GITHUB_OWNER / GITHUB_REPO set: the names come from the folder's own `origin`
+// address, so the repo link on the page points at the real repo. Anything else is returned as it is.
+export async function namedFromOrigin(base) {
+  const folder = repoFolder()
+  if (!folder || (process.env.GITHUB_OWNER && process.env.GITHUB_REPO)) return base
+  const names = await repoReader(folder).origin().catch(() => null)
+  return names ? { ...base, ...names } : base
+}
+
+// Every file path in the repo with its size: GitHub's tree call, or the same list from the git folder.
+// `ref` is a whole commit id, or the branch name when the head could not be found.
+export async function repoTree({ owner, repo }, ref) {
+  const folder = repoFolder()
+  if (folder) return repoReader(folder).tree(ref)
+  return gh(`/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`)
+}
+
 export async function rawFile({ owner, repo, branch }, filePath) {
+  const folder = repoFolder()
+  if (folder) return repoReader(folder).file(branch, filePath)
   const response = await fetch(
     `${GITHUB}/repos/${owner}/${repo}/contents/${encodeURI(filePath)}?ref=${branch}`,
     { headers: headers('application/vnd.github.raw') }
@@ -2456,7 +2486,7 @@ async function handle(request, response, store) {
     return
   }
   try {
-    const base = config()
+    const base = await namedFromOrigin(config())
     const { owner, repo, branch } = base
     const now = Date.now()
 
@@ -2479,7 +2509,7 @@ async function handle(request, response, store) {
     const settings = head === null ? base : { ...base, branch: head }
 
     // One tree call gives every path in the repo. Cheaper than walking directories.
-    const tree = await gh(`/repos/${owner}/${repo}/git/trees/${settings.branch}?recursive=1`)
+    const tree = await repoTree(settings, settings.branch)
     const blobs = (tree.tree ?? []).filter((node) => node.type === 'blob')
     const paths = blobs.map((node) => node.path)
     const sizes = Object.fromEntries(blobs.map((node) => [node.path, node.size ?? null]))
