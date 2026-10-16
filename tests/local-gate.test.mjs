@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
+import { request as httpRequest } from 'node:http'
 import { startLocalBoard } from '../local/server.mjs'
 import { LINK_LIFETIME_MS, OPEN_PATH, cookieName, createLocalGate, applyLocalEnv } from '../local/gate.mjs'
 
@@ -353,5 +354,67 @@ test('the manifest link asks for the cookie, so the signed-in board can load it 
     assert.equal((await fetch(url('/manifest.webmanifest'))).status, 401, 'without the cookie it is refused, like everything else')
     const { cookie } = await open(board.openLink())
     assert.equal((await fetch(url('/manifest.webmanifest'), { headers: { Cookie: cookie } })).status, 200)
+  })
+})
+
+// ---- round 3 ------------------------------------------------------------------------------------------
+
+test('the sign-in refusal tells the student what to do (Start Board again), for pages and api calls', async () => {
+  await withBoard(async ({ url }) => {
+    const page = await fetch(url('/'))
+    assert.equal(page.status, 401)
+    assert.equal(await page.text(), 'Double-click Start Board again to open the board.')
+    const api = await fetch(url('/api/state'))
+    assert.equal(api.status, 401)
+    assert.equal((await api.json()).error, 'Double-click Start Board again to open the board.')
+    assert.doesNotMatch(readFileSync(join(ROOT, 'local', 'gate.mjs'), 'utf8'), /link shown in the window/)
+  })
+})
+
+// Node's fetch stamps its own Sec-Fetch-Mode on a call, so a browser's page visit is sent with http.request.
+function rawRequest(port, path, method, headers) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({ host: '127.0.0.1', port, path, method, headers }, (response) => {
+      const chunks = []
+      response.on('data', (chunk) => chunks.push(chunk))
+      response.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8')
+        resolve({ status: response.statusCode, text: async () => body })
+      })
+    })
+    request.on('error', reject)
+    request.end(method === 'POST' ? '{}' : undefined)
+  })
+}
+
+test('arriving from another page (an email, Notion, a course page): a tiny page that goes to the same address again', async () => {
+  await withBoard(async ({ board, url, open }) => {
+    const { cookie } = await open(board.openLink())
+    const arrive = (path, headers = {}) => rawRequest(board.port, path, 'GET', { Cookie: cookie, 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document', ...headers })
+    for (const site of ['cross-site', 'same-site']) {
+      const hop = await arrive('/', { 'Sec-Fetch-Site': site })
+      assert.equal(hop.status, 200)
+      const text = await hop.text()
+      assert.match(text, /<meta http-equiv="refresh" content="0;url=\/">/)
+      assert.doesNotMatch(text, /board's own page|<script/i)
+      assert.ok(text.length < 400, 'the hop page must hold nothing of the board')
+    }
+    const kept = await (await arrive('/?tab=team')).text()
+    assert.match(kept, /content="0;url=\/\?tab=team"/)
+    const escaped = await (await arrive('/?a="><script>alert(1)</script>')).text()
+    assert.doesNotMatch(escaped, /"><script>/)
+    // Everything else from another site is still refused, with the old words.
+    for (const [path, headers, method] of [
+      ['/api/state', {}, 'GET'],
+      ['/app.js', { 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'script' }, 'GET'],
+      ['/', { 'Sec-Fetch-Dest': 'iframe' }, 'GET'],
+      ['/', { 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Dest': 'empty' }, 'GET'],
+      ['/', {}, 'POST'],
+      ['//evil.example/x', {}, 'GET']
+    ]) {
+      const answer = await rawRequest(board.port, path, method, { Cookie: cookie, 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document', ...headers })
+      assert.equal(answer.status, 403, `${method} ${path} ${JSON.stringify(headers)} gave ${answer.status}`)
+      assert.doesNotMatch(await answer.text(), /refresh/)
+    }
   })
 })

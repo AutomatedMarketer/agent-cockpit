@@ -214,8 +214,10 @@ test('the README quotes the number of tests the suite actually reports', () => {
     encoding: 'utf8',
     env
   })
-  const reported = /^\s*(?:ℹ|#)\s*pass\s+(\d+)\s*$/m.exec(run.stdout ?? '')
-  assert.ok(reported, "could not read a pass count out of the suite's own output")
+  // The count of ALL tests, not of passing ones: a test that skips itself on another operating system
+  // (a Windows-only check on a Mac, no Chrome here) changes how many pass but not how many there are.
+  const reported = /^\s*(?:ℹ|#)\s*tests\s+(\d+)\s*$/m.exec(run.stdout ?? '')
+  assert.ok(reported, "could not read a test count out of the suite's own output")
 
   const readme = readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8')
   const claims = [...readme.matchAll(/(\d+) tests/g)].map((found) => found[1])

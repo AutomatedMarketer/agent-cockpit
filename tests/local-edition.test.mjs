@@ -234,3 +234,17 @@ test('start: the pictures folder is created, private to the user, and inside the
     team.done()
   }
 })
+
+test('team folder: a network path (two slashes or two backslashes) is refused, so nothing signs in to a server', () => {
+  const board = mkdtempSync(join(tmpdir(), 'edition-board-'))
+  try {
+    for (const path of ['//server/share/team', String.fromCharCode(92, 92) + 'server' + String.fromCharCode(92) + 'share', String.fromCharCode(92, 92) + '?' + String.fromCharCode(92) + 'UNC' + String.fromCharCode(92) + 'server' + String.fromCharCode(92) + 'x', '//127.0.0.1/x']) {
+      writeFileSync(join(board, 'board.json'), JSON.stringify({ teamFolder: path }))
+      const answer = resolveTeamFolder({ boardDir: board, stateDir: join(board, 'state') })
+      assert.equal(answer.folder, null, path)
+      assert.match(answer.why, /network folder/, path)
+    }
+  } finally {
+    rmSync(board, { recursive: true, force: true })
+  }
+})

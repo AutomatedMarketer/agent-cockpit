@@ -532,3 +532,31 @@ test('private folder: on this Windows PC the started board\'s state folder is op
     assert.ok(readRunning(stateDir), 'the board still works for its owner')
   })
 })
+
+// ---- round 3 ------------------------------------------------------------------------------------------
+
+import { OPENED_SAY } from '../local/start.mjs'
+
+test('private folder: the grant names DOMAIN\\user, so a same-named account elsewhere is not the one let in', () => {
+  const calls = []
+  lockToCurrentUser(String.raw`C:\s`, { platform: 'win32', env: { SystemRoot: String.raw`C:\Windows`, USERDOMAIN: 'MYPC' }, user: 'nuno', run: (...args) => calls.push(args) })
+  assert.equal(calls[0][1][3], String.raw`MYPC\nuno:(OI)(CI)F`)
+  const other = []
+  lockToCurrentUser(String.raw`C:\s`, { platform: 'win32', env: { SystemRoot: String.raw`C:\Windows` }, user: 'nuno', domain: 'CORP', run: (...args) => other.push(args) })
+  assert.equal(other[0][1][3], String.raw`CORP\nuno:(OI)(CI)F`)
+})
+
+test('start window: says in plain words where to look, short, for a first start and a second double-click', async () => {
+  await withStarter(async ({ start, logged }) => {
+    await start()
+    await start()
+    const lines = logged.filter((line) => line === OPENED_SAY)
+    assert.equal(lines.length, 2, logged.join('\n'))
+    assert.equal(OPENED_SAY, "The board opened in your browser. If you don't see it, look in your other browser windows.")
+    assert.ok(logged.every((line) => line.length < 120), 'a line in the Start window is too long to read at a glance')
+  })
+})
+
+test('files: .gitignore keeps board.json (this computer\'s team folder) out of commits', () => {
+  assert.match(readFileSync(join(ROOT, '.gitignore'), 'utf8'), /^board\.json\s*$/m)
+})

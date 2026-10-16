@@ -106,6 +106,19 @@ export function createLocalGate({ now = Date.now } = {}) {
     if (!opensLink) {
       const fetchSite = String(request.headers['sec-fetch-site'] ?? '').toLowerCase()
       if (fetchSite === 'same-site' || fetchSite === 'cross-site') {
+        // A person arriving from another page - a link in an email, Notion, a course page - is a
+        // top-level page visit, not a call: show a tiny page (nothing of the board) that goes to the
+        // same address again, from the board's own origin, where the cookie is sent. Only for a plain
+        // page address; api calls, pictures, scripts, frames and anything that changes stay refused.
+        const visit = request.method === 'GET' && !isApi && request.headers['sec-fetch-mode'] === 'navigate' && request.headers['sec-fetch-dest'] === 'document'
+        const here = String(request.url)
+        if (visit && here.startsWith('/') && !here.startsWith('//') && !here.includes(String.fromCharCode(92))) {
+          response.statusCode = 200
+          response.setHeader('Cache-Control', 'no-store')
+          response.setHeader('Content-Type', 'text/html; charset=utf-8')
+          response.end(`<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${htmlEscape(here)}"><title>Opening the board</title><p>Opening the board...</p>`)
+          return false
+        }
         return refuse(response, 403, "That did not come from the board's own page.", isApi)
       }
     }
@@ -153,7 +166,7 @@ export function createLocalGate({ now = Date.now } = {}) {
     }
 
     if (!cookieIsGood(readCookies(request.headers, cookieName(request.socket.localPort)))) {
-      return refuse(response, 401, 'Open the board with the link shown in the window that started it.', isApi)
+      return refuse(response, 401, 'Double-click Start Board again to open the board.', isApi)
     }
     // Every change must come from the board's own page: another site's page can make the browser
     // send the cookie only with a stamp that says so (and the cookie is SameSite=Strict as well).
@@ -166,6 +179,8 @@ export function createLocalGate({ now = Date.now } = {}) {
 
   return { gate, issueOpenToken, viewKey, starterSecret }
 }
+
+const htmlEscape = (text) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`)
 
 function splitUrl(url) {
   const raw = String(url)

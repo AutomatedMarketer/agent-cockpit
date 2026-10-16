@@ -11,3 +11,6 @@ Thumbs.db
 .vercel
 
 .env*.local
+
+# Where this computer's team folder is (student edition): personal, never committed.
+board.json

@@ -24,6 +24,8 @@ import { startLocalBoard } from './server.mjs'
 import { OPEN_PATH, STARTER_PATH } from './gate.mjs'
 import { answerCode, askCode, codesMatch } from './starter-auth.mjs'
 
+// Short and plain. The operating system opens the LAST-USED browser profile, which may not be the window the student is looking at.
+export const OPENED_SAY = "The board opened in your browser. If you don't see it, look in your other browser windows."
 export const BASE_PORT = 4317
 export const PORT_TRIES = 10
 const LINGER_MS = 15_000
@@ -40,12 +42,12 @@ export function stateDirFor({ platform, env, home }) {
 // Windows has no file modes. A folder under the user's profile usually inherits access for other
 // accounts (a sandbox user, a service), so the state folder is cut off from what it inherits and
 // given to the current user only. icacls by its full path, from System32, no shell.
-export function lockToCurrentUser(path, { platform = process.platform, env = process.env, user = userInfo().username, run = execFileSync } = {}) {
+export function lockToCurrentUser(path, { platform = process.platform, env = process.env, user = userInfo().username, domain = env.USERDOMAIN, run = execFileSync } = {}) {
   if (platform !== 'win32') return
   if (!env.SystemRoot) throw new Error('SystemRoot is not set, so the board cannot make its folder private.')
   const system = win32.join(env.SystemRoot, 'System32')
   try {
-    run(win32.join(system, 'icacls.exe'), [path, '/inheritance:r', '/grant:r', `${user}:(OI)(CI)F`], { cwd: system, env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' }, stdio: 'ignore', windowsHide: true })
+    run(win32.join(system, 'icacls.exe'), [path, '/inheritance:r', '/grant:r', `${domain ? `${domain}${String.fromCharCode(92)}${user}` : user}:(OI)(CI)F`], { cwd: system, env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' }, stdio: 'ignore', windowsHide: true })
   } catch {
     throw new Error(`The board could not make its folder private to you (${path}). Run it from your own Windows account and try again.`)
   }
@@ -86,6 +88,7 @@ export const picturesDirFor = (stateDir) => join(stateDir, 'pictures')
 export function resolveTeamFolder({ boardDir, stateDir }) {
   const ask = 'Tell the board where your team folder is: make a file called board.json next to Start Board, containing {"teamFolder": "the full path of your team folder"}.'
   const check = (candidate, source) => {
+    if (typeof candidate === 'string' && ['//', String.fromCharCode(92, 92)].some((start) => candidate.startsWith(start))) return { folder: null, why: `${source}: a network folder (${candidate.slice(0, 2)}...) is not allowed; use a folder on this computer. ${ask}` }
     if (typeof candidate !== 'string' || !isAbsolute(candidate)) return { folder: null, why: `${source}: teamFolder must be the full path of a folder. ${ask}` }
     let real
     try {
@@ -246,7 +249,7 @@ export async function runStart({
   const already = await askRunningBoard({ stateDir, fetchImpl })
   if (already) {
     await openLink({ link: already.link, stateDir, openFile, lingerMs })
-    log('The board is already running. A new browser tab was opened for it.')
+    log(OPENED_SAY)
     return { mode: 'reopened', port: already.port }
   }
   rmSync(join(stateDir, STATE_FILE), { force: true }) // a board that is gone, or not ours
@@ -268,8 +271,8 @@ export async function runStart({
   }
 
   await openLink({ link: board.openLink(), stateDir, openFile, lingerMs })
-  log(`The board is running on this computer (port ${board.port}) and should be open in your browser.`)
-  log('If it did not open, close this window and double-click Start Board again. Keep this window open while you use the board.')
+  log(OPENED_SAY)
+  log('Keep this window open while you use the board. Close it to stop the board.')
   return { mode: 'started', port: board.port, server: board.server, close }
 }
 
