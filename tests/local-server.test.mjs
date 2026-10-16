@@ -5,7 +5,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import net from 'node:net'
 import { startBoardServer, createBoardServer, assertLoopback } from '../local/server.mjs'
@@ -384,20 +384,40 @@ test('path traversal: nothing outside public/ is ever served, in any spelling', 
   }
 })
 
-test('path traversal: a link inside public/ that points outside is not followed', async () => {
+// A folder link. A 'junction' needs no privilege on Windows; on other systems it is a plain link.
+function makeFolderLink(target, path) {
+  try {
+    symlinkSync(target, path, 'junction')
+    return true
+  } catch {
+    return false
+  }
+}
+
+// A temp board folder: vercel.json, an api/ folder and a public/ folder holding the given files.
+function tempBoard(files) {
+  const root = mkdtempSync(join(tmpdir(), 'board-tmp-'))
+  mkdirSync(join(root, 'api'))
+  writeFileSync(join(root, 'vercel.json'), readFileSync(join(ROOT, 'vercel.json')))
+  for (const [name, text] of Object.entries(files)) {
+    const file = join(root, 'public', name)
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, text)
+  }
+  return root
+}
+
+test('path traversal: a link inside public/ that points outside is not followed', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'board-link-'))
   try {
     mkdirSync(join(root, 'public'))
-    writeFileSync(join(root, 'outside.txt'), 'outside the public folder')
+    mkdirSync(join(root, 'outside'))
+    writeFileSync(join(root, 'outside', 'note.txt'), 'outside the public folder')
     writeFileSync(join(root, 'vercel.json'), readFileSync(join(ROOT, 'vercel.json')))
-    try {
-      symlinkSync(join(root, 'outside.txt'), join(root, 'public', 'link.txt'))
-    } catch {
-      return // creating links needs a privilege on some Windows set-ups; nothing to test then
-    }
+    if (!makeFolderLink(join(root, 'outside'), join(root, 'public', 'link'))) return t.skip('this computer will not make folder links')
     const board = await running({ root })
     try {
-      const answer = await fetch(board.url('/link.txt'))
+      const answer = await fetch(board.url('/link/note.txt'))
       assert.equal(answer.status, 404)
       assert.doesNotMatch(await answer.text(), /outside the public folder/)
     } finally {
@@ -488,4 +508,241 @@ test('the gate seam can stop a request before any handler or file runs', async (
 test('createBoardServer alone does not listen on anything', () => {
   const server = createBoardServer()
   assert.equal(server.listening, false)
+})
+
+// ---- review round: spoofed forwarding headers, DNS rebinding, and smaller guards ------------------
+
+// One raw request with exactly the text given, so nothing fills in or fixes a header.
+function rawHttp(port, requestText, { until = /HTTP\/1\.1 \d+/ } = {}) {
+  return new Promise((resolve) => {
+    const started = Date.now()
+    const socket = net.connect(port, '127.0.0.1', () => socket.write(requestText))
+    let received = ''
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      socket.destroy()
+      resolve({ status: Number(/HTTP\/1\.1 (\d+)/.exec(received)?.[1] ?? 0), text: received, ms: Date.now() - started })
+    }
+    socket.on('data', (data) => { received += data; if (until.test(received)) finish() })
+    socket.on('close', finish)
+    socket.on('error', () => {})
+    setTimeout(finish, 5000).unref()
+  })
+}
+const getWithHost = (port, path, host) => rawHttp(port, `GET ${path} HTTP/1.1\r\n${host === undefined ? '' : `Host: ${host}\r\n`}Connection: close\r\n\r\n`, { until: /\r\n\r\n/ })
+
+test('forwarding headers a caller sends are replaced with the real connection address', async () => {
+  await withEcho(async (board) => {
+    const seen = await (await fetch(board.url('/api/state'), {
+      headers: { 'X-Forwarded-For': '9.9.9.9', 'X-Real-IP': '8.8.8.8', 'X-Forwarded-Host': 'evil.example' }
+    })).json()
+    assert.equal(seen.headers['x-forwarded-for'], '127.0.0.1')
+    assert.equal(seen.headers['x-real-ip'], '127.0.0.1')
+    assert.equal(seen.headers['x-forwarded-host'], undefined)
+  })
+})
+
+test('the real login.js: rotating X-Forwarded-For does not reset the guess limit', async () => {
+  const saved = { VIEW_KEY: process.env.VIEW_KEY, BOARD_PASSWORD: process.env.BOARD_PASSWORD, PUBLIC_DASHBOARD: process.env.PUBLIC_DASHBOARD }
+  process.env.VIEW_KEY = 'review-view-key-0123456789abcdef0123456789'
+  process.env.BOARD_PASSWORD = 'correct horse battery staple'
+  delete process.env.PUBLIC_DASHBOARD
+  const board = await running()
+  try {
+    const statuses = []
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const answer = await fetch(board.url('/api/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin', 'X-Forwarded-For': `10.0.0.${attempt}`, 'X-Real-IP': `10.1.0.${attempt}` },
+        body: JSON.stringify({ password: 'wrong guess' })
+      })
+      statuses.push(answer.status)
+    }
+    assert.deepEqual(statuses.slice(0, 5), [401, 401, 401, 401, 401])
+    assert.ok(statuses.slice(5).every((status) => status === 429), `the limit never closed: ${statuses.join(' ')}`)
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
+    await board.stop()
+  }
+})
+
+test('Host check: only 127.0.0.1:<port> and localhost:<port> are answered, for api and files alike', async () => {
+  const board = await running()
+  try {
+    const wrong = ['evil.example', `evil.example:${board.port}`, '127.0.0.1', 'localhost', `127.0.0.1:${board.port + 1}`, `localhost:${board.port + 1}`,
+      `127.0.0.1.evil.example:${board.port}`, `localhost.:${board.port}`, `user@127.0.0.1:${board.port}`, `[::1]:${board.port}`, `0.0.0.0:${board.port}`, '']
+    for (const path of ['/', '/app.js', '/api/state', '/api/file']) {
+      for (const host of wrong) {
+        const answer = await getWithHost(board.port, path, host)
+        assert.equal(answer.status, 421, `${path} with Host "${host}" gave ${answer.status}`)
+        assert.doesNotMatch(answer.text, /<html|"error"|state|Not found/i, `${path} with Host "${host}" said too much`)
+      }
+      assert.ok([400, 421].includes((await getWithHost(board.port, path, undefined)).status), `${path} with no Host was answered`) // Node itself refuses HTTP/1.1 without Host
+      for (const host of [`127.0.0.1:${board.port}`, `localhost:${board.port}`, `LOCALHOST:${board.port}`, `LocalHost:${board.port}`]) {
+        assert.notEqual((await getWithHost(board.port, path, host)).status, 421, `${path} with Host "${host}" was refused`)
+      }
+    }
+  } finally {
+    await board.stop()
+  }
+})
+
+test('Host check runs before the handler and before any custom gate', async () => {
+  let ran = false
+  let gated = false
+  const board = await running({ loadHandler: async () => () => { ran = true }, gate: () => { gated = true } })
+  try {
+    assert.equal((await getWithHost(board.port, '/api/state', 'evil.example')).status, 421)
+  } finally {
+    await board.stop()
+  }
+  assert.equal(ran, false)
+  assert.equal(gated, false)
+})
+
+test('local/README.md no longer says anything on this computer reaches the board unchecked', () => {
+  const readme = readFileSync(join(ROOT, 'local', 'README.md'), 'utf8')
+  assert.doesNotMatch(readme, /anything running on this\s+computer can talk to the board/i)
+  assert.match(readme, /Host/)
+})
+
+test('a handler that answers twice does not crash the board', async () => {
+  const handlers = {
+    state: (request, response) => { response.status(200).json({ first: true }); response.json({ second: true }); response.send('again') },
+    art: (request, response) => { response.status(200).send({ a: 1 }); response.status(500).json({ b: 2 }) }
+  }
+  const noisy = console.error
+  const logged = []
+  console.error = (line) => logged.push(String(line))
+  const board = await running({ loadHandler: async (name) => handlers[name] })
+  try {
+    assert.deepEqual(await (await fetch(board.url('/api/state'))).json(), { first: true })
+    assert.deepEqual(await (await fetch(board.url('/api/art'))).json(), { a: 1 })
+    assert.equal((await fetch(board.url('/'))).status, 200, 'the board stopped answering')
+    assert.deepEqual(logged, [], 'a second answer should be ignored quietly, not turn into an error')
+  } finally {
+    console.error = noisy
+    await board.stop()
+  }
+})
+
+test('a handler that never answers gets a 504 after the time limit', async () => {
+  const board = await running({ handlerTimeoutMs: 150, loadHandler: async () => () => new Promise(() => {}) })
+  try {
+    const started = Date.now()
+    const answer = await fetch(board.url('/api/state'))
+    assert.equal(answer.status, 504)
+    assert.ok(Date.now() - started < 3000)
+  } finally {
+    await board.stop()
+  }
+})
+
+test('a handler that answers in time is not cut off by the time limit', async () => {
+  const board = await running({ handlerTimeoutMs: 400, loadHandler: async () => (request, response) => { setTimeout(() => response.status(200).json({ ok: 1 }), 50) } })
+  try {
+    assert.equal((await fetch(board.url('/api/state'))).status, 200)
+    await new Promise((done) => setTimeout(done, 600))
+  } finally {
+    await board.stop()
+  }
+})
+
+test('static: dot files and folders are refused with no contents, at any depth', async () => {
+  const root = tempBoard({ 'index.html': '<p>home</p>', '.env': 'TOP_SECRET_ENV', '.git/config': 'TOP_SECRET_GIT', 'sub/.secret': 'TOP_SECRET_SUB', 'sub/ok.txt': 'fine' })
+  const board = await running({ root })
+  try {
+    for (const path of ['/.env', '/.git/config', '/sub/.secret', '/%2eenv', '/sub/%2esecret', '/.git']) {
+      const answer = await rawHttp(board.port, `GET ${path} HTTP/1.1\r\nHost: 127.0.0.1:${board.port}\r\nConnection: close\r\n\r\n`, { until: /\r\n\r\n[\s\S]/ })
+      assert.equal(answer.status, 400, `${path} gave ${answer.status}`)
+      assert.doesNotMatch(answer.text, /TOP_SECRET/)
+    }
+    // Windows short names for the same files (ENV~1, GIT~1), where this drive has them.
+    for (const path of ['/ENV~1', '/GIT~1/config', '/sub/SECRET~1']) {
+      const answer = await fetch(board.url(path))
+      assert.doesNotMatch(await answer.text(), /TOP_SECRET/, `${path} served a hidden file`)
+    }
+    assert.equal(await (await fetch(board.url('/sub/ok.txt'))).text(), 'fine')
+  } finally {
+    await board.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('static: a link whose real place has a dot-folder in it is refused', async (t) => {
+  const root = tempBoard({ 'index.html': '<p>home</p>', '.hidden/secret.txt': 'TOP_SECRET_LINKED' })
+  if (!makeFolderLink(join(root, 'public', '.hidden'), join(root, 'public', 'visible'))) {
+    rmSync(root, { recursive: true, force: true })
+    return t.skip('this computer will not make folder links')
+  }
+  const board = await running({ root })
+  try {
+    const answer = await fetch(board.url('/visible/secret.txt'))
+    assert.equal(answer.status, 404)
+    assert.doesNotMatch(await answer.text(), /TOP_SECRET/)
+  } finally {
+    await board.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('static: a file name with non-ASCII letters redirects without an error', async () => {
+  const root = tempBoard({ 'index.html': '<p>home</p>', 'café.html': '<p>cafe</p>' })
+  const board = await running({ root })
+  try {
+    for (const path of ['/caf%C3%A9.html', '/caf%C3%A9']) {
+      const answer = await fetch(board.url(path), { redirect: 'manual' })
+      assert.notEqual(answer.status, 500, `${path} broke`)
+      if (path.endsWith('.html')) {
+        assert.equal(answer.status, 308)
+        assert.match(answer.headers.get('location'), /^\/caf%C3%A9$/)
+      } else {
+        assert.equal(await answer.text(), '<p>cafe</p>')
+      }
+    }
+  } finally {
+    await board.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a declared 5 MB body that never arrives is refused at once, not waited for', async () => {
+  const board = await running({ loadHandler: async () => () => {} })
+  try {
+    const answer = await rawHttp(board.port, `POST /api/upload HTTP/1.1\r\nHost: 127.0.0.1:${board.port}\r\nContent-Type: application/octet-stream\r\nContent-Length: 5000000\r\n\r\n`)
+    assert.equal(answer.status, 413)
+    assert.ok(answer.ms < 300, `took ${answer.ms} ms`)
+  } finally {
+    await board.stop()
+  }
+})
+
+test('a server that came up on any address but 127.0.0.1 is shut down and the start fails', async () => {
+  let closed = false
+  const build = (options) => {
+    const server = createBoardServer(options)
+    const realAddress = server.address.bind(server)
+    server.address = () => ({ ...realAddress(), address: '0.0.0.0' })
+    const realClose = server.close.bind(server)
+    server.close = (...args) => { closed = true; return realClose(...args) }
+    return server
+  }
+  await assert.rejects(startBoardServer({ port: 0, build }), /not 127\.0\.0\.1/)
+  assert.equal(closed, true)
+})
+
+test('an error on the response is written to the window, not thrown', async () => {
+  const noisy = console.error
+  const logged = []
+  console.error = (line) => logged.push(String(line))
+  const board = await running({ loadHandler: async () => (request, response) => { response.emit('error', new Error('socket trouble')); response.status(200).json({ ok: 1 }) } })
+  try {
+    assert.equal((await fetch(board.url('/api/state'))).status, 200)
+  } finally {
+    console.error = noisy
+    await board.stop()
+  }
+  assert.match(logged.join('\n'), /socket trouble/)
 })

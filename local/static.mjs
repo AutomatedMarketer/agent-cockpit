@@ -1,5 +1,5 @@
 import { readFile, realpath, stat } from 'node:fs/promises'
-import { extname, join, sep } from 'node:path'
+import { extname, join, relative as relative_, sep } from 'node:path'
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -39,6 +39,9 @@ async function fileAt(publicRoot, relative) {
   try {
     const real = await realpath(join(publicRoot, relative))
     if (real !== publicRoot && !real.startsWith(publicRoot + sep)) return null // a link out of public/
+    // Where the file really is, not how it was asked for: a link or a Windows short name (ENV~1)
+    // can reach a dot-file through a name that has no dot in it.
+    if (relative_(publicRoot, real).split(sep).some((part) => part.startsWith('.'))) return null
     return (await stat(real)).isFile() ? real : null
   } catch {
     return null
@@ -56,7 +59,7 @@ export async function serveStatic(publicRootInput, method, pathname) {
   if (relative === null) return { status: 400, headers: PLAIN, body: 'Bad request' }
 
   if (relative.endsWith('.html')) {
-    const clean = relative === 'index.html' ? '/' : '/' + relative.slice(0, -'.html'.length)
+    const clean = relative === 'index.html' ? '/' : '/' + relative.slice(0, -'.html'.length).split('/').map(encodeURIComponent).join('/')
     return { status: 308, headers: { Location: clean }, body: '' }
   }
   const file = (await fileAt(publicRoot, relative === '' ? 'index.html' : relative)) ?? (relative ? await fileAt(publicRoot, relative + '.html') : null)

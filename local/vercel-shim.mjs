@@ -66,6 +66,14 @@ export function parseBody(bytes, contentType = '') {
 export async function shimRequest(request, { limit = BODY_LIMIT_BYTES } = {}) {
   const url = new URL(request.url, 'http://board.invalid')
   request.query = parseQuery(url.searchParams)
+  // On Vercel these three are set by the platform and overwrite whatever a caller sends. Here the
+  // caller is the connection itself: take what it sent away and say who actually connected, or a
+  // rotating X-Forwarded-For would dodge login.js's guess limit and x-forwarded-host would
+  // override the same-site check in _lib.js.
+  const peer = request.socket?.remoteAddress ?? 'unknown'
+  delete request.headers['x-forwarded-host']
+  request.headers['x-real-ip'] = peer
+  request.headers['x-forwarded-for'] = peer
   if (request.method !== 'GET' && request.method !== 'HEAD') {
     request.body = parseBody(await readBody(request, limit), request.headers['content-type'])
   }
@@ -78,12 +86,15 @@ export function shimResponse(response) {
     response.statusCode = code
     return response
   }
+  // A second answer to the same request is ignored, as it is on Vercel, instead of throwing.
   response.json = (value) => {
+    if (response.writableEnded) return response
     if (!response.hasHeader('content-type')) response.setHeader('Content-Type', 'application/json; charset=utf-8')
     response.end(JSON.stringify(value))
     return response
   }
   response.send = (value) => {
+    if (response.writableEnded) return response
     if (value === undefined || value === null) return response.end()
     if (typeof value === 'object' && !Buffer.isBuffer(value) && !(value instanceof Uint8Array)) return response.json(value)
     if (typeof value === 'string' && !response.hasHeader('content-type')) response.setHeader('Content-Type', 'text/html; charset=utf-8')

@@ -1,13 +1,17 @@
 // The board on this computer: a small Node server that runs the SAME api/*.js files the website
 // runs on Vercel, and serves public/. No dependencies.
 //
-// STATUS: UNFINISHED (task T1 of the Student Edition plan). There is no login wall yet - that is
-// T4 (Host check, one-time link, cookie). Until it lands, the only protection is that the server
-// listens on 127.0.0.1 and refuses to start anywhere else. Do not give this to students yet.
+// STATUS: UNFINISHED (task T1 of the Student Edition plan). There is no sign-in wall yet - that is
+// T4 (one-time link and cookie). Until it lands, the protection is: the server listens on
+// 127.0.0.1 and refuses to start anywhere else, and it answers only requests whose Host is
+// 127.0.0.1:<port> or localhost:<port> (so a web page cannot reach it through a name it controls).
+// Another program on this same computer can still talk to it. Do not give this to students yet.
 //
-// Seams for the next tasks, both arguments of createBoardServer, so nothing here changes then:
-//   gate(request, response) -> false once it has answered, anything else to carry on   (T4)
+// Seams for the next tasks, arguments of createBoardServer, so nothing here changes then:
+//   gate(request, response) -> false once it has answered, anything else to carry on   (T4;
+//                              runs after the Host check, which cannot be switched off)
 //   loadHandler(name)       -> the handler for /api/<name>                              (tests)
+//   handlerTimeoutMs        -> how long a handler may take before a 504                 (default 60 s)
 // T2 (repo source) and T3 (picture folder) need no seam here: they work through settings the
 // handlers already read from the environment.
 
@@ -21,6 +25,7 @@ import { serveStatic } from './static.mjs'
 
 export const LOOPBACK = '127.0.0.1'
 export const DEFAULT_PORT = 4317
+export const HANDLER_TIMEOUT_MS = 60_000 // a Vercel function has a limit too
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 // The only address this server may listen on. Anything else - 0.0.0.0, a LAN address, "localhost"
@@ -31,24 +36,45 @@ export function assertLoopback(host) {
   }
 }
 
+// DNS rebinding: a web page can make its own name point at 127.0.0.1, and the browser then sends
+// that name as Host. Only the two spellings a person types are answered, with this server's port.
+export function hostIsAllowed(hostHeader, port) {
+  if (typeof hostHeader !== 'string') return false
+  const host = hostHeader.toLowerCase()
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}`
+}
+
 function sendError(response, status, message) {
+  if (response.headersSent || response.writableEnded) return
   response.statusCode = status
   response.setHeader('Content-Type', 'application/json; charset=utf-8')
   response.end(JSON.stringify({ error: message }))
 }
 
+const logLine = (request, what) => console.error(`[board] ${request.method} ${String(request.url).split('?')[0]} ${what}`)
+
 export function createBoardServer({
   root = ROOT,
   gate = () => true,
+  handlerTimeoutMs = HANDLER_TIMEOUT_MS,
   loadHandler = async (name) => (await import(pathToFileURL(join(root, 'api', `${name}.js`)).href)).default
 } = {}) {
   const { headers: securityHeaders } = loadVercelConfig(join(root, 'vercel.json'))
   const publicRoot = join(root, 'public')
+  let server
 
   async function respond(request, response) {
     // Vercel puts these on every response, files and functions alike. A handler may override one.
     for (const [key, value] of securityHeaders) response.setHeader(key, value)
     shimResponse(response)
+    response.on('error', (failure) => logLine(request, `response error: ${failure?.message ?? failure}`))
+
+    // Before anything else, for pages and api alike, and with nothing in the answer to learn from.
+    if (!hostIsAllowed(request.headers.host, server.address()?.port)) {
+      response.statusCode = 421
+      response.end()
+      return
+    }
     if ((await gate(request, response)) === false) return
 
     // Cut by hand: new URL('//x', base) reads "x" as a web address and loses the path.
@@ -70,6 +96,11 @@ export function createBoardServer({
         throw failure
       }
       const handler = await loadHandler(name)
+      const timer = setTimeout(() => {
+        logLine(request, `took longer than ${handlerTimeoutMs} ms`)
+        sendError(response, 504, 'The board took too long to answer.')
+      }, handlerTimeoutMs)
+      response.once('close', () => clearTimeout(timer))
       return handler(request, response)
     }
 
@@ -79,23 +110,25 @@ export function createBoardServer({
     response.end(request.method === 'HEAD' ? undefined : served.body)
   }
 
-  return createServer((request, response) => {
+  server = createServer((request, response) => {
     respond(request, response).catch((failure) => {
       // The reason goes to this window, never to the page: it could name a path or a setting.
-      console.error(`[board] ${request.method} ${String(request.url).split('?')[0]} failed: ${failure?.message ?? failure}`)
+      logLine(request, `failed: ${failure?.message ?? failure}`)
       if (!response.headersSent) sendError(response, 500, 'The board hit an error. Look at the window it is running in.')
       else response.destroy()
     })
   })
+  return server
 }
 
-export async function startBoardServer({ port = DEFAULT_PORT, host = LOOPBACK, ...options } = {}) {
+export async function startBoardServer({ port = DEFAULT_PORT, host = LOOPBACK, build = createBoardServer, ...options } = {}) {
   assertLoopback(host)
-  const server = createBoardServer(options)
+  const server = build(options)
   return new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen(port, host, () => {
       const address = server.address()
+      // Belt and braces: listen() was told 127.0.0.1, but what counts is where it actually is.
       if (address.address !== LOOPBACK) {
         server.close()
         reject(new Error(`The board came up on ${address.address}, not ${LOOPBACK}, and was shut down.`))
@@ -118,6 +151,9 @@ function readArgs(argv) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // One request going wrong must not end the board for everyone using it: say so here and carry on.
+  process.on('uncaughtException', (failure) => console.error(`[board] unexpected error, still running: ${failure?.message ?? failure}`))
+  process.on('unhandledRejection', (failure) => console.error(`[board] unexpected error, still running: ${failure?.message ?? failure}`))
   try {
     const { port, host } = await startBoardServer(readArgs(process.argv.slice(2)))
     console.log(`Board running at http://${host}:${port}/  (this computer only)`)
