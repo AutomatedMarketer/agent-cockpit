@@ -34,7 +34,7 @@ import {
 } from './_workflows.js'
 import { parseSimpleYaml } from './_yaml-lite.js'
 import { shapeReadiness } from './_readiness.js'
-import { repoFolder, repoReader } from './_repo.js'
+import { repoFolder, repoReader, FOLDER_NOTES } from './_repo.js'
 
 const GITHUB = 'https://api.github.com'
 const AGENT_DIR = '.claude/agents'
@@ -157,6 +157,16 @@ export async function namedFromOrigin(base) {
   if (!folder || (process.env.GITHUB_OWNER && process.env.GITHUB_REPO)) return base
   const names = await repoReader(folder).origin().catch(() => null)
   return names ? { ...base, ...names } : base
+}
+
+// What the page should say about the team folder (folder mode only; null on the website and when
+// there is nothing to say): where the folder stands against GitHub, and a tree too long to list.
+export async function folderNote(tree) {
+  const folder = repoFolder()
+  if (!folder) return null
+  const described = await repoReader(folder).describe().catch(() => null)
+  const parts = [described?.note, tree?.truncated ? FOLDER_NOTES.truncated : null].filter(Boolean)
+  return parts.length ? parts.join(' ') : null
 }
 
 // Every file path in the repo with its size: GitHub's tree call, or the same list from the git folder.
@@ -2513,6 +2523,7 @@ async function handle(request, response, store) {
     const blobs = (tree.tree ?? []).filter((node) => node.type === 'blob')
     const paths = blobs.map((node) => node.path)
     const sizes = Object.fromEntries(blobs.map((node) => [node.path, node.size ?? null]))
+    const note = await folderNote(tree)
 
     const agentPaths = paths.filter((path) => path.startsWith(`${AGENT_DIR}/`) && path.endsWith('.md'))
     const runPaths = paths.filter((path) => /^runs\/\d{4}-\d{2}\/.+\.json$/.test(path))
@@ -2732,7 +2743,7 @@ async function handle(request, response, store) {
     // URL, not the x-view-key header. A shared copy made for the owner was served to anyone
     // without a key for up to six minutes (found live 2026-10-09). Set at the top of the handler.
     response.status(200).json({
-      repo: { owner, repo, branch, url: `https://github.com/${owner}/${repo}` },
+      repo: { owner, repo, branch, url: `https://github.com/${owner}/${repo}`, ...(note ? { note } : {}) },
       // What this answer was built from, for the page to ask "has it changed?" with. null when GitHub
       // would not say, and then the page does not ask.
       commit: head,

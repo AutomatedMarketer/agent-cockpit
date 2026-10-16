@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -18,9 +18,13 @@ import {
   runGit,
   gitCallsRunning,
   FETCH_EVERY_MS,
-  FOLDER_UNREADABLE
+  REMOTE_RECHECK_MS,
+  FOLDER_UNREADABLE,
+  FOLDER_NOTES,
+  findGit,
+  isInside
 } from '../api/_repo.js'
-import stateHandler, { headCommit, rawFile, repoTree, config, namedFromOrigin } from '../api/state.js'
+import stateHandler, { headCommit, rawFile, repoTree, config, namedFromOrigin, folderNote } from '../api/state.js'
 import fileHandler from '../api/file.js'
 import graphHandler from '../api/graph.js'
 import fireHandler from '../api/fire.js'
@@ -31,8 +35,10 @@ import { shapeMailbox, MAILBOX_FOLDER } from '../api/state.js'
 /* ---------- a repo to read ---------- */
 
 const gitEnv = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.toUpperCase().startsWith('GIT_'))), GIT_TERMINAL_PROMPT: '0' }
+// The test's own git is found the way the board finds it, so a program planted in a repo folder cannot answer for it either.
+const GIT = findGit()
 const git = (cwd, ...args) =>
-  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd, env: gitEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
+  execFileSync(GIT, ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd, env: gitEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 
 const FILES = {
   '.claude/agents/research.md': '---\nname: research\ndescription: Finds things out.\nmodel: sonnet\n---\n\nYou are the research agent.\n',
@@ -45,7 +51,11 @@ const FILES = {
 }
 
 // A work folder cloned from a bare "GitHub" folder, both made fresh. `files` are committed and pushed.
-function makeRepo(files = FILES, { remote = true, origin } = {}) {
+// The address the folder's origin is given, so the board treats it as GitHub; insteadOf sends the
+// actual traffic to a bare folder beside it, so no test touches the network.
+const GITHUB_URL = 'https://github.com/someone/my-agent-team.git'
+
+function makeRepo(files = FILES, { remote = true, origin = GITHUB_URL } = {}) {
   const base = mkdtempSync(path.join(tmpdir(), 'cockpit-repo-'))
   const work = path.join(base, 'team')
   const bare = path.join(base, 'github.git')
@@ -59,10 +69,9 @@ function makeRepo(files = FILES, { remote = true, origin } = {}) {
   git(work, 'commit', '-q', '-m', 'first')
   if (remote) {
     git(base, 'init', '-q', '--bare', '-b', 'main', bare)
-    git(work, 'remote', 'add', 'origin', origin ?? bare)
-    if (!origin) git(work, 'push', '-q', 'origin', 'main')
-    else git(work, 'config', `url.${bare}.insteadOf`, origin)
-    if (origin) git(work, 'push', '-q', 'origin', 'main')
+    git(work, 'remote', 'add', 'origin', origin)
+    git(work, 'config', `url.${bare}.insteadOf`, origin)
+    git(work, 'push', '-q', 'origin', 'main')
   }
   return {
     base, work, bare,
@@ -251,7 +260,7 @@ test('a file over the output limit is left out like a missing one, not an error 
 test('a link stored in the repo is not listed as a file, and a submodule folder is not read', async () => {
   const repo = makeRepo()
   try {
-    const target = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: repo.work, env: gitEnv, input: '/etc/passwd', encoding: 'utf8' }).trim()
+    const target = execFileSync(GIT, ['hash-object', '-w', '--stdin'], { cwd: repo.work, env: gitEnv, input: '/etc/passwd', encoding: 'utf8' }).trim()
     git(repo.work, 'update-index', '--add', '--cacheinfo', `120000,${target},evil-link.md`)
     git(repo.work, 'update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},vendor/sub`)
     git(repo.work, 'commit', '-q', '-m', 'link')
@@ -414,6 +423,211 @@ test('the git folder switch is on only for REPO_SOURCE=folder with an absolute R
   assert.equal(githubNames('https://github.com.evil.example/a/b'), null)
   assert.equal(githubNames('https://github.com/a/b/c'), null)
   assert.equal(githubNames(undefined), null)
+})
+
+/* ---------- the git program, hooks and the remote ---------- */
+
+test('git is found from PATH by absolute path; a git planted in the team folder is never run, even with the Windows safety switch off', async () => {
+  const repo = makeRepo()
+  const saved = process.env.NoDefaultCurrentDirectoryInExePath
+  try {
+    // The reviewer's attack: a program called git in the team folder itself.
+    if (process.platform === 'win32') {
+      copyFileSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'whoami.exe'), path.join(repo.work, 'git.exe'))
+      writeFileSync(path.join(repo.work, 'git.cmd'), '@echo planted> "%~dp0PLANTED"\r\n')
+      writeFileSync(path.join(repo.work, 'git.bat'), '@echo planted> "%~dp0PLANTED"\r\n')
+    } else {
+      writeFileSync(path.join(repo.work, 'git'), '#!/bin/sh\necho planted > "$(dirname "$0")/PLANTED"\n', { mode: 0o755 })
+    }
+    delete process.env.NoDefaultCurrentDirectoryInExePath
+    const { repo: team } = reader(repo)
+    const head = await team.head('main')
+    assert.equal(head, repo.sha(), 'the real git did not answer')
+    assert.equal((await team.tree(head)).tree.length, Object.keys(FILES).length)
+    assert.equal(await team.file(head, 'shared/about-me.md'), FILES['shared/about-me.md'])
+    assert.ok(!existsSync(path.join(repo.work, 'PLANTED')), 'a planted program ran')
+  } finally {
+    if (saved !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = saved
+    repo.done()
+  }
+})
+
+test('findGit takes only absolute PATH entries, and a git program inside the team folder is refused', async () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'cockpit-findgit-'))
+  try {
+    const bin = path.join(base, 'bin')
+    mkdirSync(bin)
+    const name = process.platform === 'win32' ? 'git.exe' : 'git'
+    writeFileSync(path.join(bin, name), 'x')
+    const platform = process.platform
+    const pathOf = (...entries) => entries.join(path.delimiter)
+    assert.equal(findGit({ PATH: pathOf('', '.', 'bin', bin) }, platform), path.join(bin, name), 'empty, "." and relative entries are skipped')
+    assert.equal(findGit({ PATH: pathOf('', '.', 'bin') }, platform), null)
+    assert.equal(findGit({ Path: bin }, platform), path.join(bin, name), 'the Windows spelling of PATH')
+    assert.equal(findGit({ PATH: `"${bin}"` }, platform), path.join(bin, name), 'quoted entry')
+    assert.equal(findGit({}, platform), null)
+    const scripts = path.join(base, 'scripts')
+    mkdirSync(scripts)
+    writeFileSync(path.join(scripts, 'git.cmd'), 'x')
+    writeFileSync(path.join(scripts, 'git.bat'), 'x')
+    assert.equal(findGit({ PATH: scripts }, 'win32'), null, 'only git.exe counts on Windows, never .cmd or .bat')
+    assert.equal(isInside(base, path.join(bin, name)), true)
+    assert.equal(isInside(bin, path.join(base, 'elsewhere', name)), false)
+    assert.equal(isInside(bin, path.join(bin, '..', 'bin2', name)), false)
+    // The real program lives outside any team folder; one that lived inside would be refused.
+    const real = findGit()
+    assert.ok(real && path.isAbsolute(real))
+    await assert.rejects(runGit(['--version'], { cwd: path.dirname(real) }), (error) => error.ours === true && error.message === FOLDER_UNREADABLE)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('a fetch runs none of the repo\'s hooks and none of its remote program settings', async () => {
+  const repo = makeRepo()
+  try {
+    const hookMarker = path.join(repo.base, 'HOOK-RAN').replaceAll('\\', '/')
+    const packMarker = path.join(repo.base, 'UPLOADPACK-RAN').replaceAll('\\', '/')
+    const hooks = path.join(repo.work, '.git', 'hooks')
+    mkdirSync(hooks, { recursive: true })
+    for (const hook of ['reference-transaction', 'post-checkout', 'post-merge', 'post-commit']) {
+      writeFileSync(path.join(hooks, hook), `#!/bin/sh\necho ran > "${hookMarker}"\n`, { mode: 0o755 })
+    }
+    // The program git would run to talk to the remote, set in the repo's own config.
+    git(repo.work, 'config', 'remote.origin.uploadpack', `node -e "require('fs').writeFileSync('${packMarker}', 'x')" #`)
+    const { repo: team, clock } = reader(repo)
+    const first = await team.head('main')
+    // Another clone pushes, so the next fetch has a ref to update (and a hook to run).
+    const other = path.join(repo.base, 'other')
+    git(repo.base, 'clone', '-q', repo.bare, other)
+    writeFileSync(path.join(other, 'n.md'), 'n')
+    git(other, 'add', '-A')
+    git(other, 'commit', '-q', '-m', 'n')
+    git(other, 'push', '-q', 'origin', 'main')
+    clock.t += FETCH_EVERY_MS + 1
+    const second = await team.head('main')
+    assert.notEqual(second, first, 'the fetch did not happen, so this test proved nothing')
+    assert.ok(!existsSync(hookMarker), 'a hook from the repo ran')
+    assert.ok(!existsSync(packMarker), 'the repo\'s upload-pack setting ran')
+  } finally {
+    repo.done()
+  }
+})
+
+test('only a GitHub address is fetched from; any other origin is shown as it was last fetched', async () => {
+  const repo = makeRepo()
+  try {
+    git(repo.work, 'config', '--unset', `url.${repo.bare}.insteadOf`)
+    git(repo.work, 'remote', 'set-url', 'origin', repo.bare)
+    const { repo: team, clock, calls } = reader(repo)
+    const before = await team.head('main')
+    const other = path.join(repo.base, 'other')
+    git(repo.base, 'clone', '-q', repo.bare, other)
+    writeFileSync(path.join(other, 'n.md'), 'n')
+    git(other, 'add', '-A')
+    git(other, 'commit', '-q', '-m', 'n')
+    git(other, 'push', '-q', 'origin', 'main')
+    clock.t += FETCH_EVERY_MS + 1
+    assert.equal(await team.head('main'), before)
+    assert.equal(fetches(calls), 0)
+    const said = await team.describe()
+    assert.deepEqual({ ...said, note: undefined }, { hasOrigin: true, github: false, note: undefined })
+    assert.equal(said.note, FOLDER_NOTES.notGitHub)
+    for (const hostile of ['ext::sh -c "echo x"', '--upload-pack=x', 'file:///etc', 'https://github.com.evil.example/a/b']) {
+      git(repo.work, 'config', 'remote.origin.url', hostile)
+      clock.t += REMOTE_RECHECK_MS + FETCH_EVERY_MS + 1
+      await team.head('main')
+    }
+    assert.equal(fetches(calls), 0, 'a fetch started for an address that is not GitHub')
+  } finally {
+    repo.done()
+  }
+})
+
+test('when git will not say whether there is a remote, the board has no answer - it never falls back to the local branch', async () => {
+  const repo = makeRepo()
+  try {
+    const clock = { t: 5_000_000 }
+    const calls = []
+    let failRemote = true
+    const run = async (args, options) => {
+      calls.push(args)
+      if (args[0] === 'config' && failRemote) throw new Error('git went away')
+      return runGit(args, options)
+    }
+    const team = folderRepo(repo.work, { run, now: () => clock.t })
+    repo.commit('unpushed.md', 'local only')
+    assert.equal(await team.hasOrigin(), null)
+    assert.equal(await team.head('main'), null, 'a failed `git remote` was taken for "no remote"')
+    assert.ok(!calls.some((args) => args[0] === 'rev-parse' && /refs\/heads\//.test(args.at(-1))), 'the local branch was read')
+    assert.equal((await team.describe()).note, FOLDER_NOTES.unknown)
+    // It is asked again, not remembered as an answer.
+    failRemote = false
+    const pushed = await team.head('main')
+    assert.notEqual(pushed, repo.sha(), 'the unpushed commit was shown')
+    // An answer is kept for a minute, then asked again.
+    const asked = () => calls.filter((args) => args[0] === 'config').length
+    const now = asked()
+    await team.hasOrigin()
+    assert.equal(asked(), now, 'asked again within the minute')
+    clock.t += REMOTE_RECHECK_MS + 1
+    await team.hasOrigin()
+    assert.equal(asked(), now + 1)
+  } finally {
+    repo.done()
+  }
+})
+
+test('a folder with no remote says so, and a remote added later is noticed within the minute', async () => {
+  const lonely = makeRepo(FILES, { remote: false })
+  try {
+    const { repo: team, clock } = reader(lonely)
+    const said = await team.describe()
+    assert.equal(said.hasOrigin, false)
+    assert.equal(said.note, 'Jobs are off: this folder is not on GitHub, so nothing the team pushes can reach it.')
+    const bare = path.join(lonely.base, 'github.git')
+    git(lonely.base, 'init', '-q', '--bare', '-b', 'main', bare)
+    git(lonely.work, 'remote', 'add', 'origin', GITHUB_URL)
+    git(lonely.work, 'config', `url.${bare}.insteadOf`, GITHUB_URL)
+    git(lonely.work, 'push', '-q', 'origin', 'main')
+    assert.equal((await team.describe()).hasOrigin, false, 'still the cached answer')
+    clock.t += REMOTE_RECHECK_MS + 1
+    const later = await team.describe()
+    assert.equal(later.hasOrigin, true)
+    assert.equal(later.note, null)
+  } finally {
+    lonely.done()
+  }
+})
+
+test('the board page is told the note, only in folder mode, and a cut-off file list is told too', async () => {
+  const lonely = makeRepo(FILES, { remote: false })
+  try {
+    const folder = await withEnv(folderEnv(lonely), () => call(stateHandler, {}))
+    assert.equal(folder.result.statusCode, 200)
+    assert.equal(folder.result.body.repo.note, FOLDER_NOTES.noRemote)
+    const github = await withEnv({ GITHUB_OWNER: 'someone', GITHUB_REPO: 'my-agent-team' }, () => call(stateHandler, {}), { githubFiles: FILES, head: lonely.sha() })
+    assert.ok(!('note' in github.result.body.repo), 'the website answer grew a key')
+    assert.equal((await withEnv({}, () => folderNote({ truncated: true }))).result, null, 'no note on the website, whatever the tree says')
+    assert.equal((await withEnv(folderEnv(lonely), () => folderNote({ truncated: true }))).result, `${FOLDER_NOTES.noRemote} ${FOLDER_NOTES.truncated}`)
+    assert.equal((await withEnv(folderEnv(lonely), () => folderNote({ truncated: false }))).result, FOLDER_NOTES.noRemote)
+  } finally {
+    lonely.done()
+  }
+})
+
+test('a tree longer than the cap is cut and says so', async () => {
+  const repo = makeRepo()
+  try {
+    const team = folderRepo(repo.work, { maxEntries: 2 })
+    const head = await team.head('main')
+    const listed = await team.tree(head)
+    assert.equal(listed.tree.length, 2)
+    assert.equal(listed.truncated, true)
+    assert.equal((await folderRepo(repo.work).tree(head)).truncated, false)
+  } finally {
+    repo.done()
+  }
 })
 
 /* ---------- the endpoints, on a folder ---------- */
