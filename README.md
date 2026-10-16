@@ -435,6 +435,10 @@ why **Make it** is missing.
   is never kept (the tab closed), the change is free again after 10 minutes
 - **What leaves the board:** only the description you typed and your art style, sent to OpenAI
 
+### The picture store on a folder (Student Edition)
+
+On your own computer there is no Vercel Blob. Set `PICTURE_STORE=folder` and `PICTURE_FOLDER=<an absolute folder>` and the board keeps the same files in that folder instead (`api/_picture-store-folder.js`). Without both settings nothing changes, and a board that also names a Blob store uses the folder. The folder takes only the board's own six file names, refuses links, keeps the Blob store's size and type limits, and makes files private to you. `tests/picture-store-folder.test.mjs` runs the same store scenarios against Blob and the folder.
+
 ### The picture store's free limit, and why the caps are where they are
 
 The picture store is Vercel Blob. On Vercel's free **Hobby** plan it includes, each month
@@ -1009,7 +1013,7 @@ Locally:
 npm test
 ```
 
-2200 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2228 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -

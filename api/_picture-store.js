@@ -20,6 +20,7 @@
 // - Every failure leaves here as one plain sentence. The SDK's own messages are for developers,
 //   and some of them could carry a credential.
 
+import path from 'node:path'
 import { isValidSlug, parseSlot, readCapped } from './_lib.js'
 
 const ROOT = 'agent-cockpit'
@@ -29,7 +30,7 @@ export const SETTINGS_PATH = `${ROOT}/settings.json`
 const VERSION_SHAPE = /^[a-z0-9]{8,32}$/
 const TYPE_EXTENSION = { 'image/webp': 'webp', 'image/jpeg': 'jpeg', 'image/png': 'png' }
 
-const SETTINGS_MAX_BYTES = 64 * 1024
+export const SETTINGS_MAX_BYTES = 64 * 1024
 // How many agents the board keeps a name and a portrait for. A bound on entries rather than a
 // check against the team: refusing a name for an agent that is not in the team would mean
 // reading the team repo on every rename, so renaming would fail whenever GitHub does - and a
@@ -39,7 +40,7 @@ const SETTINGS_MAX_BYTES = 64 * 1024
 const MAX_NAMED_AGENTS = 64
 const MAX_PICTURES = MAX_NAMED_AGENTS + 2 // and the Today and Team banners
 // A banner's budget is 100 KB; a little headroom, and nothing like room for something else.
-const PICTURE_MAX_BYTES = 110 * 1024
+export const PICTURE_MAX_BYTES = 110 * 1024
 // A save that collides (another instance saved between its read and its write) is tried once more,
 // after a random pause so instances colliding together drift apart - and no more than that. Every
 // try is a put, and a put that ifMatch refuses still counts against the month's 2,000.
@@ -64,8 +65,16 @@ const TOO_BIG =
 export const NOT_CONNECTED =
   'No picture store is connected: in Vercel, create a Private Blob store for this project, then redeploy.'
 
+// The Student Edition keeps the same files in a folder on the student's own computer instead
+// (api/_picture-store-folder.js). It is on only when asked for plainly - both settings, and an
+// absolute folder - and Vercel never has them, so the website is untouched. When both a folder and
+// a Blob store are named, the folder wins: it was asked for by name.
+export function folderConfigured(env = process.env) {
+  return env.PICTURE_STORE === 'folder' && typeof env.PICTURE_FOLDER === 'string' && path.isAbsolute(env.PICTURE_FOLDER)
+}
+
 export function storeConnected(env = process.env) {
-  return Boolean(env.BLOB_STORE_ID || env.BLOB_READ_WRITE_TOKEN)
+  return Boolean(env.BLOB_STORE_ID || env.BLOB_READ_WRITE_TOKEN) || folderConfigured(env)
 }
 
 export const isPictureVersion = (value) => typeof value === 'string' && VERSION_SHAPE.test(value)
@@ -381,7 +390,7 @@ const METER_SIDS_PER_MONTH = 500
 const METER_MAX_INCOMPLETE = 20
 const METER_MAX_FISH_MODELS = 4
 // 13 months of 500 ids is about 230 KB; the rest is small.
-const METER_MAX_BYTES = 512 * 1024
+export const METER_MAX_BYTES = 512 * 1024
 
 const METER_DAMAGED =
   'The voice meter\'s file in the picture store is damaged or too big, so nothing was counted: to ' +
@@ -527,6 +536,16 @@ const meterTurnKey = (loadSdk) => {
 
 const loadRealSdk = () => import('@vercel/blob')
 
+// One loader per folder, kept for good: the turns and the copies shown are keyed by the loader's
+// identity (below), so the same folder must always give the same function.
+const folderLoaders = new Map()
+function folderLoader(folder) {
+  if (!folderLoaders.has(folder)) {
+    folderLoaders.set(folder, async () => (await import('./_picture-store-folder.js')).folderSdk(folder))
+  }
+  return folderLoaders.get(folder)
+}
+
 // Saves made at the same moment by one function instance take turns. Each try of a save is a
 // put, and every put is an advanced operation - the ones ifMatch refuses included - so saves
 // that collide spend the month's 2,000 on nothing: one burst of 200 uploads cost 593 settings
@@ -571,6 +590,8 @@ function takeTurn(key, work) {
 // `pause` and `random` are injectable so tests can keep the pause between a save's tries short.
 export function pictureStore(env = process.env, loadSdk = loadRealSdk, { pause = sleep, random = Math.random } = {}) {
   if (!storeConnected(env)) return null
+  // A test that hands in its own loader keeps it; only the default one is swapped for the folder.
+  if (loadSdk === loadRealSdk && folderConfigured(env)) loadSdk = folderLoader(env.PICTURE_FOLDER)
 
   let loading = null
   const sdk = () => (loading ??= Promise.resolve(loadSdk()))
