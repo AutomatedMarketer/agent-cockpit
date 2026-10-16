@@ -776,3 +776,26 @@ test('request.signal is not aborted for a handler that answers in time', async (
   }
   assert.equal(signal.aborted, false)
 })
+
+test('local page: the board\'s page gets local-mode.js in front of app.js - only when started as a local board', async () => {
+  const plain = await running()
+  try {
+    const html = await (await fetch(plain.url('/'))).text()
+    assert.equal(html, readFileSync(join(ROOT, 'public', 'index.html'), 'utf8'), 'the website\'s page must be served exactly as it is')
+    assert.ok(!html.includes('local-mode.js'))
+  } finally {
+    await plain.stop()
+  }
+  const local = await running({ localPage: true })
+  try {
+    const html = await (await fetch(local.url('/'))).text()
+    assert.equal(html.split('/local-mode.js').length - 1, 1)
+    assert.ok(html.indexOf('/local-mode.js') < html.indexOf('/app.js'), 'it must run before app.js')
+    assert.equal(html.replace('<script src="/local-mode.js"></script>', ''), readFileSync(join(ROOT, 'public', 'index.html'), 'utf8'), 'nothing else in the page changes')
+    const script = await fetch(local.url('/local-mode.js'))
+    assert.equal(script.status, 200)
+    assert.match(script.headers.get('content-type'), /javascript/)
+  } finally {
+    await local.stop()
+  }
+})

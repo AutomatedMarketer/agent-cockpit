@@ -248,3 +248,18 @@ test('team folder: a network path (two slashes or two backslashes) is refused, s
     rmSync(board, { recursive: true, force: true })
   }
 })
+
+test('team folder: a network path in any mix of slashes is refused before the disk is touched', () => {
+  const board = mkdtempSync(join(tmpdir(), 'edition-board-'))
+  const back = String.fromCharCode(92)
+  try {
+    for (const path of [`${back}/server/share`, `/${back}server/share`, `${back}${back}server`, '//server/x', `${back}/?/UNC/server/x`, `/${back}.${back}pipe`]) {
+      writeFileSync(join(board, 'board.json'), JSON.stringify({ teamFolder: path }))
+      const answer = resolveTeamFolder({ boardDir: board, stateDir: join(board, 'state') })
+      assert.equal(answer.folder, null, path)
+      assert.match(answer.why, /network folder/, path)
+    }
+  } finally {
+    rmSync(board, { recursive: true, force: true })
+  }
+})

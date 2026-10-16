@@ -395,12 +395,13 @@ test('arriving from another page (an email, Notion, a course page): a tiny page 
       const hop = await arrive('/', { 'Sec-Fetch-Site': site })
       assert.equal(hop.status, 200)
       const text = await hop.text()
-      assert.match(text, /<meta http-equiv="refresh" content="0;url=\/">/)
-      assert.doesNotMatch(text, /board's own page|<script/i)
-      assert.ok(text.length < 400, 'the hop page must hold nothing of the board')
+      assert.match(text, /<meta http-equiv="refresh" content="6;url=\/">/, 'the meta refresh is only the fallback, after the script has had its chance')
+      assert.match(text, /<script src="\/hop\.js"><\/script>/)
+      assert.doesNotMatch(text, new RegExp("board's own page|<script(?![^>]* src=.\/hop\.js.)", 'i'))
+      assert.ok(text.length < 500, 'the hop page must hold nothing of the board')
     }
     const kept = await (await arrive('/?tab=team')).text()
-    assert.match(kept, /content="0;url=\/\?tab=team"/)
+    assert.match(kept, /content="6;url=\/\?tab=team"/)
     const escaped = await (await arrive('/?a="><script>alert(1)</script>')).text()
     assert.doesNotMatch(escaped, /"><script>/)
     // Everything else from another site is still refused, with the old words.
@@ -416,5 +417,21 @@ test('arriving from another page (an email, Notion, a course page): a tiny page 
       assert.equal(answer.status, 403, `${method} ${path} ${JSON.stringify(headers)} gave ${answer.status}`)
       assert.doesNotMatch(await answer.text(), /refresh/)
     }
+  })
+})
+
+test('the hop script keeps the #fragment: it sends the browser to its own full address, and needs no cookie', async () => {
+  await withBoard(async ({ url }) => {
+    const script = await fetch(url('/hop.js'), { headers: { 'Sec-Fetch-Site': 'same-origin' } })
+    assert.equal(script.status, 200)
+    assert.match(script.headers.get('content-type'), /javascript/)
+    assert.equal(script.headers.get('cache-control'), 'no-store')
+    const text = await script.text()
+    assert.match(text, /sessionStorage\.setItem\('board-hash', location\.hash\)/)
+    assert.match(text, /location\.replace\(location\.pathname \+ location\.search\)/, 'a replace with the fragment-bearing address would only jump inside the page')
+    assert.doesNotMatch(text.split(String.fromCharCode(10)).filter((line) => !line.startsWith('//')).join(' '), /token|cookie|viewKey/i, 'the code (not the comments) must hold nothing secret')
+    // From another site too (the hop page is a page visit from there, its script is loaded by the board's own page, but be safe).
+    assert.equal((await fetch(url('/hop.js'), { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 200)
+    assert.equal((await fetch(url('/hop.js'), { method: 'POST', body: '{}', headers: { 'Content-Type': 'application/json' } })).status, 401, 'only a GET of the script is open')
   })
 })

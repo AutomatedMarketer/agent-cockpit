@@ -85,10 +85,15 @@ export const picturesDirFor = (stateDir) => join(stateDir, 'pictures')
 // Where the team repo is on this computer, or { folder: null, why } saying what to do. In order:
 // board.json next to the starter, board.json in the state folder, or - when the board sits inside
 // the team folder - the folder above it. board.json looks like { "teamFolder": "C:\Users\me\my-team" }.
+// Two slashes of either kind at the start - \server, //server, \/server, /\server, the \?\ forms - are a network
+// or device path, and touching one can send the student's sign-in to a server. Checked before the disk is.
+const isSlash = (character) => character === '/' || character === String.fromCharCode(92)
+export const isNetworkPath = (path) => path.length >= 2 && isSlash(path[0]) && isSlash(path[1])
+
 export function resolveTeamFolder({ boardDir, stateDir }) {
   const ask = 'Tell the board where your team folder is: make a file called board.json next to Start Board, containing {"teamFolder": "the full path of your team folder"}.'
   const check = (candidate, source) => {
-    if (typeof candidate === 'string' && ['//', String.fromCharCode(92, 92)].some((start) => candidate.startsWith(start))) return { folder: null, why: `${source}: a network folder (${candidate.slice(0, 2)}...) is not allowed; use a folder on this computer. ${ask}` }
+    if (typeof candidate === 'string' && isNetworkPath(candidate)) return { folder: null, why: `${source}: a network folder (${candidate.slice(0, 2)}...) is not allowed; use a folder on this computer. ${ask}` }
     if (typeof candidate !== 'string' || !isAbsolute(candidate)) return { folder: null, why: `${source}: teamFolder must be the full path of a folder. ${ask}` }
     let real
     try {

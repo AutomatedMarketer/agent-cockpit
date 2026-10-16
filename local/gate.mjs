@@ -20,6 +20,8 @@ export const OPEN_PATH = '/open-board'
 // The port is in the name: two boards on one computer keep their own cookies (a browser shares
 // cookies between ports on 127.0.0.1, so one name would make each sign the other out).
 export const cookieName = (port) => `board_local_${port}`
+export const HOP_SCRIPT = '/hop.js'
+export const LOCAL_MODE_SCRIPT = '/local-mode.js'
 export const STARTER_PATH = '/starter/open-link'
 export const LINK_LIFETIME_MS = 2 * 60 * 1000
 
@@ -99,6 +101,9 @@ export function createLocalGate({ now = Date.now } = {}) {
     const isApi = pathname === '/api' || pathname.startsWith('/api/')
     const opensLink = pathname === OPEN_PATH && request.method === 'GET'
 
+    // The hop page's script: no data, no cookie needed, a plain GET only.
+    if (pathname === HOP_SCRIPT && request.method === 'GET') return true
+
     // A page on another site - or on another port of this computer, which counts as "same-site" -
     // may not make the browser call the board at all, reads included (a read can cost money). A
     // typed address or a bookmark says "none", the board's own page says "same-origin". Only the
@@ -116,7 +121,7 @@ export function createLocalGate({ now = Date.now } = {}) {
           response.statusCode = 200
           response.setHeader('Cache-Control', 'no-store')
           response.setHeader('Content-Type', 'text/html; charset=utf-8')
-          response.end(`<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${htmlEscape(here)}"><title>Opening the board</title><p>Opening the board...</p>`)
+          response.end(`<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="6;url=${htmlEscape(here)}"><title>Opening the board</title><p>Opening the board...</p><script src="/hop.js"></script>`)
           return false
         }
         return refuse(response, 403, "That did not come from the board's own page.", isApi)

@@ -26,12 +26,19 @@ import { loadVercelConfig } from './headers.mjs'
 import { routeNameFor } from './routes.mjs'
 import { BodyError, cleanForwardingHeaders, shimRequest, shimResponse } from './vercel-shim.mjs'
 import { serveStatic } from './static.mjs'
-import { OPEN_PATH, applyLocalEnv, createLocalGate } from './gate.mjs'
+import { HOP_SCRIPT, LOCAL_MODE_SCRIPT, OPEN_PATH, applyLocalEnv, createLocalGate } from './gate.mjs'
+import { readFileSync } from 'node:fs'
 
 export const LOOPBACK = '127.0.0.1'
 export const DEFAULT_PORT = 4317
 export const HANDLER_TIMEOUT_MS = 60_000 // a Vercel function has a limit too
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const PAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'page')
+const PAGE_SCRIPTS = new Map([
+  [HOP_SCRIPT, readFileSync(join(PAGE_DIR, 'hop.js'))],
+  [LOCAL_MODE_SCRIPT, readFileSync(join(PAGE_DIR, 'local-mode.js'))]
+])
+const APP_TAG = '<script src="/app.js"></script>'
 
 // The only address this server may listen on. Anything else - 0.0.0.0, a LAN address, "localhost"
 // (which can mean ::1 or a name someone else controls), an empty string (which means all) - throws.
@@ -62,6 +69,7 @@ export function createBoardServer({
   root = ROOT,
   gate = () => true,
   handlerTimeoutMs = HANDLER_TIMEOUT_MS,
+  localPage = false, // true: the page gets local-mode.js in front of app.js (startLocalBoard sets it)
   loadHandler = async (name) => (await import(pathToFileURL(join(root, 'api', `${name}.js`)).href)).default
 } = {}) {
   const { headers: securityHeaders } = loadVercelConfig(join(root, 'vercel.json'))
@@ -116,10 +124,26 @@ export function createBoardServer({
       return handler(request, response)
     }
 
+    // The board's own small scripts for a run on this computer (not in public/, so never on the website).
+    const own = PAGE_SCRIPTS.get(pathname)
+    if (own && (request.method === 'GET' || request.method === 'HEAD')) {
+      response.statusCode = 200
+      response.setHeader('Content-Type', 'text/javascript; charset=utf-8')
+      response.setHeader('Cache-Control', 'no-store')
+      response.end(request.method === 'HEAD' ? undefined : own)
+      return
+    }
+
     const served = await serveStatic(publicRoot, request.method, pathname)
     for (const [key, value] of Object.entries(served.headers)) response.setHeader(key, value)
     response.statusCode = served.status
-    response.end(request.method === 'HEAD' ? undefined : served.body)
+    let body = served.body
+    if (localPage && served.status === 200 && pathname === '/' && Buffer.isBuffer(body)) {
+      const html = body.toString('utf8')
+      if (!html.includes(APP_TAG)) throw new Error('public/index.html no longer loads /app.js in the expected way, so the local page script cannot be added')
+      body = Buffer.from(html.replace(APP_TAG, `<script src="${LOCAL_MODE_SCRIPT}"></script>${APP_TAG}`), 'utf8')
+    }
+    response.end(request.method === 'HEAD' ? undefined : body)
   }
 
   server = createServer((request, response) => {
@@ -158,7 +182,7 @@ export async function startBoardServer({ port = DEFAULT_PORT, host = LOOPBACK, b
 export async function startLocalBoard({ now, ...options } = {}) {
   const login = createLocalGate({ now })
   applyLocalEnv(login.viewKey)
-  const board = await startBoardServer({ ...options, gate: login.gate })
+  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true })
   const openLink = () => `http://${board.host}:${board.port}${OPEN_PATH}?t=${login.issueOpenToken()}`
   return { ...board, openLink, starterSecret: login.starterSecret }
 }
