@@ -159,6 +159,14 @@ export function createLocalGate({ now = Date.now } = {}) {
     }
 
     if (opensLink) {
+      // A browser always says what it is asking for. Only a page visit (navigate to a document) may spend
+      // the link: an iframe, a script's fetch or an image request is refused WITHOUT using it up, so a page
+      // that gets hold of the address cannot burn the student's link or read the answer. A request with no
+      // such stamps (an old browser, a program) is treated as before.
+      const dest = request.headers['sec-fetch-dest']
+      if (dest !== undefined && (String(dest).toLowerCase() !== 'document' || String(request.headers['sec-fetch-mode'] ?? '').toLowerCase() !== 'navigate')) {
+        return refuse(response, 403, 'This link opens only as a page in your browser.')
+      }
       const token = new URLSearchParams(search).get('t') ?? ''
       if (!token || !takeToken(token)) {
         return refuse(response, 403, 'This link was already used or has run out. Close this window and start the board again.')

@@ -548,3 +548,37 @@ test('local-mode.js ignores a #bt= fragment (a forged link cannot replace the ke
   assert.match(code, /\^#bt=/, 'a #bt= fragment is recognised only to be removed')
   assert.match(code, /replaceState/)
 })
+
+test('the one-time link is spent only by a page visit: an iframe, a no-cors fetch or any other browser request is refused and leaves it usable', async () => {
+  await withBoard(async ({ board }) => {
+    const link = new URL(board.openLink())
+    const path = link.pathname + link.search
+    const stamped = (site, mode, dest) => rawRequest(board.port, path, 'GET', { 'Sec-Fetch-Site': site, 'Sec-Fetch-Mode': mode, 'Sec-Fetch-Dest': dest })
+    for (const [mode, dest] of [['navigate', 'iframe'], ['navigate', 'frame'], ['navigate', 'embed'], ['navigate', 'object'], ['no-cors', 'empty'], ['cors', 'empty'], ['no-cors', 'image'], ['no-cors', 'script'], ['same-origin', 'empty'], ['no-cors', 'document'], ['cors', 'document'], ['websocket', 'empty']]) {
+      for (const site of ['cross-site', 'same-site', 'same-origin', 'none']) {
+        const answer = await stamped(site, mode, dest)
+        assert.equal(answer.status, 403, `${site} ${mode}/${dest} gave ${answer.status}`)
+        assert.doesNotMatch(await answer.text(), /board-token/, 'a refused request was given the key')
+      }
+    }
+    // None of those used the link up.
+    const visit = await stamped('none', 'navigate', 'document')
+    assert.equal(visit.status, 200, 'the link was used up by a request that was refused')
+    assert.match(await visit.text(), /board-token/)
+    assert.equal((await stamped('none', 'navigate', 'document')).status, 403, 'and it still works only once')
+  })
+})
+
+test('the one-time link: a page visit from anywhere works, and so does a request with no browser stamps at all', async () => {
+  await withBoard(async ({ board }) => {
+    for (const site of ['cross-site', 'same-site', 'same-origin', 'none']) {
+      const link = new URL(board.openLink())
+      const answer = await rawRequest(board.port, link.pathname + link.search, 'GET', { 'Sec-Fetch-Site': site, 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document' })
+      assert.equal(answer.status, 200, site)
+    }
+    const link = new URL(board.openLink())
+    assert.equal((await rawRequest(board.port, link.pathname + link.search, 'GET', {})).status, 200, 'no stamps (an old browser, a program) behaves as before')
+    const other = new URL(board.openLink())
+    assert.equal((await rawRequest(board.port, other.pathname + other.search, 'GET', { 'Sec-Fetch-Site': 'cross-site' })).status, 200, 'a site stamp alone changes nothing')
+  })
+})
