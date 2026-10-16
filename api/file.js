@@ -3,6 +3,7 @@
 // api/state.js: the token stays on the server and never reaches the browser.
 
 import { viewGate } from './_gate.js'
+import { repoFolder, repoReader } from './_repo.js'
 
 const GITHUB = 'https://api.github.com'
 const ALLOWED_EXTENSIONS = /\.(md|txt|json|ya?ml)$/i
@@ -42,7 +43,8 @@ export default async function handler(request, response) {
   const owner = process.env.GITHUB_OWNER
   const repo = process.env.GITHUB_REPO
   const branch = process.env.GITHUB_BRANCH || 'main'
-  if (!owner || !repo) {
+  const folder = repoFolder()
+  if (!folder && (!owner || !repo)) {
     response.status(500).json({ error: 'Set GITHUB_OWNER and GITHUB_REPO in your hosting environment.' })
     return
   }
@@ -50,6 +52,24 @@ export default async function handler(request, response) {
   const path = safePath(request.query?.path)
   if (!path) {
     response.status(400).json({ error: 'path must be a plain repo-relative file ending in .md, .txt, .json or .yml' })
+    return
+  }
+
+  if (folder) {
+    // The same answer from the team folder: what is committed on the pushed branch, never a file
+    // you have changed and not committed.
+    let text
+    try {
+      text = await repoReader(folder).file(branch, path)
+    } catch {
+      response.status(502).json({ error: 'The board could not read that file from the team folder.' })
+      return
+    }
+    if (text === null) {
+      response.status(404).json({ error: 'That file is not in the team repo.' })
+      return
+    }
+    response.status(200).json({ path, content: text.slice(0, MAX_BYTES) })
     return
   }
 

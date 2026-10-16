@@ -34,6 +34,7 @@ import {
 } from './_workflows.js'
 import { parseSimpleYaml } from './_yaml-lite.js'
 import { shapeReadiness } from './_readiness.js'
+import { repoFolder, repoReader, FOLDER_NOTES } from './_repo.js'
 
 const GITHUB = 'https://api.github.com'
 const AGENT_DIR = '.claude/agents'
@@ -69,6 +70,8 @@ export function config() {
   const owner = process.env.GITHUB_OWNER
   const repo = process.env.GITHUB_REPO
   const branch = process.env.GITHUB_BRANCH || 'main'
+  // Reading a folder on this computer needs no GitHub owner or repo name.
+  if (repoFolder() && (!owner || !repo)) return { owner: owner || 'local', repo: repo || 'team-folder', branch }
   if (!owner || !repo) {
     throw ourError('Set GITHUB_OWNER and GITHUB_REPO in your hosting environment, then redeploy.')
   }
@@ -112,6 +115,14 @@ export async function gh(path) {
 // The id of the commit at the head of the branch, and nothing else: one small call. null when GitHub
 // cannot say - the board is then read from the branch by name, and has no commit to offer.
 export async function headCommit({ owner, repo, branch }) {
+  const folder = repoFolder()
+  if (folder) {
+    try {
+      return await repoReader(folder).head(branch)
+    } catch {
+      return null
+    }
+  }
   try {
     const response = await fetch(`${GITHUB}/repos/${owner}/${repo}/commits/${branch}`, { headers: headers('application/vnd.github.sha') })
     if (!response.ok) return null
@@ -139,7 +150,36 @@ export function sinceOf(request) {
   return typeof value === 'string' && COMMIT_ID.test(value) ? value : null
 }
 
+// Reading a folder with no GITHUB_OWNER / GITHUB_REPO set: the names come from the folder's own `origin`
+// address, so the repo link on the page points at the real repo. Anything else is returned as it is.
+export async function namedFromOrigin(base) {
+  const folder = repoFolder()
+  if (!folder || (process.env.GITHUB_OWNER && process.env.GITHUB_REPO)) return base
+  const names = await repoReader(folder).origin().catch(() => null)
+  return names ? { ...base, ...names } : base
+}
+
+// What the page should say about the team folder (folder mode only; null on the website and when
+// there is nothing to say): where the folder stands against GitHub, and a tree too long to list.
+export async function folderNote(tree) {
+  const folder = repoFolder()
+  if (!folder) return null
+  const described = await repoReader(folder).describe().catch(() => null)
+  const parts = [described?.note, tree?.truncated ? FOLDER_NOTES.truncated : null].filter(Boolean)
+  return parts.length ? parts.join(' ') : null
+}
+
+// Every file path in the repo with its size: GitHub's tree call, or the same list from the git folder.
+// `ref` is a whole commit id, or the branch name when the head could not be found.
+export async function repoTree({ owner, repo }, ref) {
+  const folder = repoFolder()
+  if (folder) return repoReader(folder).tree(ref)
+  return gh(`/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`)
+}
+
 export async function rawFile({ owner, repo, branch }, filePath) {
+  const folder = repoFolder()
+  if (folder) return repoReader(folder).file(branch, filePath)
   const response = await fetch(
     `${GITHUB}/repos/${owner}/${repo}/contents/${encodeURI(filePath)}?ref=${branch}`,
     { headers: headers('application/vnd.github.raw') }
@@ -2456,7 +2496,7 @@ async function handle(request, response, store) {
     return
   }
   try {
-    const base = config()
+    const base = await namedFromOrigin(config())
     const { owner, repo, branch } = base
     const now = Date.now()
 
@@ -2479,10 +2519,11 @@ async function handle(request, response, store) {
     const settings = head === null ? base : { ...base, branch: head }
 
     // One tree call gives every path in the repo. Cheaper than walking directories.
-    const tree = await gh(`/repos/${owner}/${repo}/git/trees/${settings.branch}?recursive=1`)
+    const tree = await repoTree(settings, settings.branch)
     const blobs = (tree.tree ?? []).filter((node) => node.type === 'blob')
     const paths = blobs.map((node) => node.path)
     const sizes = Object.fromEntries(blobs.map((node) => [node.path, node.size ?? null]))
+    const note = await folderNote(tree)
 
     const agentPaths = paths.filter((path) => path.startsWith(`${AGENT_DIR}/`) && path.endsWith('.md'))
     const runPaths = paths.filter((path) => /^runs\/\d{4}-\d{2}\/.+\.json$/.test(path))
@@ -2702,7 +2743,7 @@ async function handle(request, response, store) {
     // URL, not the x-view-key header. A shared copy made for the owner was served to anyone
     // without a key for up to six minutes (found live 2026-10-09). Set at the top of the handler.
     response.status(200).json({
-      repo: { owner, repo, branch, url: `https://github.com/${owner}/${repo}` },
+      repo: { owner, repo, branch, url: `https://github.com/${owner}/${repo}`, ...(note ? { note } : {}) },
       // What this answer was built from, for the page to ask "has it changed?" with. null when GitHub
       // would not say, and then the page does not ask.
       commit: head,

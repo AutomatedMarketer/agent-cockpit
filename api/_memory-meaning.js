@@ -13,7 +13,8 @@
 // instance makes at most 30 searches a minute and 1,000 a day. The OpenAI project's own spend limit
 // (README, "Set a hard spend limit") is the real ceiling.
 
-import { config, gh, headCommit } from './state.js'
+import { config, repoTree, headCommit } from './state.js'
+import { repoFolder, repoReader } from './_repo.js'
 import { spendIndexSave, usageDay, failureAnswer, PictureStoreError } from './_picture-store.js'
 import { meaningConfig, MEANING_SAY } from './_meaning-switch.js'
 import {
@@ -98,7 +99,15 @@ const cutCount = (index) => index.entries.filter((entry) => entry.cut).length
 
 // The exact text that matches a fingerprint, so what is learned is what the tree said. null when GitHub
 // does not return it; that note is left for the next step.
-async function noteByFingerprint({ owner, repo }, sha) {
+export async function noteByFingerprint({ owner, repo }, sha) {
+  const folder = repoFolder()
+  if (folder) {
+    try {
+      return await repoReader(folder).blob(sha)
+    } catch {
+      return null
+    }
+  }
   const headers = { Accept: 'application/vnd.github.raw', 'User-Agent': 'agent-cockpit' }
   if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`
   try {
@@ -185,7 +194,7 @@ async function stepNow({ store, env, now }) {
     await saveIfDue(store, now)
     return stepAnswer(held, { left: 0, embeddedNow: 0 })
   }
-  const tree = await gh(`/repos/${base.owner}/${base.repo}/git/trees/${head ?? base.branch}?recursive=1`)
+  const tree = await repoTree(base, head ?? base.branch)
   const eligible = eligibleNotes(tree.tree)
   const { keep, embed } = diffIndex(index, eligible.notes)
   const chosen = stepNotes(embed)
