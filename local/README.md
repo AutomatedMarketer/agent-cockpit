@@ -16,6 +16,16 @@ What exists (task T1):
 - It replaces any `X-Forwarded-For` / `X-Real-IP` / `X-Forwarded-Host` a caller sends with the real connection address.
 - No new dependencies.
 
+Known limits:
+
+- **Cookies are shared across ports on 127.0.0.1.** A browser sends the board's cookie to any other web
+  server the student opens at `127.0.0.1:<other port>`, and such a server can also plant a cookie. Done
+  here: the port is in the cookie name (two boards do not sign each other out), any valid value counts
+  (a planted junk one cannot sign the student out), and a request that says it comes from another site
+  or port is refused. Not done: that other server still *receives* the cookie. Planned fix (T9): the
+  page's api calls carry a header token kept in the board page's own storage, not a cookie, and the
+  cookie opens only the page shell.
+
 What is missing:
 
 - **T2**, reading the team folder with git instead of GitHub. Today the handlers still read GitHub, so

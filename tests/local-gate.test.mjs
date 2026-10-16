@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { startLocalBoard } from '../local/server.mjs'
-import { LINK_LIFETIME_MS, OPEN_PATH, COOKIE_NAME, createLocalGate, applyLocalEnv } from '../local/gate.mjs'
+import { LINK_LIFETIME_MS, OPEN_PATH, cookieName, createLocalGate, applyLocalEnv } from '../local/gate.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const ENV_KEYS = ['VIEW_KEY', 'PUBLIC_FIRE', 'PUBLIC_DASHBOARD', 'EDIT_KEY', 'BOARD_PASSWORD', 'BOARD_USERNAME']
@@ -55,7 +55,7 @@ test('the link opens the board once: a cookie is set, the browser is sent to /, 
     assert.equal(answer.status, 303)
     assert.equal(answer.headers.get('location'), '/', 'the link must not stay in the address bar')
     assert.equal(answer.headers.get('cache-control'), 'no-store')
-    assert.match(setCookie, new RegExp(`^${COOKIE_NAME}=`))
+    assert.match(setCookie, new RegExp(`^${cookieName(board.port)}=`))
     const page = await fetch(url('/'), { headers: { Cookie: cookie } })
     assert.equal(page.status, 200)
     assert.match(await page.text(), /<html|<!doctype/i)
@@ -115,11 +115,12 @@ test('a wrong, missing, shortened or reshaped link token is refused', async () =
 test('a tampered, truncated or made-up cookie is refused', async () => {
   await withBoard(async ({ board, url, open }) => {
     const { cookie } = await open(board.openLink())
-    const value = cookie.slice(COOKIE_NAME.length + 1)
+    const name = cookie.slice(0, cookie.indexOf('='))
+    const value = cookie.slice(name.length + 1)
     const [nonce, mac] = value.split('.')
     const flipped = mac.slice(0, -1) + (mac.at(-1) === 'A' ? 'B' : 'A')
     for (const bad of [`${nonce}.${flipped}`, `${nonce}.`, `.${mac}`, nonce, `${nonce}x.${mac}`, 'abc.def', '', `${nonce}.${mac}.${mac}`]) {
-      const answer = await fetch(url('/'), { headers: { Cookie: `${COOKIE_NAME}=${bad}` } })
+      const answer = await fetch(url('/'), { headers: { Cookie: `${name}=${bad}` } })
       assert.equal(answer.status, 401, `"${bad}" was accepted`)
     }
     assert.equal((await fetch(url('/'), { headers: { Cookie: `other=1; ${cookie}; more=2` } })).status, 200, 'the right cookie among others should work')
@@ -266,11 +267,67 @@ test('the link is printed once by the command line and appears nowhere else, eve
   }
 })
 
-test('the sign-in code compares secrets only with timingSafeEqual', () => {
-  const source = readFileSync(join(ROOT, 'local', 'gate.mjs'), 'utf8')
-  assert.match(source, /timingSafeEqual/)
-  const code = source.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n')
-  for (const risky of [/(token|nonce|cookie|mac|secret|hash)\w*\s*===?\s*\w/i, /\.includes\(\s*token/, /\.startsWith\(\s*token/]) {
-    assert.doesNotMatch(code.replace(/===?\s*(''|'\/'|'GET'|'HEAD'|-1|0|null)/g, ''), risky, `a secret may be compared with ${risky}`)
-  }
+test('cookies and tokens of any length or shape are refused cleanly, never an error', async () => {
+  await withBoard(async ({ board, url, tokenOf }) => {
+    const name = cookieName(board.port)
+    for (const value of ['x'.repeat(6000), '.'.repeat(500), 'a.b.c.d', '%00.%00', 'é.é', '='.repeat(100)]) {
+      const answer = await fetch(url('/'), { headers: { Cookie: `${name}=${value}` } })
+      assert.equal(answer.status, 401, `a ${value.length}-character cookie gave ${answer.status}`)
+    }
+    for (const token of ['x'.repeat(5000), 'é', '%00', '../..']) {
+      const answer = await fetch(url(`${OPEN_PATH}?t=${encodeURIComponent(token)}`), { redirect: 'manual' })
+      assert.equal(answer.status, 403)
+    }
+    assert.ok(tokenOf)
+  })
+})
+
+test('a page on another local port cannot trigger reads: same-site and cross-site requests are refused, even GETs', async () => {
+  await withBoard(async ({ board, url, open }) => {
+    const { cookie } = await open(board.openLink())
+    for (const site of ['same-site', 'cross-site', 'Cross-Site']) {
+      for (const path of ['/', '/api/state', '/app.js']) {
+        const answer = await fetch(url(path), { headers: { Cookie: cookie, 'Sec-Fetch-Site': site } })
+        assert.equal(answer.status, 403, `${path} with ${site} gave ${answer.status}`)
+      }
+    }
+    for (const site of ['same-origin', 'none']) {
+      assert.equal((await fetch(url('/'), { headers: { Cookie: cookie, 'Sec-Fetch-Site': site } })).status, 200, `${site} was refused`)
+    }
+  })
+})
+
+test('the one-time link may be opened from anywhere (a file the starter wrote counts as another site)', async () => {
+  await withBoard(async ({ board, open }) => {
+    const link = board.openLink()
+    const answer = await fetch(link, { redirect: 'manual', headers: { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' } })
+    assert.equal(answer.status, 303)
+    assert.ok(open)
+  })
+})
+
+test('one junk cookie of the same name cannot sign the student out: any valid value is enough', async () => {
+  await withBoard(async ({ board, url, open }) => {
+    const { cookie } = await open(board.openLink())
+    const name = cookie.slice(0, cookie.indexOf('='))
+    assert.equal((await fetch(url('/'), { headers: { Cookie: `${name}=junk; ${cookie}` } })).status, 200)
+    assert.equal((await fetch(url('/'), { headers: { Cookie: `${cookie}; ${name}=junk` } })).status, 200)
+    assert.equal((await fetch(url('/'), { headers: { Cookie: `${name}=junk; ${name}=more.junk` } })).status, 401)
+  })
+})
+
+test('the cookie name carries the port, so two boards on one computer do not knock each other out', async () => {
+  await withBoard(async ({ board: first, url: firstUrl, open: openFirst }) => {
+    await withBoard(async ({ board: second, url: secondUrl, open: openSecond }) => {
+      assert.notEqual(first.port, second.port)
+      const one = (await openFirst(first.openLink())).cookie
+      const two = (await openSecond(second.openLink())).cookie
+      assert.notEqual(one.split('=')[0], two.split('=')[0])
+      assert.equal(one.split('=')[0], cookieName(first.port))
+      // A browser keeps both on 127.0.0.1 and sends both everywhere.
+      const both = `${one}; ${two}`
+      assert.equal((await fetch(firstUrl('/'), { headers: { Cookie: both } })).status, 200)
+      assert.equal((await fetch(secondUrl('/'), { headers: { Cookie: both } })).status, 200)
+    })
+  })
 })

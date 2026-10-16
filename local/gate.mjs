@@ -16,19 +16,24 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
 export const OPEN_PATH = '/open-board'
-export const COOKIE_NAME = 'board_local'
+// The port is in the name: two boards on one computer keep their own cookies (a browser shares
+// cookies between ports on 127.0.0.1, so one name would make each sign the other out).
+export const cookieName = (port) => `board_local_${port}`
 export const LINK_LIFETIME_MS = 2 * 60 * 1000
 
 const digest = (value) => createHash('sha256').update(String(value)).digest()
 // Both sides are hashed to the same length first, so the compare never throws and never leaks length.
 const sameSecret = (given, wanted) => timingSafeEqual(digest(given), digest(wanted))
 
-function readCookie(headers, name) {
+// Every value sent under this name. A page on another port of 127.0.0.1 can plant a cookie with the
+// same name, so a junk one must not hide the real one: the request is good if ANY value is.
+function readCookies(headers, name) {
+  const values = []
   for (const part of String(headers.cookie ?? '').split(';')) {
     const at = part.indexOf('=')
-    if (at > 0 && part.slice(0, at).trim() === name) return part.slice(at + 1).trim()
+    if (at > 0 && part.slice(0, at).trim() === name) values.push(part.slice(at + 1).trim())
   }
-  return ''
+  return values
 }
 
 function refuse(response, status, text, json) {
@@ -50,11 +55,13 @@ export function createLocalGate({ now = Date.now } = {}) {
   const links = [] // { hash, expires, used }
 
   const mac = (nonce) => createHmac('sha256', runSecret).update(nonce).digest('base64url')
-  const cookieIsGood = (value) => {
+  const valueIsGood = (value) => {
     const dot = value.indexOf('.')
     if (dot < 1) return false
     return sameSecret(value.slice(dot + 1), mac(value.slice(0, dot)))
   }
+  // No early exit: every value is checked, so timing does not say which one was close.
+  const cookieIsGood = (values) => values.map(valueIsGood).includes(true)
 
   // A fresh one-time link's secret part. The caller builds the address and prints it - once.
   function issueOpenToken() {
@@ -86,14 +93,26 @@ export function createLocalGate({ now = Date.now } = {}) {
   async function gate(request, response) {
     const { pathname, search } = splitUrl(request.url)
     const isApi = pathname === '/api' || pathname.startsWith('/api/')
+    const opensLink = pathname === OPEN_PATH && request.method === 'GET'
 
-    if (pathname === OPEN_PATH && request.method === 'GET') {
+    // A page on another site - or on another port of this computer, which counts as "same-site" -
+    // may not make the browser call the board at all, reads included (a read can cost money). A
+    // typed address or a bookmark says "none", the board's own page says "same-origin". Only the
+    // one-time link may come from elsewhere: the file the starter opens is "another site".
+    if (!opensLink) {
+      const fetchSite = String(request.headers['sec-fetch-site'] ?? '').toLowerCase()
+      if (fetchSite === 'same-site' || fetchSite === 'cross-site') {
+        return refuse(response, 403, 'That did not come from the own page.', isApi)
+      }
+    }
+
+    if (opensLink) {
       const token = new URLSearchParams(search).get('t') ?? ''
       if (!token || !takeToken(token)) {
         return refuse(response, 403, 'This link was already used or has run out. Close this window and start the board again.')
       }
       const nonce = randomBytes(24).toString('base64url')
-      response.setHeader('Set-Cookie', `${COOKIE_NAME}=${nonce}.${mac(nonce)}; Path=/; HttpOnly; SameSite=Strict`)
+      response.setHeader('Set-Cookie', `${cookieName(request.socket.localPort)}=${nonce}.${mac(nonce)}; Path=/; HttpOnly; SameSite=Strict`)
       response.setHeader('Cache-Control', 'no-store')
       response.setHeader('Location', '/')
       response.statusCode = 303
@@ -101,7 +120,7 @@ export function createLocalGate({ now = Date.now } = {}) {
       return false
     }
 
-    if (!cookieIsGood(readCookie(request.headers, COOKIE_NAME))) {
+    if (!cookieIsGood(readCookies(request.headers, cookieName(request.socket.localPort)))) {
       return refuse(response, 401, 'Open the board with the link shown in the window that started it.', isApi)
     }
     // Every change must come from the board's own page: another site's page can make the browser
