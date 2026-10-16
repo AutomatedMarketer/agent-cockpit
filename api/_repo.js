@@ -22,7 +22,7 @@
 // - Each call has a time limit and an output limit, and at most MAX_AT_ONCE run together.
 
 import { execFile } from 'node:child_process'
-import { mkdtempSync, statSync } from 'node:fs'
+import { mkdtempSync, realpathSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -177,8 +177,16 @@ function gitProgram() {
   if (!foundGit) throw ourFailure(FOLDER_UNREADABLE)
   return foundGit
 }
+// Compared by where each really is (links and 8.3 short names resolved), not by how it is spelled.
+const real = (value) => {
+  try {
+    return realpathSync.native(path.resolve(value))
+  } catch {
+    return path.resolve(value)
+  }
+}
 export function isInside(folder, target) {
-  const relative = path.relative(path.resolve(folder), path.resolve(target))
+  const relative = path.relative(real(folder), real(target))
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
 }
 
@@ -241,6 +249,9 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
   function refresh(branch) {
     const t = now()
     if (lastFetch.promise && t - lastFetch.at < FETCH_EVERY_MS) return lastFetch.promise
+    // Accepted, not coded around: a student's own .git/config could `include.path` a committed file
+    // that sets core.sshCommand. That needs the student's own config to point there, so whoever can
+    // do that can already run programs as them.
     // Only a GitHub address is fetched from: any other origin could be a program (an ext:: or a
     // local path) rather than a server. Its last fetched state is shown as it is.
     const promise = origin().then((names) =>

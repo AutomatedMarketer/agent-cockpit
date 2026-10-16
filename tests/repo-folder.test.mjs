@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
@@ -478,6 +478,25 @@ test('findGit takes only absolute PATH entries, and a git program inside the tea
     const real = findGit()
     assert.ok(real && path.isAbsolute(real))
     await assert.rejects(runGit(['--version'], { cwd: path.dirname(real) }), (error) => error.ours === true && error.message === FOLDER_UNREADABLE)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('a git program reached through a junction or link into the team folder is refused too', async () => {
+  const base = mkdtempSync(path.join(tmpdir(), 'cockpit-junction-'))
+  try {
+    const team = path.join(base, 'team')
+    mkdirSync(path.join(team, 'bin'), { recursive: true })
+    const name = process.platform === 'win32' ? 'git.exe' : 'git'
+    writeFileSync(path.join(team, 'bin', name), 'x')
+    const via = path.join(base, 'innocent')
+    symlinkSync(path.join(team, 'bin'), via, 'junction')
+    const found = findGit({ PATH: via }, process.platform)
+    assert.equal(found, path.join(via, name), 'the junction entry was found by its own spelling')
+    assert.equal(isInside(team, found), true, 'the spelling hid that it lives in the team folder')
+    assert.equal(isInside(path.join(base, 'innocent'), path.join(team, 'bin', name)), true, 'and the other way round')
+    assert.equal(isInside(team, path.join(base, 'elsewhere', name)), false)
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
