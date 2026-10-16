@@ -38,6 +38,38 @@ function findChrome(env = process.env, platform = process.platform) {
 }
 const CHROME = findChrome()
 
+const FAKE_KEY = 'sk-proj-' + 'Zz9Yy8Xx'.repeat(6)
+
+// Drives the real Settings box the way a student would (typing, pressing buttons) and reports what it saw to
+// the board as a request, since Chrome's own dump of a page is not reliable across navigations.
+const DRIVE_SCRIPT = `(async function () {
+  var KEY = 'sk-proj-' + 'Zz9Yy8Xx'.repeat(6) // built, so this test file's own script never holds the whole key
+  var sleep = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms) }) }
+  var q = function (id) { return document.getElementById(id) }
+  var until = async function (check) { for (var i = 0; i < 80; i++) { if (check()) return true; await sleep(100) } return false }
+  var report = function (step, extra) { return fetch('/report?' + new URLSearchParams(Object.assign({ step: step }, extra)).toString()) }
+  await sleep(600)
+  if (!q('board-settings-open')) { await report('nobox'); return }
+  q('board-settings-open').click()
+  await until(function () { return /^(not saved|saved)/.test(q('board-state-OPENAI_API_KEY').textContent) && !q('board-settings').hidden })
+  var started = q('board-state-OPENAI_API_KEY').textContent
+  q('board-key-OPENAI_API_KEY').value = 'sk-bad key'
+  q('board-save-OPENAI_API_KEY').click()
+  await until(function () { return /space or a new line/.test(q('board-settings-note').textContent) })
+  await report('refused', { note: q('board-settings-note').textContent, started: started, emptied: String(q('board-key-OPENAI_API_KEY').value === '') })
+  q('board-key-OPENAI_API_KEY').value = KEY
+  q('board-save-OPENAI_API_KEY').click()
+  await until(function () { return /^saved/.test(q('board-state-OPENAI_API_KEY').textContent) })
+  await report('saved', { state: q('board-state-OPENAI_API_KEY').textContent, note: q('board-settings-note').textContent, cleared: String(q('board-key-OPENAI_API_KEY').value === ''), keyInPage: String(document.documentElement.outerHTML.indexOf(KEY) >= 0 || document.body.innerText.indexOf(KEY) >= 0), removeShown: String(!q('board-remove-OPENAI_API_KEY').hidden), testShown: String(!q('board-test-OPENAI_API_KEY').hidden) })
+  q('board-test-OPENAI_API_KEY').click()
+  await until(function () { return /works|refused|credit|could not/i.test(q('board-settings-note').textContent) })
+  await report('tested', { note: q('board-settings-note').textContent })
+  q('board-remove-OPENAI_API_KEY').click()
+  await until(function () { return q('board-state-OPENAI_API_KEY').textContent === 'not saved' })
+  await report('removed', { state: q('board-state-OPENAI_API_KEY').textContent, note: q('board-settings-note').textContent })
+})()
+`
+
 const ENV_KEYS = ['VIEW_KEY', 'PUBLIC_FIRE', 'PUBLIC_DASHBOARD', 'EDIT_KEY', 'BOARD_PASSWORD', 'BOARD_USERNAME', 'REPO_SOURCE', 'REPO_FOLDER', 'PICTURE_STORE', 'PICTURE_FOLDER']
 
 // Runs the whole journey once and hands back what the board saw and what Chrome ended on. Shared by the
@@ -66,6 +98,15 @@ async function runJourneyOnce(mode) {
   let result
   let boardPort
   let apiToken
+  let settingsFile
+  // A stand-in for OpenAI's models address: records what it is asked, never the real service.
+  const openaiCalls = []
+  const openai = createServer((request, response) => {
+    openaiCalls.push({ method: request.method, url: request.url, authorization: request.headers.authorization })
+    response.setHeader('Content-Type', 'application/json')
+    response.end(JSON.stringify({ data: [] }))
+  })
+  await new Promise((done) => openai.listen(0, '127.0.0.1', done))
   const other = createServer((request, response) => {
     seen.push({ path: 'OTHER-SITE ' + request.url, status: 200 })
     response.setHeader('Content-Type', 'text/html')
@@ -78,14 +119,17 @@ async function runJourneyOnce(mode) {
     writeFileSync(join(boardRoot, 'vercel.json'), readFileSync(join(ROOT, 'vercel.json')))
     // On the first visit it leaves for the other site; on the return visit (it has a #fragment) it reports what
     // the page shows - Chrome's own dump of the page is not reliable across several navigations.
-    if (mode !== 'poison') writeFileSync(join(boardRoot, 'public', 'leave.js'), [
+    if (mode === 'full' || mode === 'forged') writeFileSync(join(boardRoot, 'public', 'leave.js'), [
       "if (!sessionStorage.getItem('left-once')) { sessionStorage.setItem('left-once', '1'); setTimeout(function () { location.href = 'http://localhost:" + other.address().port + "/' }, 1200) }",
       "else setTimeout(function () { fetch('/report?hash=' + encodeURIComponent(location.hash) + '&active=' + encodeURIComponent((document.getElementById('readiness') || {}).className || '') + '&title=' + encodeURIComponent(document.title) + '&mode=' + encodeURIComponent(document.documentElement.getAttribute('data-board-mode') || '')) }, 2500)",
       ''
     ].join(String.fromCharCode(10)))
     const index = readFileSync(join(ROOT, 'public', 'index.html'), 'utf8')
     assert.ok(index.includes('<script src="/app.js"></script>'))
-    if (mode !== 'poison') {
+    if (mode === 'settings') {
+      writeFileSync(join(boardRoot, 'public', 'drive.js'), DRIVE_SCRIPT)
+      writeFileSync(join(boardRoot, 'public', 'index.html'), index.replace('<script src="/app.js"></script>', '<script src="/app.js"></script><script src="/drive.js"></script>'))
+    } else if (mode !== 'poison') {
       writeFileSync(join(boardRoot, 'public', 'index.html'), index.replace('<script src="/app.js"></script>', '<script src="/app.js"></script><script src="/leave.js"></script>'))
     } else {
       // The page's key goes bad before the page asks for anything (as after the board was restarted behind an open tab):
@@ -119,11 +163,12 @@ async function runJourneyOnce(mode) {
         // The team's data is not what this test is about: /api/state answers a plain, valid board so the page can draw.
         const stateStub = (request, response) => response.status(200).json(basePayload())
         const loadHandler = async (name) => (name === 'state' ? stateStub : (await import(`../api/${name}.js`)).default)
-        const board = await startLocalBoard({ ...options, root: boardRoot, loadHandler })
+        settingsFile = options.settingsFile
+        const board = await startLocalBoard({ ...options, root: boardRoot, loadHandler, settingsOptions: { openaiBase: `http://127.0.0.1:${openai.address().port}` } })
         boardPort = board.port
         apiToken = board.apiToken
         board.server.prependListener('request', (request, response) => {
-          response.on('finish', () => seen.push({ status: response.statusCode, method: request.method, path: request.url.split('?')[0], query: request.url.includes('?') ? request.url.split('?')[1] : '', site: request.headers['sec-fetch-site'], cookie: Boolean(request.headers.cookie), token: Boolean(request.headers['x-board-token']) }))
+          response.on('finish', () => seen.push({ envHasKey: process.env.OPENAI_API_KEY === FAKE_KEY, fileHasKey: existsSync(settingsFile) && readFileSync(settingsFile, 'utf8').includes(FAKE_KEY), status: response.statusCode, method: request.method, path: request.url.split('?')[0], query: request.url.includes('?') ? request.url.split('?')[1] : '', site: request.headers['sec-fetch-site'], cookie: Boolean(request.headers.cookie), token: Boolean(request.headers['x-board-token']) }))
         })
         return board
       }
@@ -136,13 +181,14 @@ async function runJourneyOnce(mode) {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const path = join(dir, entry.name)
         if (entry.isDirectory()) { if (entry.name !== 'Local Storage') walk(path); continue }
-        try { if (statSync(path).size < 300 * 1024 * 1024 && readFileSync(path).includes(apiToken)) leaks.push(path.slice(profile.length)) } catch { /* locked or gone */ }
+        try { if (statSync(path).size < 300 * 1024 * 1024 && (readFileSync(path).includes(apiToken) || (mode === 'settings' && readFileSync(path).includes(FAKE_KEY)))) leaks.push(path.slice(profile.length)) } catch { /* locked or gone */ }
       }
     }
     if (existsSync(profile)) walk(profile)
-    return { seen, dom, leaks, apiToken, title: /<title>([^<]+)<\/title>/.exec(readFileSync(join(ROOT, 'public', 'index.html'), 'utf8'))?.[1] }
+    return { seen, dom, leaks, apiToken, openaiCalls, settingsFile, title: /<title>([^<]+)<\/title>/.exec(readFileSync(join(ROOT, 'public', 'index.html'), 'utf8'))?.[1] }
   } finally {
     other.close()
+    openai.close()
     await result?.close?.()
     for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
     rmSync(home, { recursive: true, force: true })
@@ -224,4 +270,29 @@ test('real Chrome: a link to the board with a forged #bt= does not replace the k
   const calls = seen.filter((entry) => entry.path === '/api/state')
   assert.ok(calls.length >= 2, `the page made too few calls: ${JSON.stringify(seen)}`)
   for (const call of calls) assert.equal(call.status, 200, 'the forged key replaced the good one: the board refused a call')
+})
+
+test('real Chrome: a student pastes an OpenAI key in the Settings box - saved, tested, never shown again, removable', { skip, timeout: 170000 }, async () => {
+  const { seen, openaiCalls, leaks } = await runJourney('settings')
+  assert.deepEqual(leaks, [], `the pasted key or the page key was found in the browser's files: ${leaks.join(', ')}`)
+  const steps = Object.fromEntries(seen.filter((entry) => entry.path === '/report').map((entry) => [new URLSearchParams(entry.query).get('step'), { ...entry, said: new URLSearchParams(entry.query) }]))
+  assert.ok(!steps.nobox, 'the Settings box was not on the page')
+  for (const step of ['refused', 'saved', 'tested', 'removed']) assert.ok(steps[step], `the box never got as far as "${step}": ${JSON.stringify(seen.filter((entry) => entry.path === '/report').map((entry) => entry.query))}`)
+  assert.equal(steps.refused.said.get('started'), 'not saved')
+  assert.match(steps.refused.said.get('note'), /space or a new line/)
+  assert.equal(steps.refused.said.get('emptied'), 'true', 'a refused paste stayed in the box')
+  assert.equal(steps.saved.said.get('state'), `saved · ends in ••••${FAKE_KEY.slice(-4)}`)
+  assert.equal(steps.saved.said.get('cleared'), 'true', 'the pasted key stayed in the box')
+  assert.equal(steps.saved.said.get('keyInPage'), 'false', 'the key is in the page')
+  assert.equal(steps.saved.said.get('removeShown'), 'true')
+  assert.equal(steps.saved.said.get('testShown'), 'true')
+  assert.equal(steps.saved.envHasKey, true, 'the handlers do not have the key right after saving')
+  assert.equal(steps.saved.fileHasKey, true, 'the key was not written to the settings file')
+  assert.equal(steps.tested.said.get('note'), 'This key works.')
+  assert.equal(openaiCalls.length, 1, 'the key test called the service more or less than once')
+  assert.deepEqual([openaiCalls[0].method, openaiCalls[0].url, openaiCalls[0].authorization], ['GET', '/v1/models', `Bearer ${FAKE_KEY}`])
+  assert.equal(steps.removed.said.get('state'), 'not saved')
+  assert.equal(steps.removed.envHasKey, false)
+  assert.equal(steps.removed.fileHasKey, false)
+  for (const entry of seen) assert.ok(!JSON.stringify(entry).includes(FAKE_KEY), 'the key appeared in a request the page made')
 })

@@ -265,7 +265,7 @@ export async function runStart({
     privateDir(pictureFolder)
     applyStudentEnv(process.env, { teamFolder, pictureFolder })
   }
-  const board = await pickPort(basePort, tries, (port) => startBoard({ port }))
+  const board = await pickPort(basePort, tries, (port) => startBoard({ port, settingsFile: join(stateDir, 'settings.json') }))
   const stateFile = join(stateDir, STATE_FILE)
   writePrivateFile(stateFile, JSON.stringify({ port: board.port, secret: board.starterSecret, startedAt: new Date().toISOString() }))
 

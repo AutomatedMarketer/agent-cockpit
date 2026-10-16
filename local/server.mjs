@@ -28,16 +28,19 @@ import { BodyError, cleanForwardingHeaders, shimRequest, shimResponse } from './
 import { serveStatic } from './static.mjs'
 import { HOP_SCRIPT, KEY_HANDOFF_SCRIPT, LOCAL_MODE_SCRIPT, OPEN_PATH, applyLocalEnv, createLocalGate } from './gate.mjs'
 import { readFileSync } from 'node:fs'
+import { SETTINGS_PATH, createSettings } from './settings.mjs'
 
 export const LOOPBACK = '127.0.0.1'
 export const DEFAULT_PORT = 4317
 export const HANDLER_TIMEOUT_MS = 60_000 // a Vercel function has a limit too
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'page')
+const SETTINGS_SCRIPT = '/local-settings.js'
 const PAGE_SCRIPTS = new Map([
   [HOP_SCRIPT, readFileSync(join(PAGE_DIR, 'hop.js'))],
   [LOCAL_MODE_SCRIPT, readFileSync(join(PAGE_DIR, 'local-mode.js'))],
-  [KEY_HANDOFF_SCRIPT, readFileSync(join(PAGE_DIR, 'key-handoff.js'))]
+  [KEY_HANDOFF_SCRIPT, readFileSync(join(PAGE_DIR, 'key-handoff.js'))],
+  [SETTINGS_SCRIPT, readFileSync(join(PAGE_DIR, 'settings-ui.js'))]
 ])
 const APP_TAG = '<script src="/app.js"></script>'
 
@@ -70,6 +73,7 @@ export function createBoardServer({
   root = ROOT,
   gate = () => true,
   handlerTimeoutMs = HANDLER_TIMEOUT_MS,
+  localRoutes = {}, // address -> handler, for the few things only the local board has (the Settings box)
   localPage = false, // true: the page gets local-mode.js in front of app.js (startLocalBoard sets it)
   loadHandler = async (name) => (await import(pathToFileURL(join(root, 'api', `${name}.js`)).href)).default
 } = {}) {
@@ -96,7 +100,8 @@ export function createBoardServer({
     const pathname = String(request.url).split(/[?#]/)[0]
     if (pathname === '/api' || pathname.startsWith('/api/')) {
       const name = routeNameFor(pathname)
-      if (!name) return sendError(response, 404, 'No such endpoint.')
+      const own = Object.hasOwn(localRoutes, pathname) ? localRoutes[pathname] : null
+      if (!name && !own) return sendError(response, 404, 'No such endpoint.')
       try {
         await shimRequest(request)
       } catch (failure) {
@@ -110,7 +115,7 @@ export function createBoardServer({
         }
         throw failure
       }
-      const handler = await loadHandler(name)
+      const handler = own ?? (await loadHandler(name))
       // After a 504 the handler is NOT stopped - JavaScript cannot stop it - so it may still finish
       // its work (a write, a call that costs money) with nobody listening. request.signal tells
       // it the time is up; no handler reads it yet, and one that does should stop what it is doing.
@@ -144,7 +149,7 @@ export function createBoardServer({
     if (localPage && served.status === 200 && served.isPage && Buffer.isBuffer(body)) {
       const html = body.toString('utf8')
       if (!html.includes(APP_TAG)) throw new Error('public/index.html no longer loads /app.js in the expected way, so the local page script cannot be added')
-      body = Buffer.from(html.replace(APP_TAG, `<script src="${LOCAL_MODE_SCRIPT}"></script>${APP_TAG}`), 'utf8')
+      body = Buffer.from(html.replace(APP_TAG, `<script src="${LOCAL_MODE_SCRIPT}"></script>${APP_TAG}<script src="${SETTINGS_SCRIPT}"></script>`), 'utf8')
     }
     response.end(request.method === 'HEAD' ? undefined : body)
   }
@@ -182,10 +187,13 @@ export async function startBoardServer({ port = DEFAULT_PORT, host = LOOPBACK, b
 
 // The board as a person gets it: the server plus the sign-in wall. Returns openLink(), which makes
 // a NEW one-time link each time it is called - print it once and do not log it anywhere else.
-export async function startLocalBoard({ now, ...options } = {}) {
+export async function startLocalBoard({ now, settingsFile, settingsOptions = {}, localRoutes = {}, ...options } = {}) {
   const login = createLocalGate({ now })
   applyLocalEnv(login.viewKey)
-  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true })
+  // The Settings box's keys: read back into the handlers' environment now, saved there when pasted.
+  const routes = { ...localRoutes }
+  if (settingsFile) routes[SETTINGS_PATH] = createSettings({ file: settingsFile, ...settingsOptions }).handler
+  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true, localRoutes: routes })
   const openLink = () => `http://${board.host}:${board.port}${OPEN_PATH}?t=${login.issueOpenToken()}`
   return { ...board, openLink, starterSecret: login.starterSecret, apiToken: login.apiToken }
 }

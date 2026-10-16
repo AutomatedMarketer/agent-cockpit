@@ -49,6 +49,25 @@ The cookie and the page's key (T9):
   server only; the website's page is untouched): no username and password screen, no "set this in Vercel"
   words, no sign-out buttons. A board whose key is no good says "Open the board again: double-click Start Board".
 
+The Settings box (T10) - local board only:
+
+- A **Settings** button on the board opens a box where a student pastes an **OpenAI key** (for voice), and
+  optionally a Fish Audio or OpenRouter key. No Vercel, no environment variables. The website never shows the
+  box (it keeps its environment variables; nothing in `public/` or `api/` knows about it).
+- The key goes to `settings.json` in the locked state folder (current user only; `0600` on Mac and Linux),
+  into the handlers' environment at once, and back into it at every start. A saved key wins over one the
+  computer already had.
+- The page is **never** sent the key: it learns "saved" and the last four characters, and a Remove button.
+  The key is not logged, not in any error message (one fixed sentence per failure), not in `/api/state`.
+- Only values shaped like the key are accepted (OpenAI: `sk-` and 20-200 letters, digits, `-`, `_`); a space,
+  new line or control character is refused with a plain sentence that does not repeat what was pasted.
+- **Test this key** makes one call to the service's models address (`GET /v1/models`), no redirects, 10 seconds
+  at most, and says "This key works.", "OpenAI refused this key..." or "...no credit left...". Fish keys are
+  saved but cannot be tested here.
+- The address is `POST /api/local-settings` and needs the cookie, the page's key, the board's own Origin and a
+  JSON body under 2000 characters. Not checked on Windows by a test: the file mode (Windows has no modes; the
+  state folder is locked to the user with icacls instead).
+
 What the board shows (student edition, started by Start Board):
 
 - **Team data:** read with git from a clone of the team repo on this computer (`REPO_SOURCE=folder`,
