@@ -1,8 +1,24 @@
 # Board on this computer (Student Edition) - not ready for students yet
 
-Status: the server (T1) and the sign-in wall (T4) are done. **T2, T3 and T5 are not, so do not hand this to students yet.**
+Status: the server (T1), the sign-in wall (T4) and the start files (T5) are done. **T2 and T3 are not, so do not hand this to students yet.**
 
-What exists (task T1):
+Starting it (T5): double-click **`Start Board.command`** (Mac) or **`Start Board.bat`** (Windows). Both
+check for Node 20 or newer and say in plain words if it is missing, run Node by its full path from an
+empty folder (a program with the same name left in the board's folder is never run), and then run
+`local/start.mjs`, which:
+
+- picks port 4317, or the next free one of 10 (a port Windows keeps for itself counts as busy);
+- starts the board and keeps a private file (`running.json`: port and a per-run secret, no link) in the
+  user's state folder (`%LOCALAPPDATA%\Agent Board\state`, `~/Library/Application Support/Agent Board/state`,
+  `~/.local/state/agent-board`);
+- opens the browser on the one-time link **without the link ever being on a command line**: it writes a tiny
+  private HTML file in the state folder that forwards to the link, asks the operating system to open *that
+  file* (absolute program path, no shell), and deletes it 15 seconds later. The link is never printed or logged;
+  it stays in the browser's history, where it is already dead;
+- on a **second double-click** while the board runs, asks the running board (`POST /starter/open-link` with the
+  per-run secret, refused for anything a browser sends) for a fresh link, opens it, and exits. No second server.
+
+What exists (T1 and T4):
 
 - `node local/server.mjs` starts the board at `http://127.0.0.1:4317/` (`--port <n>` to change; not port 80).
 - **Sign-in wall (T4):** it prints one link. The link works once, for 2 minutes, and is swapped for a cookie
@@ -31,12 +47,22 @@ What is missing:
 - **T2**, reading the team folder with git instead of GitHub. Today the handlers still read GitHub, so
   `GITHUB_OWNER`, `GITHUB_REPO` and a token must be in the environment.
 - **T3**, pictures in a folder instead of Vercel Blob.
-- **T5**, the double-click starters, port picking and `.vercelignore` (so `local/` is not deployed).
+
+Only a double-click proves (not checkable from node, to be tried on a real Mac and a real Windows PC):
+
+- the `.command` file opens in Terminal from Finder with no Gatekeeper block after a `git clone`, and keeps its run bit;
+- the `.bat` runs from Explorer with no SmartScreen warning, and keeps CRLF after a clone;
+- the browser really opens the launcher file and follows it to the link (Chrome, Edge, Safari, Firefox), and the
+  cookie is kept on `http://127.0.0.1:<port>`;
+- closing the window stops the board and a new double-click starts it again;
+- Windows file permissions: the state folder is private because the user profile is; `0600` has no effect there.
 
 Files:
 
 | File | Job |
 |---|---|
+| `start.mjs` | what the start files run: port, state file, launcher file, second-click link |
+| `check-node.cjs` | says in plain words if Node is too old (plain old-style script so it runs on old Node) |
 | `gate.mjs` | the sign-in wall: one-time link, cookie, Origin check, the per-run key the handlers see |
 | `server.mjs` | the server, the loopback-only rule, the command line |
 | `vercel-shim.mjs` | gives plain Node requests and responses Vercel's `query`, `body`, `status()`, `json()` |

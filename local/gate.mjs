@@ -19,6 +19,7 @@ export const OPEN_PATH = '/open-board'
 // The port is in the name: two boards on one computer keep their own cookies (a browser shares
 // cookies between ports on 127.0.0.1, so one name would make each sign the other out).
 export const cookieName = (port) => `board_local_${port}`
+export const STARTER_PATH = '/starter/open-link'
 export const LINK_LIFETIME_MS = 2 * 60 * 1000
 
 const digest = (value) => createHash('sha256').update(String(value)).digest()
@@ -52,6 +53,7 @@ function refuse(response, status, text, json) {
 export function createLocalGate({ now = Date.now } = {}) {
   const runSecret = randomBytes(32) // cookies are only good for the run that made them
   const viewKey = randomBytes(24).toString('hex') // what the handlers' own view gate is given
+  const starterSecret = randomBytes(24).toString('hex') // how a second double-click asks for a fresh link
   const links = [] // { hash, expires, used }
 
   const mac = (nonce) => createHmac('sha256', runSecret).update(nonce).digest('base64url')
@@ -106,6 +108,23 @@ export function createLocalGate({ now = Date.now } = {}) {
       }
     }
 
+    // The starter (a program, not a browser) asking the running board for a fresh link. It proves
+    // itself with this run's secret, which only the private state file holds. A browser stamps
+    // Sec-Fetch-Site / Origin on what it sends, so anything carrying them is refused outright.
+    if (pathname === STARTER_PATH && request.method === 'POST') {
+      const fromBrowser = request.headers['sec-fetch-site'] !== undefined || request.headers.origin !== undefined
+      const given = request.headers['x-starter-secret']
+      if (fromBrowser || typeof given !== 'string' || !sameSecret(given, starterSecret)) {
+        return refuse(response, 403, 'No.', true)
+      }
+      const link = `http://127.0.0.1:${request.socket.localPort}${OPEN_PATH}?t=${issueOpenToken()}`
+      response.statusCode = 200
+      response.setHeader('Cache-Control', 'no-store')
+      response.setHeader('Content-Type', 'application/json; charset=utf-8')
+      response.end(JSON.stringify({ link }))
+      return false
+    }
+
     if (opensLink) {
       const token = new URLSearchParams(search).get('t') ?? ''
       if (!token || !takeToken(token)) {
@@ -132,7 +151,7 @@ export function createLocalGate({ now = Date.now } = {}) {
     return true
   }
 
-  return { gate, issueOpenToken, viewKey }
+  return { gate, issueOpenToken, viewKey, starterSecret }
 }
 
 function splitUrl(url) {

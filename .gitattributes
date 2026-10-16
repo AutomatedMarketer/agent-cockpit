@@ -6,3 +6,6 @@
 # The graph libraries are pinned by their hash (tests/vendor.test.mjs): kept as bytes, never rewritten
 # or diffed line by line.
 public/vendor/*.js -text -diff
+# The start files: cmd.exe misreads a .bat with LF endings; a .command with CRLF breaks its first line.
+*.bat text eol=crlf
+*.command text eol=lf

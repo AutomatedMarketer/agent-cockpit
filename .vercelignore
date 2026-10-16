@@ -1,0 +1,4 @@
+# The board on a student's own computer is never part of the website.
+local/
+Start Board.command
+Start Board.bat

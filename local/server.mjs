@@ -160,7 +160,7 @@ export async function startLocalBoard({ now, ...options } = {}) {
   applyLocalEnv(login.viewKey)
   const board = await startBoardServer({ ...options, gate: login.gate })
   const openLink = () => `http://${board.host}:${board.port}${OPEN_PATH}?t=${login.issueOpenToken()}`
-  return { ...board, openLink }
+  return { ...board, openLink, starterSecret: login.starterSecret }
 }
 
 function readArgs(argv) {
