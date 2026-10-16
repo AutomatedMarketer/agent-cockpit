@@ -41,7 +41,7 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 // too, and a second copy of either is a second place to get it wrong.
 import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest } from './_lib.js'
 import { viewGate } from './_gate.js'
-import { readRequestId, once, REQUEST_ID_WORDS } from './_once.js'
+import { readRequestId, once, fingerprintOf, REQUEST_ID_WORDS } from './_once.js'
 import { mailboxConfig, queueOrder, mailboxFireKeyOk, MAILBOX_FIRE_KEY_MIN } from './_mailbox.js'
 import { pictureStore, failureAnswer } from './_picture-store.js'
 export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
@@ -601,7 +601,10 @@ async function handle(request, response, { loadSdk }) {
     response.status(400).json({ error: REQUEST_ID_WORDS })
     return
   }
-  if (requestId) return once(requestId, response, proceed)
+  if (requestId) {
+    const { requestId: ignored, ...order } = body
+    return once(requestId, fingerprintOf(order), response, proceed)
+  }
   return proceed(response)
 
   // Everything from here to the end of the handler, run once per id when there is one.

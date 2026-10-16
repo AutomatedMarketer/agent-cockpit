@@ -8,6 +8,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import cloudHandler, { makeHandler } from '../api/fire.js'
 import { MAILBOX_QUEUE_PATH } from '../api/_picture-store.js'
+import { once } from '../api/_once.js'
 import { fakeBlob } from './helpers/fake-blob.mjs'
 
 const FIRE_KEY = ['fk', 'once', 'long', 'enough', 'passphrase', 'for', 'mailbox'].join('-')
@@ -152,4 +153,59 @@ test('in mailbox mode the same id queues one order for the Mac, and the repeats 
   assert.equal(third.body.orderId, first.body.orderId)
   await send(handler, task(freshId()), MAILBOX)
   assert.equal(queue().orders.length, 2)
+})
+
+test('the same id with a different order is a conflict: 409, and nothing runs', async (t) => {
+  const runs = stubRoutines(t)
+  const id = freshId()
+  const first = await send(cloudHandler, task(id), CLOUD)
+  assert.equal(first.statusCode, 200)
+  const other = await send(cloudHandler, { action: 'task', title: 'Something else entirely', requestId: id }, CLOUD)
+  assert.equal(other.statusCode, 409)
+  assert.match(other.body.error, /conflict/i)
+  assert.equal(runs.length, 1)
+  // The same order with its keys in another order is still the same order.
+  const same = await send(cloudHandler, { requestId: id, title: 'Chase the invoice', action: 'task' }, CLOUD)
+  assert.equal(same.statusCode, 200)
+  assert.equal(same.body.duplicate, true)
+  // In flight together, too.
+  const slow = stubRoutines(t, { wait: 40 })
+  const id2 = freshId()
+  const [one, two] = await Promise.all([
+    send(cloudHandler, task(id2), CLOUD),
+    send(cloudHandler, { action: 'task', title: 'Different', requestId: id2 }, CLOUD)
+  ])
+  assert.deepEqual([one.statusCode, two.statusCode].sort(), [200, 409])
+  assert.equal(slow.length, 1)
+})
+
+// The memory itself, with a clock the test holds.
+const quick = () => ({ statusCode: null, body: null, setHeader() {}, status(c) { this.statusCode = c; return this }, json(b) { this.body = b; return this } })
+const ok = async (response) => { response.status(200).json({ ok: true }) }
+
+test('an answer is remembered for ten minutes and then forgotten', async () => {
+  let clock = 1_000_000
+  const id = freshId()
+  let ran = 0
+  const go = async () => { const r = quick(); await once(id, 'f1', r, async (x) => { ran += 1; await ok(x) }, () => clock); return r }
+  await go()
+  clock += 9 * 60_000
+  assert.equal((await go()).body.duplicate, true)
+  assert.equal(ran, 1)
+  clock += 2 * 60_000
+  assert.equal((await go()).body.duplicate, undefined, 'an id older than ten minutes was still remembered')
+  assert.equal(ran, 2)
+})
+
+test('past 200 remembered ids the oldest is forgotten first', async () => {
+  const clock = 5_000_000
+  const base = freshId()
+  let ran = 0
+  const run = async (x) => { ran += 1; await ok(x) }
+  for (let n = 0; n < 201; n += 1) await once(`${base}-${n}`, 'f', quick(), run, () => clock + n)
+  assert.equal(ran, 201)
+  await once(`${base}-200`, 'f', quick(), run, () => clock + 300)
+  assert.equal(ran, 201, 'the newest id was forgotten')
+  await once(`${base}-0`, 'f', quick(), run, () => clock + 301)
+  assert.equal(ran, 202, 'the oldest id was kept past 200')
 })

@@ -551,8 +551,10 @@ routine. The board still never writes to your repo.
 
 **One yes is one order.** Each card has an id, and the order carries it to `/api/fire`. Say yes twice,
 tap and say yes, or let a slow connection retry, and the board answers the second with the first's
-answer and starts, files or queues nothing more. It remembers an id for ten minutes, in the running
-function's memory, so it catches a double send but is not a promise across a cold start. Refused
+answer and starts, files or queues nothing more. The id is kept with a fingerprint of the whole
+order: the same id with a different order is refused as a conflict (409) and nothing runs. It remembers an id for ten minutes, in the running
+function's memory. Vercel does not promise two requests reach the same running instance, so it
+catches a double send that does, but is not a promise across a cold start or a second instance. Refused
 orders are forgotten at once, so trying again after a refusal still works.
 
 **Switch them on.** Orders are off until the board's Run buttons are set up, and until then the
