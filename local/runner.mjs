@@ -242,13 +242,30 @@ const RUNNER_NEEDS = new Set([
   'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMW6432', 'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'COMSPEC', 'TEMP', 'TMP',
   'USERNAME', 'USERDOMAIN', 'HOMEDRIVE', 'HOMEPATH', 'SSH_AUTH_SOCK', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME'
 ])
-export function runnerEnvironment(source = process.env) {
+// On Windows a name is one name whatever its case, and a shell such as Git Bash hands them on as SYSTEMROOT or Temp. The
+// runner looks for these spellings exactly (claude.mjs, claudeEnv; windows.mjs), so each is given in that spelling, once.
+const WINDOWS_SPELLINGS = ['SystemRoot', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'USERNAME', 'USERDOMAIN', 'ProgramData', 'windir']
+export function runnerEnvironment(source = process.env, platform = process.platform) {
   const env = {}
   for (const [name, value] of Object.entries(source)) {
     const upper = name.toUpperCase()
     if (typeof value === 'string' && (RUNNER_NEEDS.has(upper) || upper.startsWith('LC_'))) env[name] = value
   }
+  if (platform === 'win32') {
+    for (const spelling of WINDOWS_SPELLINGS) {
+      const others = Object.keys(env).filter((name) => name.toUpperCase() === spelling.toUpperCase() && name !== spelling)
+      if (!others.length) continue
+      env[spelling] ??= env[others[0]]
+      for (const name of others) delete env[name]
+    }
+  }
   return env
+}
+
+// The spawn the runner is handed: a program started with no environment of its own (the runner's taskkill, for one)
+// gets the short one, never the board's, which holds keys. One the runner gives (Claude's) is kept as it is.
+export function runnerSpawn(env, spawn = realSpawn) {
+  return (file, args, options = {}) => spawn(file, args, { ...options, env: options.env ?? env })
 }
 
 // git for the runner: the absolute path found once from PATH, never one inside the team folder, the board, the
@@ -310,7 +327,9 @@ export function createLocalRunner({ runner, args, teamFolder, log = () => {}, ev
 
   async function once() {
     try {
-      await runner.main({ ...args, argv: ['--once'], proc, out: log, err: log })
+      // keepLockOnSignal: this process does not end when stop() signals the runner, so the tick keeps its lock until it
+      // has really unwound (its own finally releases it), and nothing else can take it meanwhile.
+      await runner.main({ ...args, argv: ['--once'], proc, keepLockOnSignal: true, out: log, err: log })
     } catch {
       log('jobs: the runner stopped on an unexpected error')
     }
@@ -387,15 +406,18 @@ async function originAddress(teamFolder) {
   }
 }
 
-async function makeWorkCopy({ git, url, workDir, stateDir }) {
+// The runner's own copy of the team repo: an empty repo whose config names the team repo, written the way the runner
+// writes it (workcopy.mjs, configText). Its first tick fetches. The address is never on a command line - an address can
+// carry a token, and a command line is visible to every program on the computer.
+export async function makeWorkCopy({ git, url, workDir, stateDir, codeDir }) {
   if (await exists(workDir)) return true
-  await mkdir(path.dirname(workDir), { recursive: true })
-  // An empty hooks folder: nothing in the clone runs while it is made. The runner rewrites its config before git
-  // is next run in it.
   const hooks = path.join(stateDir, 'empty-hooks')
-  await mkdir(hooks, { recursive: true })
   try {
-    await git(['-c', `core.hooksPath=${hooks}`, '-c', 'protocol.ext.allow=never', 'clone', '--quiet', '--no-recurse-submodules', '--', url, workDir])
+    const { configText } = await import(pathToFileURL(path.join(codeDir, 'scripts', 'lib', 'mailbox', 'workcopy.mjs')).href)
+    await mkdir(hooks, { recursive: true })
+    await mkdir(workDir, { recursive: true })
+    await git(['-c', `core.hooksPath=${hooks}`, 'init', '--quiet'], workDir)
+    await writeFile(path.join(workDir, '.git', 'config'), configText({ url, emptyHooks: hooks }))
     return true
   } catch {
     return false
@@ -455,9 +477,10 @@ export async function prepareJobs({
   applyJobsOn(env, { ...secrets, repo })
   if (!mailboxConfig(env).ready) return off(SAY.badFiles)
 
-  const runnerEnv = runnerEnvironment(env)
+  const runnerEnv = runnerEnvironment(env, platform)
+  const spawn = runnerSpawn(runnerEnv)
   const git = runnerGit({ env: runnerEnv, platform, avoid: [teamFolder, boardDir, places.codeDir, places.workDir, places.stateDir], extraConfig: extraGitConfig })
-  if (!(await makeWorkCopy({ git, url, workDir: places.workDir, stateDir: places.stateDir }))) log(SAY.noWork)
+  if (!(await makeWorkCopy({ git, url, workDir: places.workDir, stateDir: places.stateDir, codeDir: places.codeDir }))) log(SAY.noWork)
 
   const { programs, windows } = runner
   let username = null
@@ -466,7 +489,7 @@ export async function prepareJobs({
   } catch {
     // Some containers have no user entry.
   }
-  const exec = programs.createRunner({ spawn: realSpawn, platform, env: runnerEnv })
+  const exec = programs.createRunner({ spawn, platform, env: runnerEnv })
   const args = {
     home,
     now: () => Date.now(),
@@ -479,7 +502,7 @@ export async function prepareJobs({
     exec,
     find: (name, extra = {}) => programs.findProgram(name, { env: runnerEnv, home, platform, ...extra }),
     findAll: (name, extra = {}) => programs.findEveryProgram(name, { env: runnerEnv, home, platform, ...extra }),
-    spawn: realSpawn,
+    spawn,
     places,
     ...(platform === 'win32' ? { privatePlaces: windows.privatePlaces({ exec, env: runnerEnv, user: username, domain: runnerEnv.USERDOMAIN }) } : {}),
     ...overrides

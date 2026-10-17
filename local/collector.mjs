@@ -38,13 +38,13 @@ export const SAY = Object.freeze({
 })
 
 // Stops a program and everything it started: its process group on a Mac or Linux, taskkill by full path on Windows.
-function stopTree(child, platform, env, spawn) {
+function stopTree(child, platform, env, spawn) { // env: the short one (childEnv), never the board's
   if (!child?.pid) return
   if (platform === 'win32') {
     const root = env.SystemRoot || env.SYSTEMROOT
     if (root && path.win32.isAbsolute(root)) {
       try {
-        spawn(path.win32.join(root, 'System32', 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, cwd: path.win32.join(root, 'System32') }).on('error', () => {})
+        spawn(path.win32.join(root, 'System32', 'taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, cwd: path.win32.join(root, 'System32'), env }).on('error', () => {})
       } catch { /* nothing more can be done */ }
     }
   } else {
@@ -70,7 +70,7 @@ export function createCollector({
   for (const folder of [teamFolder, codeDir, boardDir]) {
     if (folder && isInside(folder, nodePath)) throw new Error('the node program is inside a folder the board does not trust')
   }
-  const childEnv = { ...runnerEnvironment(env), ...(platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {}) }
+  const childEnv = { ...runnerEnvironment(env, platform), ...(platform === 'win32' ? { NoDefaultCurrentDirectoryInExePath: '1' } : {}) }
   let running = null
   let child = null
   let wantFull = false
@@ -86,7 +86,7 @@ export function createCollector({
         resolve({ ok: false, code: null })
         return
       }
-      const limit = setTimeout(() => stopTree(child, platform, env, spawn), timeoutMs)
+      const limit = setTimeout(() => stopTree(child, platform, childEnv, spawn), timeoutMs)
       let done = false
       const finish = (code) => {
         if (done) return
@@ -153,7 +153,7 @@ export function createCollector({
     async stop() {
       stopped = true
       clearInterval(timer)
-      if (child) stopTree(child, platform, env, spawn)
+      if (child) stopTree(child, platform, childEnv, spawn)
       await (running ?? Promise.resolve()).catch(() => {})
     }
   }
