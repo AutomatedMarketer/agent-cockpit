@@ -270,7 +270,13 @@ test('hear: the sound goes to the listening program with its model; the words co
     assert.match(sent, /name="response_format"\r\n\r\njson/)
     assert.match(sent, /name="file"; filename="speech\.wav"/)
     assert.equal(hear.seen[0].headers.authorization, undefined, 'no key goes to a program on this computer')
-    for (const headers of [{}, { 'x-voice-ticket': 'nope' }, { 'x-voice-ticket': ticket.slice(0, -1) + (ticket.at(-1) === 'A' ? 'B' : 'A') }, { 'x-voice-ticket': ticket.replace(/^[^.]+/, 'AAAA') }]) {
+    // A character in the middle of the signature, never the last: the last base64url character's low bits are
+    // padding, so flipping it can leave the decoded bytes the same and the ticket still valid.
+    const signatureAt = ticket.lastIndexOf('.') + 1 + 10
+    const tampered = ticket.slice(0, signatureAt) + (ticket[signatureAt] === 'A' ? 'B' : 'A') + ticket.slice(signatureAt + 1)
+    assert.notEqual(tampered, ticket)
+    assert.notDeepEqual(Buffer.from(tampered.slice(ticket.lastIndexOf('.') + 1), 'base64url'), Buffer.from(ticket.slice(ticket.lastIndexOf('.') + 1), 'base64url'), 'the tampered ticket decodes to the same bytes')
+    for (const headers of [{}, { 'x-voice-ticket': 'nope' }, { 'x-voice-ticket': tampered }, { 'x-voice-ticket': ticket.replace(/^[^.]+/, 'AAAA') }]) {
       assert.equal((await call(VOICE_PATHS.hear, { body: WAV, headers })).status, 409, JSON.stringify(headers))
     }
     assert.equal(hear.seen.length, 1, 'a request without a good ticket reached the program')
