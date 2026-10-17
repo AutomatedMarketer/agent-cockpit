@@ -597,7 +597,14 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     return names ? { hasOrigin: true, github: true, note: null } : { hasOrigin: true, github: false, note: FOLDER_NOTES.notGitHub }
   }
 
-  return { head, tree, file, blob, hasOrigin, origin, describe }
+  // Forget the last fetch, so the next read fetches at once instead of waiting out FETCH_EVERY_MS. Used
+  // by the board on this computer after its own runner has pushed (local/runner.mjs).
+  function forgetFetch() {
+    lastFetch = { at: -Infinity, promise: null }
+    revKept = { ref: null, id: null, at: -Infinity }
+  }
+
+  return { head, tree, file, blob, hasOrigin, origin, describe, forgetFetch }
 }
 
 // One reader per folder for the life of the process, so the 30-second fetch limit and the list of
@@ -606,4 +613,10 @@ const readers = new Map()
 export function repoReader(folder) {
   if (!readers.has(folder)) readers.set(folder, folderRepo(folder))
   return readers.get(folder)
+}
+
+// The board on this computer, after its own runner pushed: the next read of this folder fetches at once.
+// Nothing on the website calls it (there is no folder there).
+export function refreshNow(folder) {
+  readers.get(folder)?.forgetFetch()
 }
