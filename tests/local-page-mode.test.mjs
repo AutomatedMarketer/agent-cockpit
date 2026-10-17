@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadPage, flush } from './helpers/page-harness.mjs'
 import { basePayload } from './helpers/page-payload.mjs'
+import { localizeSentence } from '../local/localize.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const answer = (status, body = {}) => ({ ok: status >= 200 && status < 300, status, type: 'basic', headers: { get: () => null }, json: async () => body })
@@ -61,4 +62,30 @@ test('website mode: nothing sets the local flag, and the page file the website s
   assert.ok(!index.includes('local-mode'))
   assert.ok(!readFileSync(join(ROOT, 'public', 'app.js'), 'utf8').includes('x-board-token'), 'the token header belongs to local-mode.js only')
   assert.ok(basePayload)
+})
+
+// The local server rewrites the API's sentence on its way out (local/localize.mjs); the page shows what arrives.
+const WEBSITE_REPO_SENTENCE = 'Set GITHUB_OWNER and GITHUB_REPO in your hosting environment, then redeploy.'
+const repoDown = () => answer(503, { error: WEBSITE_REPO_SENTENCE })
+const repoDownLocal = () => answer(503, { error: localizeSentence(WEBSITE_REPO_SENTENCE) })
+
+test('local page, team folder unreadable: the panel points at board.json and Start Board, never at a hosting environment', async () => {
+  const page = board(repoDownLocal, { windowExtras: { __BOARD_LOCAL__: true } })
+  await flush()
+  const drawn = page.node('today').innerHTML
+  assert.match(drawn, /board\.json/)
+  assert.doesNotMatch(drawn, /Vercel|redeploy|hosting environment|GITHUB_OWNER/)
+})
+
+test('website page, repo not set up: the hosting-environment guidance is unchanged', async () => {
+  const page = board(repoDown)
+  await flush()
+  assert.match(page.node('today').innerHTML, /hosting environment/)
+})
+
+test('local page: the fire-key and edit-key prompts and the graph sign-in message have local wording in the page', () => {
+  const source = readFileSync(join(ROOT, 'public', 'app.js'), 'utf8')
+  assert.match(source, /LOCAL_BOARD\s*\n?\s*\? 'This board needs its fire key/)
+  assert.match(source, /'Changing this board needs its edit key\.\\n\\n' \+ \(LOCAL_BOARD/)
+  assert.match(source, /LOCAL_BOARD \? 'The board was closed\. Double-click Start Board/)
 })

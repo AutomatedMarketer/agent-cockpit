@@ -2097,7 +2097,7 @@ async function graphFetchNow() {
       if (result.retryAfter !== null && (result.status === 429 || result.status === 403)) graphState.retryAt = Date.now() + result.retryAfter * 1000
       else graphState.checkedAt = 0
       graphState.error = result.redirected
-        ? 'Your sign-in to Vercel ran out on this device. Reload the board to sign in again.'
+        ? (LOCAL_BOARD ? 'The board was closed. Double-click Start Board to open it again.' : 'Your sign-in to Vercel ran out on this device. Reload the board to sign in again.')
         : typeof result.payload?.error === 'string' ? result.payload.error : `The graph could not be read: the board answered ${result.status}.`
     }
   } catch (error) {
@@ -2446,7 +2446,9 @@ async function postFire(body, { ask = true } = {}) {
   let result = await callFire(body, key)
   if (needsFireKey(result) && ask) {
     const entered = window.prompt(
-      'This dashboard needs its fire key to dispatch jobs.\n\nPaste the FIRE_KEY you set in the hosting environment — it is kept in this tab only, never in the page.'
+      LOCAL_BOARD
+        ? 'This board needs its fire key to start jobs.\n\nPaste the fire key from your board settings. It is kept in this tab only, never in the page.'
+        : 'This dashboard needs its fire key to dispatch jobs.\n\nPaste the FIRE_KEY you set in the hosting environment — it is kept in this tab only, never in the page.'
     )
     if (entered !== null && entered.trim()) {
       key = entered.trim()
@@ -3737,8 +3739,9 @@ async function shrinkPicture(file, kind) {
 const EDIT_KEY_STORE = 'agent-cockpit-edit-key'
 let editKeyHeld = ''
 const editKey = () => readStore(EDIT_KEY_STORE) || editKeyHeld
-const EDIT_KEY_ASK = 'Changing this board needs its edit key.\n\n' +
-  'Paste the EDIT_KEY you set in Vercel. It is kept on this device, like the view key, and never appears in this page.'
+const EDIT_KEY_ASK = 'Changing this board needs its edit key.\n\n' + (LOCAL_BOARD
+  ? 'Paste the edit key from your board settings. It is kept on this device and never appears in this page.'
+  : 'Paste the EDIT_KEY you set in Vercel. It is kept on this device, like the view key, and never appears in this page.')
 const SWITCH_ON = LOCAL_BOARD
   ? 'Personalising is off: the board could not use its pictures folder. Look in the Start Board window for the reason.'
   : 'Personalising is off: to switch it on, create a Private Blob store in Vercel (your project, then ' +
@@ -7393,6 +7396,15 @@ function footWords() {
 function renderError(message) {
   doneLoading()
   el('strap').textContent = ''
+  if (LOCAL_BOARD) {
+    // No hosting service, no environment settings: the team folder is named in board.json next to Start Board.
+    el('today').innerHTML = `<div class="panel error">
+    <h3>This board cannot read your team folder yet</h3>
+    <p>${escapeHtml(message)}</p>
+    <p class="small">Check that the folder named in <code>board.json</code> is a clone of your team repo and that git is installed, then double-click Start Board again.</p>
+  </div>`
+    return
+  }
   el('today').innerHTML = `<div class="panel error">
     <h3>This cockpit cannot read your repo yet</h3>
     <p>${escapeHtml(message)}</p>

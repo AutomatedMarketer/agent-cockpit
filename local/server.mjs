@@ -30,6 +30,7 @@ import { HOP_SCRIPT, KEY_HANDOFF_SCRIPT, LOCAL_MODE_SCRIPT, OPEN_PATH, applyLoca
 import { readFileSync } from 'node:fs'
 import { SETTINGS_PATH, createSettings } from './settings.mjs'
 import { createLocalVoice } from './voice.mjs'
+import { localizeResponse } from './localize.mjs'
 
 export const LOOPBACK = '127.0.0.1'
 export const DEFAULT_PORT = 4317
@@ -79,6 +80,7 @@ export function createBoardServer({
   handlerTimeoutMs = HANDLER_TIMEOUT_MS,
   localRoutes = {}, // address -> handler, for the few things only the local board has (the Settings box)
   dynamicScripts = {}, // address -> () => text, small scripts whose content depends on the board's settings
+  localize = null, // (json) => json: the website's sentences in a student's words (startLocalBoard sets it)
   localPage = false, // true: the page gets local-mode.js in front of app.js (startLocalBoard sets it)
   loadHandler = async (name) => (await import(pathToFileURL(join(root, 'api', `${name}.js`)).href)).default
 } = {}) {
@@ -121,6 +123,10 @@ export function createBoardServer({
         throw failure
       }
       const handler = own ?? (await loadHandler(name))
+      if (localize) {
+        const sendJson = response.json
+        response.json = (value) => sendJson.call(response, localize(value))
+      }
       // After a 504 the handler is NOT stopped - JavaScript cannot stop it - so it may still finish
       // its work (a write, a call that costs money) with nobody listening. request.signal tells
       // it the time is up; no handler reads it yet, and one that does should stop what it is doing.
@@ -207,7 +213,7 @@ export async function startLocalBoard({ now, settingsFile, settingsOptions = {},
     Object.assign(routes, voice.routes)
     scripts[VOICE_CONFIG_SCRIPT] = voice.configScript
   }
-  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true, localRoutes: routes, dynamicScripts: scripts })
+  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true, localRoutes: routes, dynamicScripts: scripts, localize: localizeResponse })
   const openLink = () => `http://${board.host}:${board.port}${OPEN_PATH}?t=${login.issueOpenToken()}`
   return { ...board, openLink, starterSecret: login.starterSecret, apiToken: login.apiToken }
 }
