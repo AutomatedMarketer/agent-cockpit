@@ -153,3 +153,43 @@ test('a file too big, in another format, with no time or a time in the future, o
   }
   assert.equal(shapeMailbox([], NOW, 0).status, 'none')
 })
+
+test('steps: an entry the contract refuses for its steps is dropped and counted', () => {
+  assert.ok(fixture.status.stepsRefuse.length > 0)
+  for (const { why, entry } of fixture.status.stepsRefuse) {
+    const doc = clone(SAMPLE)
+    doc.orders = [entry]
+    const computer = computerOf(doc)
+    assert.deepEqual(computer.orders, [], why)
+    assert.equal(computer.hidden, 1, why)
+  }
+})
+
+test('steps: an entry the contract accepts is kept with its steps carried through', () => {
+  assert.ok(fixture.status.stepsAccept.length > 0)
+  for (const { why, entry } of fixture.status.stepsAccept) {
+    const doc = clone(SAMPLE)
+    doc.orders = [entry]
+    const computer = computerOf(doc)
+    assert.deepEqual(computer.orders, [entry], why)
+    assert.equal(computer.hidden, 0, why)
+  }
+})
+
+test('steps: a file without steps reads exactly as before, and no steps key appears', () => {
+  const computer = computerOf(SAMPLE)
+  for (const order of computer.orders) assert.equal(Object.hasOwn(order, 'steps'), false)
+  assert.deepEqual(computer.orders, SAMPLE.orders)
+})
+
+test('steps: null, a string, a float and a past-the-limit number are refused on an order that ended', () => {
+  const base = SAMPLE.orders.find((order) => order.state === 'ok')
+  for (const steps of [null, '3', 1.5, fixture.status.maxSteps + 1, Number.NaN]) {
+    const doc = clone(SAMPLE)
+    doc.orders = [{ ...base, steps }]
+    assert.deepEqual(computerOf(doc).orders, [], String(steps))
+  }
+  const doc = clone(SAMPLE)
+  doc.orders = [{ ...base, steps: fixture.status.maxSteps }]
+  assert.equal(computerOf(doc).orders[0].steps, fixture.status.maxSteps)
+})

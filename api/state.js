@@ -1344,7 +1344,10 @@ const ownKeysExactly = (object, keys) => Object.keys(object).length === keys.len
 
 // One order's entry, or null. Each state's rule is the contract's stateRules, word for word.
 function mailboxEntry(raw, takenMs) {
-  if (!ownKeysExactly(raw, MAILBOX_STATUS.allowedKeys.order)) return null
+  // The required keys, plus the optional ones when present, and nothing else.
+  const hasSteps = Object.hasOwn(raw, 'steps')
+  const wanted = [...MAILBOX_STATUS.allowedKeys.order, ...MAILBOX_STATUS.optionalKeys.order.filter((key) => Object.hasOwn(raw, key))]
+  if (!ownKeysExactly(raw, wanted)) return null
   const { id, action, state, commit, why, landed } = raw
   if (typeof id !== 'string' || !MAILBOX_CONTRACT.idShape.test(id)) return null
   if (!MAILBOX_CONTRACT.actions.includes(action) || !MAILBOX_STATUS.states.includes(state)) return null
@@ -1365,7 +1368,15 @@ function mailboxEntry(raw, takenMs) {
     unknown: why === null && (landed === true ? commit !== null : commit === null)
   }
   if (!rules[state]) return null
-  return { id, action, state, at, startedAt, finishedAt, commit, why, landed }
+  const entry = { id, action, state, at, startedAt, finishedAt, commit, why, landed }
+  if (hasSteps) {
+    // Only a run that ended says how many tool calls it made; never null, never a fraction.
+    const { steps } = raw
+    if (!Number.isInteger(steps) || steps < 0 || steps > MAILBOX_STATUS.maxSteps) return null
+    if (state !== 'ok' && state !== 'failed') return null
+    entry.steps = steps
+  }
+  return entry
 }
 
 function readMailboxFile(body, now) {
