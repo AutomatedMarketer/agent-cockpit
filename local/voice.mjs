@@ -32,7 +32,9 @@ export const VOICE_PATHS = Object.freeze({
 export const CALL_THE_TOOL_FIRST = 'When a tool can answer, call the matching tool immediately and say nothing before it. Never answer from memory what a tool could tell you.'
 
 const HEAR_TIMEOUT_MS = 30_000
-const THINK_TIMEOUT_MS = 60_000
+// The board gives any one handler 60 seconds (HANDLER_TIMEOUT_MS in server.mjs). The model gets less, so that when it is
+// too slow the student hears "the thinking part is not answering" - not the board's own 504 with nothing to act on.
+export const THINK_TIMEOUT_MS = 50_000
 const SPEAK_TIMEOUT_MS = 20_000
 const MAX_AUDIO_IN = 4 * 1024 * 1024
 const MAX_ANSWER_BYTES = 256 * 1024
@@ -199,7 +201,7 @@ async function readLimited(answer, limit) {
 
 // ---- the four handlers ----------------------------------------------------------------------------------
 
-export function createLocalVoice({ settings, env = process.env, fetchImpl = fetch, now = Date.now } = {}) {
+export function createLocalVoice({ settings, env = process.env, fetchImpl = fetch, now = Date.now, thinkTimeoutMs = THINK_TIMEOUT_MS } = {}) {
   const runSecret = randomBytes(32).toString('hex')
   const tickets = ticketTools(runSecret)
   const sessions = new Map() // sid -> { name, zone, orders }
@@ -360,7 +362,7 @@ export function createLocalVoice({ settings, env = process.env, fetchImpl = fetc
       // Thinking off: a voice cannot wait 6 to 37 seconds. The sentence above is what makes that safe.
       reasoning_effort: 'none'
     }
-    const got = await call('think', url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, THINK_TIMEOUT_MS, response, MAX_ANSWER_BYTES)
+    const got = await call('think', url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, thinkTimeoutMs, response, MAX_ANSWER_BYTES)
     if (!got) return
     let message
     try { message = JSON.parse(got.bytes.toString('utf8'))?.choices?.[0]?.message } catch { message = null }

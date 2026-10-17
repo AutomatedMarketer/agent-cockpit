@@ -883,3 +883,31 @@ test('cleaning: "We need to call the tool", Thinking Process blocks, printed cal
   // And what is spoken by the speaking path is held to the same markup rules.
   for (const raw of ['<|im_start|>assistant Sure.<|im_end|>', '[TOOL_CALLS] x', '{"name":"x","arguments":{}} Hello.']) assert.ok(!/<\||\[TOOL_CALLS\]|"name"/.test(stripMarkup(raw)), raw)
 })
+
+test('think: the model gets 50 seconds - less than the board\'s own 60 - and a model that never answers is named, not a bare 504', async () => {
+  const { THINK_TIMEOUT_MS } = await import('../local/voice.mjs')
+  const { HANDLER_TIMEOUT_MS } = await import('../local/server.mjs')
+  assert.equal(THINK_TIMEOUT_MS, 50_000)
+  assert.ok(THINK_TIMEOUT_MS < HANDLER_TIMEOUT_MS, 'the model\'s limit must come first')
+  assert.equal(HANDLER_TIMEOUT_MS, 60_000)
+  const never = await standIn(() => {})
+  const { file, done } = folder()
+  try {
+    const settings = createSettings({ file, env: {} })
+    await callSettings(settings, { action: 'voice-save', values: { engine: 'local', thinkUrl: never.url('/v1/chat/completions') } })
+    const voice = createLocalVoice({ settings, thinkTimeoutMs: 300 })
+    const respond = () => { let sent; return { r: { setHeader() {}, status(code) { this.code = code; return this }, json(value) { sent = { status: this.code, body: value }; return this }, end() {} }, get: () => sent } }
+    const started = respond()
+    await voice.routes[VOICE_PATHS.start]({ method: 'POST', body: {}, headers: {}, socket: { localPort: 1 } }, started.r)
+    const one = respond()
+    const at = Date.now()
+    await voice.routes[VOICE_PATHS.think]({ method: 'POST', body: { ticket: started.get().body.ticket, messages: [{ role: 'user', content: 'x' }] }, headers: {}, socket: { localPort: 1 } }, one.r)
+    assert.ok(Date.now() - at < 3000, 'it waited far longer than its limit')
+    assert.equal(one.get().status, 502)
+    assert.equal(one.get().body.part, 'think')
+    assert.match(one.get().body.error, /thinking part.*not answering/i)
+  } finally {
+    await never.close()
+    done()
+  }
+})
