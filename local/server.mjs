@@ -201,8 +201,10 @@ export async function startBoardServer({ port = DEFAULT_PORT, host = LOOPBACK, b
 
 // The board as a person gets it: the server plus the sign-in wall. Returns openLink(), which makes
 // a NEW one-time link each time it is called - print it once and do not log it anywhere else.
-// `jobs` (local/runner.mjs, prepareJobs): when the runner is set up, /api/fire kicks it after an order is queued.
-export async function startLocalBoard({ now, settingsFile, settingsOptions = {}, voiceOptions = {}, localRoutes = {}, jobs = null, ...options } = {}) {
+// `wrapHandler` (local/start.mjs): jobs on this computer kick the runner after /api/fire queues an order
+// (local/runner.mjs), and /api/state is read in full once after this computer's numbers were refreshed
+// (local/collector.mjs).
+export async function startLocalBoard({ now, settingsFile, settingsOptions = {}, voiceOptions = {}, localRoutes = {}, wrapHandler = null, ...options } = {}) {
   const login = createLocalGate({ now })
   applyLocalEnv(login.viewKey)
   // The Settings box's keys: read back into the handlers' environment now, saved there when pasted.
@@ -216,7 +218,7 @@ export async function startLocalBoard({ now, settingsFile, settingsOptions = {},
     Object.assign(routes, voice.routes)
     scripts[VOICE_CONFIG_SCRIPT] = voice.configScript
   }
-  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true, localRoutes: routes, dynamicScripts: scripts, localize: localizeResponse, wrapHandler: jobs?.wrapHandler ?? null })
+  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true, localRoutes: routes, dynamicScripts: scripts, localize: localizeResponse, wrapHandler })
   const openLink = () => `http://${board.host}:${board.port}${OPEN_PATH}?t=${login.issueOpenToken()}`
   return { ...board, openLink, starterSecret: login.starterSecret, apiToken: login.apiToken }
 }

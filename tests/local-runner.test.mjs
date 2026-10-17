@@ -20,7 +20,7 @@ test('end to end, one process: an order queued by /api/fire reaches a fake Claud
   const claude = fakeClaude()
   try {
     await plantRunnerProof(world.runnerState)
-    await withStartedBoard(world, { places: { workDir: world.work, codeDir: RUNNER_CODE }, overrides: claude.overrides, extraGitConfig: [`url.${world.bare}.insteadOf=${GH}`] }, async ({ started, api, lines }) => {
+    await withStartedBoard(world, { places: { workDir: world.work, codeDir: RUNNER_CODE }, overrides: claude.overrides, extraGitConfig: [`url.${world.bare}.insteadOf=${GH}`] }, false, async ({ started, api, lines }) => {
       assert.ok(started.jobs, `jobs did not come on: ${lines.join(' | ')}`)
       await settled(started) // the first tick, at start
 

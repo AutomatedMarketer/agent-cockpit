@@ -96,6 +96,20 @@ const exists = async (file) => {
   }
 }
 
+// null when the code folder may be run from, else a word: a full path, not inside the team folder and not holding
+// it, a real folder (not a link), with the file `entry` in it.
+export async function codeProblem(codeDir, { teamFolder, entry = RUNNER_ENTRY }) {
+  if (typeof codeDir !== 'string' || !path.isAbsolute(codeDir)) return 'path'
+  if (isInside(teamFolder, codeDir) || isInside(codeDir, teamFolder)) return 'team-folder'
+  try {
+    if (!(await lstat(codeDir)).isDirectory()) return 'no-code'
+    if (!(await stat(path.join(codeDir, ...entry))).isFile()) return 'no-code'
+  } catch {
+    return 'no-code'
+  }
+  return null
+}
+
 // null when the places are fit to use, else a word. On top of the runner's own check (none inside another, done
 // on every tick): every one is a full path, none is inside the team folder or holds it, and the code folder is a
 // real folder (not a link) that holds the runner.
@@ -103,16 +117,10 @@ export async function placesProblem(places, { teamFolder }) {
   for (const name of ['stateDir', 'envFile', 'workDir', 'codeDir']) {
     if (typeof places?.[name] !== 'string' || !path.isAbsolute(places[name])) return 'path'
   }
-  for (const name of ['stateDir', 'workDir', 'codeDir']) {
+  for (const name of ['stateDir', 'workDir']) {
     if (isInside(teamFolder, places[name]) || isInside(places[name], teamFolder)) return 'team-folder'
   }
-  try {
-    if (!(await lstat(places.codeDir)).isDirectory()) return 'no-code'
-    if (!(await stat(path.join(places.codeDir, ...RUNNER_ENTRY))).isFile()) return 'no-code'
-  } catch {
-    return 'no-code'
-  }
-  return null
+  return codeProblem(places.codeDir, { teamFolder })
 }
 
 // ---- the runner's settings, written once ----------------------------------------------------------------

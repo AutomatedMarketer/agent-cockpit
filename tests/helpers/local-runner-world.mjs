@@ -169,7 +169,8 @@ export function raw(port, path, method = 'GET', headers = {}, body) {
 }
 
 // The student's board as Start Board brings it up, signed in through its own one-time link.
-export async function withStartedBoard(world, jobs, run) {
+// `collector`: false (the real collector reads this computer's own sign-ins: never in a test) or test options.
+export async function withStartedBoard(world, jobs, collector, run) {
   const saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]))
   let launcher = null
   const lines = []
@@ -184,7 +185,8 @@ export async function withStartedBoard(world, jobs, run) {
     openFile: async (file) => { launcher = readFileSync(file, 'utf8') },
     log: (text) => lines.push(String(text)),
     teamFolder: world.team,
-    jobs
+    jobs,
+    collector
   })
   try {
     const link = JSON.parse(/location\.replace\(("[^"]+")\)/.exec(launcher)[1])

@@ -155,6 +155,24 @@
     })
   })
 
+  // ---- This computer's numbers (usage, connections): collected by the board itself, now and every 15 minutes ----
+  var numbersBox = make('div', { id: 'board-numbers' })
+  numbersBox.style.cssText = 'margin:16px 0;padding-top:12px;border-top:1px solid rgba(255,255,255,.2)'
+  numbersBox.appendChild(make('strong', {}, "This computer's numbers"))
+  var numbersHelp = make('small', {}, 'Usage is checked every 15 minutes while the board is open. Refresh now also checks which tools and connections are set up (up to two minutes).')
+  numbersHelp.style.cssText = 'display:block;opacity:.8;margin:6px 0'
+  var numbersRefresh = make('button', { type: 'button', id: 'board-numbers-refresh' }, 'Refresh now')
+  var numbersNote = make('p', { id: 'board-numbers-note', role: 'status', 'aria-live': 'polite' }, '')
+  numbersRefresh.addEventListener('click', function () {
+    numbersNote.textContent = 'Asking...'
+    fetch('/api/local-refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'refresh' }) })
+      .then(function (response) { return response.json().catch(function () { return {} }) })
+      .then(function (json) { numbersNote.textContent = json.say || json.error || 'The board could not be reached.' })
+      .catch(function () { numbersNote.textContent = 'The board could not be reached.' })
+  })
+  ;[numbersHelp, numbersRefresh, numbersNote].forEach(function (node) { numbersBox.appendChild(node) })
+  panel.appendChild(numbersBox)
+
   panel.appendChild(note)
 
   var reload = make('button', { type: 'button', id: 'board-settings-reload' }, 'Reload the board')
