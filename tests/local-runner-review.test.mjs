@@ -132,6 +132,24 @@ test('the work copy is made without the team folder\'s address on any command li
   }
 })
 
+test('a work copy that could not be made is not left half-made: the next start makes it', { skip: NO_RUNNER }, async () => {
+  const work = join(temp('work-retry'), 'work')
+  const state = temp('work-retry-state')
+  const url = 'https://github.com/ExampleOwner/example-team.git'
+  const realGit = runnerGit({ env: runnerEnvironment(process.env) })
+  try {
+    const failing = async (args) => { if (args.includes('init')) throw new Error('git could not start'); return realGit(args) }
+    assert.equal(await makeWorkCopy({ git: failing, url, workDir: work, stateDir: state, codeDir: RUNNER_CODE }), false)
+    assert.equal(existsSync(work), false, 'an empty work folder was left, and every later start would take it as made')
+    assert.equal(await makeWorkCopy({ git: realGit, url, workDir: work, stateDir: state, codeDir: RUNNER_CODE }), true)
+    const { readOrigin } = await fromRunner('mailbox', 'workcopy.mjs')
+    assert.deepEqual(await readOrigin(work), { fetch: url, push: url })
+  } finally {
+    rmSync(dirname(work), { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
+  }
+})
+
 // ---- 4. Windows names in the expected spelling ----------------------------------------------------------------
 
 test('runner environment on Windows: SystemRoot and the profile folders are there in the spelling the runner expects, whatever case the computer used', { skip: NO_RUNNER }, async () => {

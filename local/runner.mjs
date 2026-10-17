@@ -22,7 +22,7 @@
 
 import { execFile, spawn as realSpawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmod, lstat, mkdir, stat, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -420,6 +420,9 @@ export async function makeWorkCopy({ git, url, workDir, stateDir, codeDir }) {
     await writeFile(path.join(workDir, '.git', 'config'), configText({ url, emptyHooks: hooks }))
     return true
   } catch {
+    // The folder was not there before this call, and a folder that is there counts as made (above): nothing half-made is
+    // left, so the next start tries again (SAY.noWork).
+    await rm(workDir, { recursive: true, force: true }).catch(() => {})
     return false
   }
 }
