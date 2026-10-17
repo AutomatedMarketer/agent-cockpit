@@ -2316,6 +2316,9 @@ const VIEW_KEY_STORE = 'agent-cockpit-view-key'
 // sets this before the page runs. The website never has it, so none of the local wording below is ever
 // used there.
 const LOCAL_BOARD = window.__BOARD_LOCAL__ === true
+// Voice that runs on this computer (Settings -> Voice engine -> Local). Set by the local server's own script
+// before this one; the website never has it, so every branch on it is inert there.
+const localVoiceOn = () => window.__BOARD_LOCAL_VOICE__?.engine === 'local'
 
 // redirect: 'manual', because with Vercel Authentication on, a Vercel sign-in that has run out
 // answers with a redirect to vercel.com. Followed, that is a failed fetch - the same as a dropped
@@ -5030,6 +5033,7 @@ let voiceSession = null
 function parseVoice(answer) {
   const voice = isRecord(answer) && isRecord(answer.voice) ? answer.voice : null
   const words = (value) => (typeof value === 'string' ? value : '')
+  if (localVoiceOn()) return { on: true, why: '', mouth: 'local', note: '' }
   if (voice?.on !== true) return { ...VOICE_OFF, why: words(voice?.why) }
   return { on: true, why: '', mouth: voice.mouth === 'fish' ? 'fish' : 'openai', note: words(voice.note) }
 }
@@ -5057,14 +5061,15 @@ const VOICE_MODE_WORDS = {
 
 const VOICE_MOUTH_WORDS = {
   openai: 'Speaking with OpenAI\'s voice - add Fish for your own voice.',
-  fish: 'Speaking with your Fish voice.'
+  fish: 'Speaking with your Fish voice.',
+  local: 'Listening and speaking on this computer: nothing is sent to OpenAI.'
 }
 
 // Whether this browser can do it at all - a microphone and WebRTC - asked of what is there, never of
 // the browser's name.
 const VOICE_NO_MIC = 'This browser cannot use a microphone for the board, so talking is off here. Try Safari on an iPhone, or Chrome.'
 const voiceCanListen = (deps) =>
-  Boolean(typeof deps?.mediaDevices?.getUserMedia === 'function' && typeof deps?.RTCPeerConnection === 'function')
+  Boolean(typeof deps?.mediaDevices?.getUserMedia === 'function' && (typeof deps?.RTCPeerConnection === 'function' || localVoiceOn()))
 
 // This device's own time zone, which is where the owner is when they talk to it.
 const voiceTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? null
@@ -5168,7 +5173,7 @@ function voiceDeps() {
       }
     },
     fish: fishMouth({
-      speak: (body, signal) => fetch('/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),
+      speak: (body, signal) => fetch(localVoiceOn() ? '/api/local-voice/speak' : '/api/speak', { method: 'POST', headers: writeHeaders('application/json'), body: JSON.stringify(body), signal }),
       now: () => Date.now()
     })
   }
@@ -5803,7 +5808,7 @@ function openVoice(deps, ui) {
   }
 
   const saveTally = () => {
-    if (!session.claims || !Object.values(session.tally).some((value) => value > 0)) return
+    if (!session.claims || session.local || !Object.values(session.tally).some((value) => value > 0)) return
     deps.saveOutbox({
       ticket: session.ticket,
       sid: session.claims.sid,
@@ -5818,6 +5823,10 @@ function openVoice(deps, ui) {
   }
 
   const showCost = () => {
+    if (session.local) {
+      ui.cost('This conversation runs on this computer: no cost.')
+      return
+    }
     const prices = deps.prices()
     if (!prices || !session.claims) {
       ui.cost('This conversation: no estimate yet, because the price table has not loaded.')
@@ -6401,6 +6410,10 @@ function openVoice(deps, ui) {
       for (const track of stream.getTracks()) track.stop()
       return
     }
+    if (localVoiceOn()) {
+      await connectLocal(stream)
+      return
+    }
     const pc = new deps.RTCPeerConnection()
     session.pc = pc
     session.audio = deps.createAudio()
@@ -6453,6 +6466,51 @@ function openVoice(deps, ui) {
     if (!session.captions) ui.you('Captions are off on this board.')
     showCost()
     await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
+  }
+
+  // The same call, with the parts running on this computer: local/page/voice-local.js stands in for OpenAI's
+  // connection. It records until silence, sends what was said to the board, and hands back the same events a
+  // realtime call would (a heard turn, a reply as text, tool calls), so everything below - the yes cards, the
+  // tool answers, the pieces spoken one by one - is the cloud voice's own code.
+  async function connectLocal(stream) {
+    let local
+    try {
+      local = await window.__BOARD_LOCAL_VOICE__.open({ stream, context: session.context, name: voiceName(), names: voiceNamesOnBoard(), timeZone: voiceTimeZone(), note: (words) => ui.note?.(words) })
+    } catch (error) {
+      throw voiceSaid(error?.message || VOICE_NO_START)
+    }
+    if (session.stopped) {
+      local.channel.close()
+      return
+    }
+    const answer = local.answer
+    const claims = ticketSays(answer?.ticket)
+    if (!claims) {
+      local.channel.close()
+      throw voiceSaid(VOICE_NO_START)
+    }
+    session.local = true
+    session.ticket = answer.ticket
+    session.claims = claims
+    session.mouth = claims.mouth
+    session.idleMinutes = Number.isInteger(answer.idleMinutes) && answer.idleMinutes >= 1 && answer.idleMinutes <= 10 ? answer.idleMinutes : 2
+    session.captions = true
+    session.echoGuard = false
+    session.orders = voiceOrdersFrom(answer.orders)
+    if (typeof answer.name === 'string' && answer.name) ui.who(answer.name)
+    session.channel = local.channel
+    local.channel.onmessage = (message) => {
+      let event = null
+      try { event = JSON.parse(message.data) } catch (error) { event = null }
+      onEvent(event)
+    }
+    local.channel.onopen = () => {
+      if (session.stopped) return
+      show('listening')
+      armIdle()
+    }
+    showCost()
+    local.start()
   }
 
   // The interrupt in speakers mode - the orb, Esc or Space. True when there was a reply to stop: it is

@@ -29,6 +29,7 @@ import { serveStatic } from './static.mjs'
 import { HOP_SCRIPT, KEY_HANDOFF_SCRIPT, LOCAL_MODE_SCRIPT, OPEN_PATH, applyLocalEnv, createLocalGate } from './gate.mjs'
 import { readFileSync } from 'node:fs'
 import { SETTINGS_PATH, createSettings } from './settings.mjs'
+import { createLocalVoice } from './voice.mjs'
 
 export const LOOPBACK = '127.0.0.1'
 export const DEFAULT_PORT = 4317
@@ -36,11 +37,14 @@ export const HANDLER_TIMEOUT_MS = 60_000 // a Vercel function has a limit too
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PAGE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'page')
 const SETTINGS_SCRIPT = '/local-settings.js'
+const VOICE_SCRIPT = '/local-voice.js'
+const VOICE_CONFIG_SCRIPT = '/local-voice-config.js'
 const PAGE_SCRIPTS = new Map([
   [HOP_SCRIPT, readFileSync(join(PAGE_DIR, 'hop.js'))],
   [LOCAL_MODE_SCRIPT, readFileSync(join(PAGE_DIR, 'local-mode.js'))],
   [KEY_HANDOFF_SCRIPT, readFileSync(join(PAGE_DIR, 'key-handoff.js'))],
-  [SETTINGS_SCRIPT, readFileSync(join(PAGE_DIR, 'settings-ui.js'))]
+  [SETTINGS_SCRIPT, readFileSync(join(PAGE_DIR, 'settings-ui.js'))],
+  [VOICE_SCRIPT, readFileSync(join(PAGE_DIR, 'voice-local.js'))]
 ])
 const APP_TAG = '<script src="/app.js"></script>'
 
@@ -74,6 +78,7 @@ export function createBoardServer({
   gate = () => true,
   handlerTimeoutMs = HANDLER_TIMEOUT_MS,
   localRoutes = {}, // address -> handler, for the few things only the local board has (the Settings box)
+  dynamicScripts = {}, // address -> () => text, small scripts whose content depends on the board's settings
   localPage = false, // true: the page gets local-mode.js in front of app.js (startLocalBoard sets it)
   loadHandler = async (name) => (await import(pathToFileURL(join(root, 'api', `${name}.js`)).href)).default
 } = {}) {
@@ -131,7 +136,8 @@ export function createBoardServer({
     }
 
     // The board's own small scripts for a run on this computer (not in public/, so never on the website).
-    const own = PAGE_SCRIPTS.get(pathname)
+    const dynamic = Object.hasOwn(dynamicScripts, pathname) ? dynamicScripts[pathname] : null
+    const own = dynamic ? Buffer.from(dynamic(), 'utf8') : PAGE_SCRIPTS.get(pathname)
     if (own && (request.method === 'GET' || request.method === 'HEAD')) {
       response.statusCode = 200
       response.setHeader('Content-Type', 'text/javascript; charset=utf-8')
@@ -149,7 +155,7 @@ export function createBoardServer({
     if (localPage && served.status === 200 && served.isPage && Buffer.isBuffer(body)) {
       const html = body.toString('utf8')
       if (!html.includes(APP_TAG)) throw new Error('public/index.html no longer loads /app.js in the expected way, so the local page script cannot be added')
-      body = Buffer.from(html.replace(APP_TAG, `<script src="${LOCAL_MODE_SCRIPT}"></script>${APP_TAG}<script src="${SETTINGS_SCRIPT}"></script>`), 'utf8')
+      body = Buffer.from(html.replace(APP_TAG, `<script src="${LOCAL_MODE_SCRIPT}"></script><script src="${VOICE_CONFIG_SCRIPT}"></script>${APP_TAG}<script src="${SETTINGS_SCRIPT}"></script><script src="${VOICE_SCRIPT}"></script>`), 'utf8')
     }
     response.end(request.method === 'HEAD' ? undefined : body)
   }
@@ -187,13 +193,21 @@ export async function startBoardServer({ port = DEFAULT_PORT, host = LOOPBACK, b
 
 // The board as a person gets it: the server plus the sign-in wall. Returns openLink(), which makes
 // a NEW one-time link each time it is called - print it once and do not log it anywhere else.
-export async function startLocalBoard({ now, settingsFile, settingsOptions = {}, localRoutes = {}, ...options } = {}) {
+export async function startLocalBoard({ now, settingsFile, settingsOptions = {}, voiceOptions = {}, localRoutes = {}, ...options } = {}) {
   const login = createLocalGate({ now })
   applyLocalEnv(login.viewKey)
   // The Settings box's keys: read back into the handlers' environment now, saved there when pasted.
   const routes = { ...localRoutes }
-  if (settingsFile) routes[SETTINGS_PATH] = createSettings({ file: settingsFile, ...settingsOptions }).handler
-  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true, localRoutes: routes })
+  const scripts = { [VOICE_CONFIG_SCRIPT]: () => 'window.__BOARD_LOCAL_VOICE__ = { engine: "cloud" }' }
+  if (settingsFile) {
+    const settings = createSettings({ file: settingsFile, ...settingsOptions })
+    routes[SETTINGS_PATH] = settings.handler
+    // Voice that runs on this computer: the four endpoints, and the one line that tells the page which engine it is.
+    const voice = createLocalVoice({ settings, ...voiceOptions })
+    Object.assign(routes, voice.routes)
+    scripts[VOICE_CONFIG_SCRIPT] = voice.configScript
+  }
+  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true, localRoutes: routes, dynamicScripts: scripts })
   const openLink = () => `http://${board.host}:${board.port}${OPEN_PATH}?t=${login.issueOpenToken()}`
   return { ...board, openLink, starterSecret: login.starterSecret, apiToken: login.apiToken }
 }

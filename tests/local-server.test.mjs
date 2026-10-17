@@ -791,7 +791,7 @@ test('local page: the board\'s page gets local-mode.js in front of app.js - only
     const html = await (await fetch(local.url('/'))).text()
     assert.equal(html.split('/local-mode.js').length - 1, 1)
     assert.ok(html.indexOf('/local-mode.js') < html.indexOf('/app.js'), 'it must run before app.js')
-    assert.equal(html.replace('<script src="/local-mode.js"></script>', '').replace('<script src="/local-settings.js"></script>', ''), readFileSync(join(ROOT, 'public', 'index.html'), 'utf8'), 'nothing else in the page changes')
+    assert.equal(['/local-mode.js', '/local-voice-config.js', '/local-settings.js', '/local-voice.js'].reduce((text, one) => text.replace(`<script src="${one}"></script>`, ''), html), readFileSync(join(ROOT, 'public', 'index.html'), 'utf8'), 'nothing else in the page changes')
     const script = await fetch(local.url('/local-mode.js'))
     assert.equal(script.status, 200)
     assert.match(script.headers.get('content-type'), /javascript/)

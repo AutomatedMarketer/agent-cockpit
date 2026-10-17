@@ -9,6 +9,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
+import { callableAddress, parseLoopbackUrl, whereIs } from './loopback.mjs'
 
 export const SETTINGS_PATH = '/api/local-settings'
 const MAX_BODY_CHARS = 2000
@@ -20,9 +21,40 @@ export const SLOTS = Object.freeze({
   OPENROUTER_API_KEY: { label: 'OpenRouter key (optional)', shape: /^sk-or-[A-Za-z0-9_-]{16,200}$/, hint: 'It starts with sk-or- and has no spaces.' }
 })
 const SLOT_NAMES = Object.keys(SLOTS)
+
+// Local voice (task T16): where the three parts are, and which models they are asked for. None of this is
+// secret; every address must be on this computer (local/loopback.mjs).
+export const VOICE_DEFAULTS = Object.freeze({
+  engine: 'cloud',
+  hearUrl: 'http://127.0.0.1:3900/v1/audio/transcriptions',
+  thinkUrl: 'http://127.0.0.1:11434/v1/chat/completions',
+  speakUrl: 'http://127.0.0.1:3900/v1/audio/speech',
+  hearModel: 'whisper-1',
+  brainModel: 'qwen3:8b',
+  speakModel: 'kittentts',
+  speakVoice: 'alloy'
+})
+const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/
+const VOICE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$/
+const VOICE_FIELD_CHECKS = {
+  engine: (value, { boardPort }) => (value === 'cloud' || value === 'local' ? value : null),
+  hearUrl: (value, { boardPort }) => (parseLoopbackUrl(value, { exceptPort: boardPort }) ? value : null),
+  thinkUrl: (value, { boardPort }) => (parseLoopbackUrl(value, { exceptPort: boardPort }) ? value : null),
+  speakUrl: (value, { boardPort }) => (parseLoopbackUrl(value, { exceptPort: boardPort }) ? value : null),
+  hearModel: (value) => (typeof value === 'string' && MODEL_NAME.test(value) ? value : null),
+  brainModel: (value) => (typeof value === 'string' && MODEL_NAME.test(value) ? value : null),
+  speakModel: (value) => (typeof value === 'string' && MODEL_NAME.test(value) ? value : null),
+  speakVoice: (value) => (typeof value === 'string' && VOICE_NAME.test(value) ? value : null)
+}
+const VOICE_FIELD_NAMES = Object.keys(VOICE_FIELD_CHECKS)
+const URL_FIELDS = ['hearUrl', 'thinkUrl', 'speakUrl']
 const isSlot = (name) => typeof name === 'string' && Object.hasOwn(SLOTS, name)
 
 export const SAY = Object.freeze({
+  voiceBad: (field) => (URL_FIELDS.includes(field)
+    ? 'That address is not allowed. It must start with http://127.0.0.1 (or http://localhost), because the voice parts run on this computer.'
+    : field === 'engine' ? 'The voice engine is Cloud or Local.' : 'That name does not look right. Use letters, numbers and - _ . : only.'),
+  voiceUnknown: 'The board does not keep that voice setting.',
   notAKey: (slot) => `That does not look like ${SLOTS[slot].label.replace(/ \(.*\)$/, '')}. ${SLOTS[slot].hint}`,
   anthropicKey: 'That looks like an Anthropic (Claude) key. The OpenAI box takes only an OpenAI key, which starts with sk- and is made at platform.openai.com.',
   openrouterKey: 'That looks like an OpenRouter key. Paste it in the OpenRouter box, not here.',
@@ -53,6 +85,17 @@ function hasSpaceOrControl(value) {
   return false
 }
 
+function readFileVoice(file, boardPort = null) {
+  const voice = { ...VOICE_DEFAULTS }
+  try {
+    const stored = JSON.parse(readFileSync(file, 'utf8'))?.voice
+    for (const name of VOICE_FIELD_NAMES) {
+      if (typeof stored?.[name] === 'string' && VOICE_FIELD_CHECKS[name](stored[name], { boardPort }) !== null) voice[name] = stored[name]
+    }
+  } catch { /* defaults */ }
+  return voice
+}
+
 function readFileKeys(file) {
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'))
@@ -69,11 +112,11 @@ function readFileKeys(file) {
 
 // Written to a temp name and renamed; private to the user (0600; on Windows the folder is already
 // locked to the user by icacls).
-function writeKeys(file, keys) {
+function writeKeys(file, keys, voice = VOICE_DEFAULTS) {
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   const temp = `${file}.${randomBytes(4).toString('hex')}.tmp`
   try {
-    writeFileSync(temp, JSON.stringify({ version: 1, keys }), { mode: 0o600 })
+    writeFileSync(temp, JSON.stringify({ version: 1, keys, voice }), { mode: 0o600 })
     try { chmodSync(temp, 0o600) } catch { /* Windows */ }
     renameSync(temp, file)
   } catch (failure) {
@@ -88,6 +131,7 @@ function writeKeys(file, keys) {
 export function createSettings({ file, env = process.env, fetchImpl = fetch, openaiBase = 'https://api.openai.com', openrouterBase = 'https://openrouter.ai', testTimeoutMs = 10_000 } = {}) {
   if (typeof file !== 'string' || !file) throw new Error('createSettings needs the settings file path.')
   let keys = readFileKeys(file)
+  let voice = readFileVoice(file)
   let testing = false
 
   // Puts every saved key where the board's handlers read it. A saved key wins over one the computer
@@ -118,7 +162,7 @@ export function createSettings({ file, env = process.env, fetchImpl = fetch, ope
     if (refusal) return { status: 400, body: { error: refusal } }
     const next = { ...keys, [slot]: value }
     try {
-      writeKeys(file, next)
+      writeKeys(file, next, voice)
     } catch {
       return { status: 500, body: { error: SAY.cannotSave } }
     }
@@ -132,7 +176,7 @@ export function createSettings({ file, env = process.env, fetchImpl = fetch, ope
     const next = { ...keys }
     delete next[slot]
     try {
-      writeKeys(file, next)
+      writeKeys(file, next, voice)
     } catch {
       return { status: 500, body: { error: SAY.cannotSave } }
     }
@@ -169,6 +213,43 @@ export function createSettings({ file, env = process.env, fetchImpl = fetch, ope
     }
   }
 
+  // ---- local voice settings ----
+  function voiceSave(values, boardPort) {
+    if (!values || typeof values !== 'object' || Array.isArray(values)) return { status: 400, body: { error: SAY.badRequest } }
+    const next = { ...voice }
+    for (const [field, value] of Object.entries(values)) {
+      if (!Object.hasOwn(VOICE_FIELD_CHECKS, field)) return { status: 400, body: { error: SAY.voiceUnknown } }
+      const ok = VOICE_FIELD_CHECKS[field](value, { boardPort })
+      if (ok === null) return { status: 400, body: { error: SAY.voiceBad(field) } }
+      next[field] = ok
+    }
+    try {
+      writeKeys(file, keys, next)
+    } catch {
+      return { status: 500, body: { error: SAY.cannotSave } }
+    }
+    voice = next
+    return { status: 200, body: { ok: true, voice: { ...voice } } }
+  }
+
+  // Is anything listening where each part is said to be? Any answer at all counts - the root of
+  // Ollama says so, Voice Studio may say "not found": both mean it is up.
+  async function voiceCheck() {
+    const result = {}
+    for (const [part, field] of [['hear', 'hearUrl'], ['think', 'thinkUrl'], ['speak', 'speakUrl']]) {
+      const url = parseLoopbackUrl(voice[field])
+      if (!url) { result[part] = { up: false, where: null }; continue }
+      const root = new URL('/', callableAddress(url)).href
+      try {
+        await fetchImpl(root, { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(3000) })
+        result[part] = { up: true, where: whereIs(url) }
+      } catch {
+        result[part] = { up: false, where: whereIs(url) }
+      }
+    }
+    return { status: 200, body: { ok: true, check: result } }
+  }
+
   // POST only. { action: 'status' } | { action: 'save', slot, value } | { action: 'remove', slot } | { action: 'test', slot }
   async function handler(request, response) {
     response.setHeader('Cache-Control', 'no-store')
@@ -181,7 +262,9 @@ export function createSettings({ file, env = process.env, fetchImpl = fetch, ope
     if (!body || typeof body !== 'object' || Array.isArray(body) || JSON.stringify(body).length > MAX_BODY_CHARS) return send({ status: 400, body: { error: SAY.badRequest } })
     try {
       switch (body.action) {
-        case 'status': return send({ status: 200, body: { ok: true, keys: status() } })
+        case 'status': return send({ status: 200, body: { ok: true, keys: status(), voice: { ...voice }, voiceDefaults: { ...VOICE_DEFAULTS } } })
+        case 'voice-save': return send(voiceSave(body.values, request.socket?.localPort ?? null))
+        case 'voice-check': return send(await voiceCheck())
         case 'save': return send(save(body.slot, body.value))
         case 'remove': return send(remove(body.slot))
         case 'test': return send(await test(body.slot))
@@ -193,7 +276,7 @@ export function createSettings({ file, env = process.env, fetchImpl = fetch, ope
     }
   }
 
-  return { handler, status, save, remove, test, inject, file }
+  return { handler, status, save, remove, test, inject, file, voice: () => ({ ...voice }) }
 }
 
 export const settingsFileIn = (stateDir) => join(stateDir, 'settings.json')

@@ -68,6 +68,40 @@ The Settings box (T10) - local board only:
   JSON body under 2000 characters. Not checked on Windows by a test: the file mode (Windows has no modes; the
   state folder is locked to the user with icacls instead).
 
+Local voice (T16) - Voice engine: Cloud / Local in the Settings box:
+
+- **Cloud** (OpenAI's realtime voice) stays the default. **Local** is a turn-based loop that runs on this computer:
+  the page listens until you stop talking, the board sends that sound to a **speech-to-text** program, asks a
+  **language model** (with the same tools and instructions as the cloud voice - `toolsFor` and `instructionsFor`
+  are reused, not copied), and speaks the reply clause by clause through a **text-to-speech** program. The model's
+  tool calls run in the page exactly as they do for the cloud voice, so the yes-cards, data-only results and
+  spoken-yes rules are unchanged. `local/page/voice-local.js` stands in for OpenAI's connection by handing the
+  page the same events a realtime call would.
+- The three programs are OpenAI-shaped web addresses (defaults: speech to text `http://127.0.0.1:3900/v1/audio/transcriptions`,
+  model `whisper-1`; language model `http://127.0.0.1:11434/v1/chat/completions`, model `qwen3:8b`; text to speech
+  `http://127.0.0.1:3900/v1/audio/speech`, model `kittentts`, voice `alloy`). They are called from the board's server,
+  never the browser, and **only** at `http://127.0.0.1`, `http://localhost` or `http://[::1]` - no other host, no https,
+  no login in the address, no redirects, and never the board's own port. Checked when saved and again at every call.
+- What the spike found is built in (`docs/superpowers/specs/2026-10-16-local-brain-spike.md`): thinking is off
+  (`reasoning_effort: none`) and the model is told "call the matching tool immediately and say nothing before it";
+  without that sentence it says "let me check" and then makes things up. `<think>` blocks, printed tool-call markup and
+  a leaked "Okay, the user is asking..." are cut before anything is spoken, and words that come before a tool call are
+  not spoken at all. If the model gives no tool call and no words, it says one plain line instead of staying silent.
+- If a part is down, the student gets one plain line naming it ("The thinking part ... is not answering at 127.0.0.1:11434.
+  Start it, or switch the Voice engine back to Cloud in Settings.") and the call goes back to listening.
+- Local voice costs nothing and sends nothing to OpenAI, so it keeps no cost record (no entry in the cloud voice meter).
+
+Trying it for real on the Mac (Voice Studio running on 127.0.0.1:3900; Ollama with `qwen3:8b` on 127.0.0.1:11434):
+
+1. Get this branch (`student-edition`) onto the Mac and put a `board.json` next to `Start Board.command` naming the team folder
+   (`{"teamFolder": "/Users/you/path/to/team"}`), then double-click `Start Board.command`.
+2. In the board (Chrome): **Settings**, **Voice engine**, choose **Local**, **Save voice settings**, then **Check the three parts**
+   (it should say all three are answering), then **Reload the board**.
+3. Tap the orb, allow the microphone, say "what is due today", and wait. The first answer is slow (the model loads: about 9 s on
+   the Mini); later ones are about 1.5 to 5 s in the spike.
+4. Things to watch, which only the real programs can show: Voice Studio taking the 16 kHz WAV and `whisper-1` model name; Ollama
+   taking `reasoning_effort: none`; Voice Studio's voice name (`alloy` worked in the spike; change it in the box if not).
+
 What the board shows (student edition, started by Start Board):
 
 - **Team data:** read with git from a clone of the team repo on this computer (`REPO_SOURCE=folder`,

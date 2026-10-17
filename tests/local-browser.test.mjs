@@ -13,7 +13,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { createServer } from 'node:http'
 import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -37,6 +37,51 @@ function findChrome(env = process.env, platform = process.platform) {
   return candidates.find((path) => path && existsSync(path)) ?? null
 }
 const CHROME = findChrome()
+
+// A spoken-sounding WAV for Chrome's fake microphone: half a second of quiet, a second and a half of loud
+// tone, then quiet. The board only listens for loud then quiet; it never needs words.
+function microphoneWav() {
+  const rate = 48000
+  const seconds = 14
+  const samples = rate * seconds
+  const bytes = Buffer.alloc(44 + samples * 2)
+  bytes.write('RIFF', 0); bytes.writeUInt32LE(36 + samples * 2, 4); bytes.write('WAVEfmt ', 8)
+  bytes.writeUInt32LE(16, 16); bytes.writeUInt16LE(1, 20); bytes.writeUInt16LE(1, 22); bytes.writeUInt32LE(rate, 24); bytes.writeUInt32LE(rate * 2, 28); bytes.writeUInt16LE(2, 32); bytes.writeUInt16LE(16, 34)
+  bytes.write('data', 36); bytes.writeUInt32LE(samples * 2, 40)
+  for (let n = 0; n < samples; n += 1) {
+    const t = n / rate
+    const loud = t > 0.5 && t < 2.0
+    const value = loud ? 0.5 * (Math.sin(2 * Math.PI * 220 * t) + 0.5 * Math.sin(2 * Math.PI * 330 * t)) : 0
+    bytes.writeInt16LE(Math.round(value * 16000), 44 + n * 2)
+  }
+  return bytes
+}
+// A short, valid sound for the "speaking" stand-in to return (a quiet tone, a quarter of a second).
+function speechWav() {
+  const rate = 8000
+  const samples = 2000
+  const bytes = Buffer.alloc(44 + samples * 2)
+  bytes.write('RIFF', 0); bytes.writeUInt32LE(36 + samples * 2, 4); bytes.write('WAVEfmt ', 8)
+  bytes.writeUInt32LE(16, 16); bytes.writeUInt16LE(1, 20); bytes.writeUInt16LE(1, 22); bytes.writeUInt32LE(rate, 24); bytes.writeUInt32LE(rate * 2, 28); bytes.writeUInt16LE(2, 32); bytes.writeUInt16LE(16, 34)
+  bytes.write('data', 36); bytes.writeUInt32LE(samples * 2, 40)
+  for (let n = 0; n < samples; n += 1) bytes.writeInt16LE(Math.round(600 * Math.sin(n / 6)), 44 + n * 2)
+  return bytes
+}
+
+// Taps the orb the way a student does, waits for the reply to appear (real time: Chrome's virtual clock stops
+// the microphone from opening, so this journey runs without it), and reports what the page shows.
+const VOICE_DRIVE_SCRIPT = `(async function () {
+  var sleep = function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms) }) }
+  var q = function (id) { return document.getElementById(id) }
+  var report = function (step, extra) { return fetch('/report?' + new URLSearchParams(Object.assign({ step: step }, extra)).toString()) }
+  await sleep(800)
+  if (!q('voice-orb')) { await report('noorb'); return }
+  q('voice-orb').click()
+  for (var i = 0; i < 500 && !/Two things/.test(q('voice-said').textContent); i++) await sleep(100)
+  await sleep(500)
+  await report('voice', { you: q('voice-you').textContent, said: q('voice-said').textContent, state: q('voice-state').textContent, cost: q('voice-cost').textContent, note: q('voice-note').textContent, mouth: (document.querySelector('.voice-mouth') || {}).textContent || '' })
+})()
+`
 
 const FAKE_KEY = 'sk-proj-' + 'Zz9Yy8Xx'.repeat(6)
 
@@ -67,6 +112,24 @@ const DRIVE_SCRIPT = `(async function () {
   q('board-remove-OPENAI_API_KEY').click()
   await until(function () { return q('board-state-OPENAI_API_KEY').textContent === 'not saved' })
   await report('removed', { state: q('board-state-OPENAI_API_KEY').textContent, note: q('board-settings-note').textContent })
+  // The voice engine: an address off this computer is refused; a local one is saved and checked.
+  await until(function () { return q('board-voice-engine').value === 'cloud' })
+  q('board-voice-engine').value = 'local'
+  q('board-voice-thinkUrl').value = 'http://evil.example/v1/chat/completions'
+  q('board-voice-save').click()
+  await until(function () { return /not allowed/.test(q('board-voice-note').textContent) })
+  await report('voiceRefused', { note: q('board-voice-note').textContent })
+  q('board-voice-thinkUrl').value = 'http://127.0.0.1:' + location.port + '/v1/chat/completions'
+  q('board-voice-save').click()
+  await until(function () { return /not allowed/.test(q('board-voice-note').textContent) && q('board-voice-note').textContent !== 'Saving...' })
+  await report('voiceOwnPort', { note: q('board-voice-note').textContent })
+  q('board-voice-thinkUrl').value = 'http://127.0.0.1:1/v1/chat/completions'
+  q('board-voice-save').click()
+  await until(function () { return /^Saved/.test(q('board-voice-note').textContent) })
+  await report('voiceSaved', { note: q('board-voice-note').textContent, engine: q('board-voice-engine').value })
+  q('board-voice-check').click()
+  await until(function () { return /Listening:/.test(q('board-voice-note').textContent) })
+  await report('voiceChecked', { note: q('board-voice-note').textContent })
 })()
 `
 
@@ -107,6 +170,28 @@ async function runJourneyOnce(mode) {
     response.end(JSON.stringify({ data: [] }))
   })
   await new Promise((done) => openai.listen(0, '127.0.0.1', done))
+  // The three local parts, as stand-ins that record what they are asked (voice mode only).
+  const parts = { hear: [], think: [], speak: [] }
+  const standIn = (kind, answer) => createServer((request, response) => {
+    const chunks = []
+    request.on('data', (chunk) => chunks.push(chunk))
+    request.on('end', () => {
+      const body = Buffer.concat(chunks)
+      parts[kind].push({ url: request.url, headers: request.headers, body })
+      answer(response, parts[kind].length)
+    })
+  })
+  const stands = {
+    hear: standIn('hear', (response) => { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ text: "what's due today?" })) }),
+    think: standIn('think', (response, count) => {
+      response.setHeader('Content-Type', 'application/json')
+      response.end(JSON.stringify({ choices: [{ message: count === 1
+        ? { content: '', tool_calls: [{ id: 'call_abc', function: { name: 'whats_due', arguments: '{"hours":24}' } }] }
+        : { content: '<think>checking</think>Two things are due today.' } }] }))
+    }),
+    speak: standIn('speak', (response) => { response.setHeader('Content-Type', 'audio/wav'); response.end(speechWav()) })
+  }
+  if (mode === 'voice') await Promise.all(Object.values(stands).map((one) => new Promise((done) => one.listen(0, '127.0.0.1', done))))
   const other = createServer((request, response) => {
     seen.push({ path: 'OTHER-SITE ' + request.url, status: 200 })
     response.setHeader('Content-Type', 'text/html')
@@ -126,7 +211,11 @@ async function runJourneyOnce(mode) {
     ].join(String.fromCharCode(10)))
     const index = readFileSync(join(ROOT, 'public', 'index.html'), 'utf8')
     assert.ok(index.includes('<script src="/app.js"></script>'))
-    if (mode === 'settings') {
+    if (mode === 'voice') {
+      writeFileSync(join(boardRoot, 'public', 'drive.js'), VOICE_DRIVE_SCRIPT)
+      writeFileSync(join(boardRoot, 'public', 'index.html'), index.replace('<script src="/app.js"></script>', '<script src="/app.js"></script><script src="/drive.js"></script>'))
+      writeFileSync(join(home, 'microphone.wav'), microphoneWav())
+    } else if (mode === 'settings') {
       writeFileSync(join(boardRoot, 'public', 'drive.js'), DRIVE_SCRIPT)
       writeFileSync(join(boardRoot, 'public', 'index.html'), index.replace('<script src="/app.js"></script>', '<script src="/app.js"></script><script src="/drive.js"></script>'))
     } else if (mode !== 'poison') {
@@ -153,8 +242,19 @@ async function runJourneyOnce(mode) {
       log: () => {},
       // The "browser" is real Chrome, given the launcher FILE exactly as the operating system would.
       openFile: async (file) => {
+        if (mode === 'voice') {
+          const child = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`, '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${join(home, 'microphone.wav').split(String.fromCharCode(92)).join('/')}%noloop`, '--autoplay-policy=no-user-gesture-required', `file:///${file.split(String.fromCharCode(92)).join('/')}`], { stdio: 'ignore' })
+          for (let waited = 0; waited < 90000 && !seen.some((entry) => entry.path === '/report'); waited += 100) await new Promise((done) => setTimeout(done, 100))
+          await new Promise((done) => {
+            child.once('exit', done)
+            if (process.platform === 'win32') execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () => {})
+            else child.kill()
+            setTimeout(done, 5000).unref()
+          })
+          return
+        }
         dom = await new Promise((resolve) => {
-          execFile(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`, '--virtual-time-budget=20000', '--dump-dom', `file:///${file.replace(/\\/g, '/')}`],
+          execFile(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`, ...(mode === 'voice' ? ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', `--use-file-for-fake-audio-capture=${join(home, 'microphone.wav').replace(/\\/g, '/')}%noloop`, '--autoplay-policy=no-user-gesture-required'] : []), `--virtual-time-budget=${mode === 'voice' ? 90000 : 20000}`, '--dump-dom', `file:///${file.replace(/\\/g, '/')}`],
             { timeout: 90000 }, (error, stdout) => resolve(String(stdout ?? '')))
         })
       },
@@ -164,7 +264,12 @@ async function runJourneyOnce(mode) {
         const stateStub = (request, response) => response.status(200).json(basePayload())
         const loadHandler = async (name) => (name === 'state' ? stateStub : (await import(`../api/${name}.js`)).default)
         settingsFile = options.settingsFile
+        if (mode === 'voice') {
+          const at = (kind, path) => `http://127.0.0.1:${stands[kind].address().port}${path}`
+          writeFileSync(settingsFile, JSON.stringify({ version: 1, keys: {}, voice: { engine: 'local', hearUrl: at('hear', '/v1/audio/transcriptions'), thinkUrl: at('think', '/v1/chat/completions'), speakUrl: at('speak', '/v1/audio/speech') } }))
+        }
         const board = await startLocalBoard({ ...options, root: boardRoot, loadHandler, settingsOptions: { openaiBase: `http://127.0.0.1:${openai.address().port}` } })
+
         boardPort = board.port
         apiToken = board.apiToken
         board.server.prependListener('request', (request, response) => {
@@ -185,13 +290,15 @@ async function runJourneyOnce(mode) {
       }
     }
     if (existsSync(profile)) walk(profile)
-    return { seen, dom, leaks, apiToken, openaiCalls, settingsFile, title: /<title>([^<]+)<\/title>/.exec(readFileSync(join(ROOT, 'public', 'index.html'), 'utf8'))?.[1] }
+    return { seen, dom, leaks, apiToken, openaiCalls, settingsFile, settingsText: existsSync(settingsFile ?? '') ? readFileSync(settingsFile, 'utf8') : '', parts, title: /<title>([^<]+)<\/title>/.exec(readFileSync(join(ROOT, 'public', 'index.html'), 'utf8'))?.[1] }
   } finally {
     other.close()
     openai.close()
+    Object.values(stands).forEach((one) => one.close())
     await result?.close?.()
     for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
-    rmSync(home, { recursive: true, force: true })
+    // Chrome's last helper processes may still hold a file for a moment after it was stopped.
+    try { rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }) } catch { /* a temporary folder left behind is not a failed test */ }
   }
 }
 
@@ -273,11 +380,11 @@ test('real Chrome: a link to the board with a forged #bt= does not replace the k
 })
 
 test('real Chrome: a student pastes an OpenAI key in the Settings box - saved, tested, never shown again, removable', { skip, timeout: 170000 }, async () => {
-  const { seen, openaiCalls, leaks } = await runJourney('settings')
+  const { seen, openaiCalls, leaks, settingsText } = await runJourney('settings')
   assert.deepEqual(leaks, [], `the pasted key or the page key was found in the browser's files: ${leaks.join(', ')}`)
   const steps = Object.fromEntries(seen.filter((entry) => entry.path === '/report').map((entry) => [new URLSearchParams(entry.query).get('step'), { ...entry, said: new URLSearchParams(entry.query) }]))
   assert.ok(!steps.nobox, 'the Settings box was not on the page')
-  for (const step of ['refused', 'saved', 'tested', 'removed']) assert.ok(steps[step], `the box never got as far as "${step}": ${JSON.stringify(seen.filter((entry) => entry.path === '/report').map((entry) => entry.query))}`)
+  for (const step of ['refused', 'saved', 'tested', 'removed', 'voiceRefused', 'voiceOwnPort', 'voiceSaved', 'voiceChecked']) assert.ok(steps[step], `the box never got as far as "${step}": ${JSON.stringify(seen.filter((entry) => entry.path === '/report').map((entry) => entry.query))}`)
   assert.equal(steps.refused.said.get('started'), 'not saved')
   assert.match(steps.refused.said.get('note'), /space or a new line/)
   assert.equal(steps.refused.said.get('emptied'), 'true', 'a refused paste stayed in the box')
@@ -292,7 +399,58 @@ test('real Chrome: a student pastes an OpenAI key in the Settings box - saved, t
   assert.equal(openaiCalls.length, 1, 'the key test called the service more or less than once')
   assert.deepEqual([openaiCalls[0].method, openaiCalls[0].url, openaiCalls[0].authorization], ['GET', '/v1/models', `Bearer ${FAKE_KEY}`])
   assert.equal(steps.removed.said.get('state'), 'not saved')
+  assert.match(steps.voiceRefused.said.get('note'), /not allowed.*127.0.0.1/)
+  assert.match(steps.voiceOwnPort.said.get('note'), /not allowed/, 'the board was allowed to point at itself')
+  assert.match(steps.voiceSaved.said.get('note'), /^Saved. Reload the board/)
+  assert.equal(steps.voiceSaved.said.get('engine'), 'local')
+  assert.match(steps.voiceChecked.said.get('note'), /Thinking: not answering at 127.0.0.1:1./)
+  const kept = JSON.parse(settingsText).voice
+  assert.equal(kept.engine, 'local')
+  assert.equal(kept.thinkUrl, 'http://127.0.0.1:1/v1/chat/completions')
   assert.equal(steps.removed.envHasKey, false)
   assert.equal(steps.removed.fileHasKey, false)
   for (const entry of seen) assert.ok(!JSON.stringify(entry).includes(FAKE_KEY), 'the key appeared in a request the page made')
+})
+
+test('real Chrome: one whole turn of local voice - the student speaks, the parts on this computer hear, think (with a tool), and speak', { skip, timeout: 170000 }, async () => {
+  const { seen, parts, leaks } = await runJourney('voice')
+  const report = seen.find((entry) => entry.path === '/report')
+  assert.ok(report, `the page never reported: ${JSON.stringify(seen.map((entry) => entry.path))}`)
+  const said = new URLSearchParams(report.query)
+  assert.notEqual(said.get('step'), 'noorb', 'the talk button was not on the page: local voice was not switched on for the page')
+  // 1. The microphone's sound reached the listening part as a WAV, once.
+  assert.equal(parts.hear.length, 1, `the listening part was asked ${parts.hear.length} times; page said ${report.query}; board saw ${seen.map((entry) => entry.path).join(' ')}`)
+  const wav = parts.hear[0].body
+  assert.match(parts.hear[0].headers['content-type'], /^multipart\/form-data/)
+  assert.ok(wav.includes(Buffer.from('RIFF')) && wav.includes(Buffer.from('WAVE')), 'what was sent is not a WAV')
+  assert.ok(wav.length > 16000 * 2 * 0.8, `only ${wav.length} bytes of sound were sent`)
+  // 2. The model was asked twice: with the person's words and the board's tools, then with the tool's answer.
+  assert.equal(parts.think.length, 2)
+  const first = JSON.parse(parts.think[0].body.toString('utf8'))
+  assert.equal(first.reasoning_effort, 'none')
+  assert.deepEqual(first.messages.slice(1), [{ role: 'user', content: "what's due today?" }])
+  assert.ok(first.tools.some((tool) => tool.function.name === 'whats_due'))
+  assert.match(first.messages[0].content, /call the matching tool immediately and say nothing before it/i)
+  const second = JSON.parse(parts.think[1].body.toString('utf8'))
+  const roles = second.messages.slice(1).map((one) => one.role)
+  assert.deepEqual(roles, ['user', 'assistant', 'tool'])
+  assert.equal(second.messages[2].tool_calls[0].function.name, 'whats_due')
+  assert.equal(second.messages[3].tool_call_id, 'call_abc')
+  const answer = JSON.parse(second.messages[3].content)
+  assert.ok(answer && typeof answer === 'object', 'the page did not answer the tool with the board\'s data')
+  // 3. The reply was spoken by the speaking part, without the model's thinking.
+  assert.ok(parts.speak.length >= 1)
+  const spoken = parts.speak.map((one) => JSON.parse(one.body.toString('utf8')).input).join(' ')
+  assert.match(spoken, /Two things are due today\./)
+  assert.doesNotMatch(spoken, /think|checking/i)
+  for (const one of parts.speak) assert.equal(JSON.parse(one.body.toString('utf8')).model, 'kittentts')
+  // 4. The page showed it, and said it costs nothing.
+  assert.equal(said.get('you'), "what's due today?")
+  assert.match(said.get('said'), /Two things are due today\./)
+  assert.doesNotMatch(said.get('said'), /think|checking/i)
+  assert.match(said.get('cost'), /runs on this computer/)
+  assert.match(said.get('mouth'), /on this computer/)
+  // 5. Nothing went to OpenAI's voice, Fish, or the cloud meter.
+  for (const entry of seen) assert.ok(!['/api/voice-session', '/api/speak', '/api/voice-meter'].some((path) => entry.path === path && entry.method === 'POST'), `${entry.path} was called`)
+  assert.deepEqual(leaks, [])
 })
