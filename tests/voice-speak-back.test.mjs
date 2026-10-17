@@ -480,3 +480,114 @@ test('while an order is pending the idle hang-up waits 5 minutes on the cloud an
   browser.call.session.armIdle()
   assert.equal(idle(browser).at(-1), 120_000, 'it stayed open after the order ended')
 })
+
+/* ---------- round 2: which order a run or a card belongs to ---------- */
+
+const at = (ms) => new Date(ms).toISOString()
+const siteOrder = (sentMs) => ({ kind: 'run', slug: 'intel', name: 'Intel', sentAt: at(sentMs) })
+const macOrder = (sentMs, id) => ({ ...siteOrder(sentMs), via: 'mac', id, expiresAt: at(sentMs + 15 * MIN), pollSeconds: 60 })
+const intelRun = (startMs, endMs, over = {}) => ({ workflow: 'intel', started_at: at(startMs), finished_at: at(endMs), status: 'ok', summary: 'ok', ...over })
+const quietBoard = (extra = {}) => ({ ...basePayload(), board: { ...basePayload().board, running: [] }, ...extra })
+
+test('an order from days ago, whose run left the board\'s list, does not take today\'s run', () => {
+  const monday = siteOrder(NOW - 5 * 86400_000)
+  const saturday = siteOrder(NOW)
+  const data = quietBoard({ runs: [intelRun(NOW + 10_000, NOW + 2 * MIN, { summary: 'saturday ok' })] })
+  assert.equal(orderOutcome(saturday, data, NOW + 5 * MIN, 'UTC', [saturday, monday]).summary, 'saturday ok')
+})
+
+test('an order that never ran does not take the run of its retry, and the retry hears its own', () => {
+  const first = siteOrder(NOW)
+  const retry = siteOrder(NOW + 20 * MIN)
+  const data = quietBoard({ runs: [intelRun(NOW + 21 * MIN, NOW + 24 * MIN, { status: 'failed', summary: 'retry failed' })] })
+  const log = [retry, first]
+  assert.deepEqual(orderOutcome(retry, data, NOW + 25 * MIN, 'UTC', log), { name: 'Intel', outcome: 'failed', summary: 'retry failed' })
+  assert.equal(orderOutcome(first, data, NOW + 25 * MIN, 'UTC', log), null, 'the silent order took the retry\'s run')
+})
+
+test('a Mac order that expired, was refused or failed does not take the retry\'s run', () => {
+  const ID1 = 'a'.repeat(32)
+  const ID2 = 'b'.repeat(32)
+  const first = macOrder(NOW, ID1)
+  const retry = macOrder(NOW + 20 * MIN, ID2)
+  const entry = (id, over) => ({ id, action: 'run', at: at(NOW + 24 * MIN), ...over })
+  for (const gone of [{ state: 'refused', why: 'expired' }, { state: 'failed', why: 'timed-out' }, null]) {
+    const orders = [entry(ID2, { state: 'ok', startedAt: at(NOW + 21 * MIN), finishedAt: at(NOW + 24 * MIN) }), ...(gone ? [entry(ID1, gone)] : [])]
+    const data = quietBoard({ runs: [intelRun(NOW + 21 * MIN, NOW + 24 * MIN, { summary: 'retry ok' })], mailbox: { status: 'ok', computers: [{ computer: 'Mac', orders, hidden: 0 }] } })
+    assert.equal(orderOutcome(retry, data, NOW + 25 * MIN, 'UTC', [retry, first]).summary, 'retry ok', JSON.stringify(gone))
+  }
+})
+
+test('two Mac orders for one job that both finished each hear their own run, by the times the Mac recorded', () => {
+  const first = macOrder(NOW, 'a'.repeat(32))
+  const second = macOrder(NOW + MIN, 'b'.repeat(32))
+  const orders = [
+    { id: first.id, action: 'run', state: 'ok', at: at(NOW + 5 * MIN), startedAt: at(NOW + 4 * MIN), finishedAt: at(NOW + 5 * MIN) },
+    { id: second.id, action: 'run', state: 'ok', at: at(NOW + 9 * MIN), startedAt: at(NOW + 7 * MIN), finishedAt: at(NOW + 9 * MIN) }
+  ]
+  const data = quietBoard({
+    runs: [intelRun(NOW + 7 * MIN, NOW + 9 * MIN, { summary: 'second ran' }), intelRun(NOW + 4 * MIN, NOW + 5 * MIN, { summary: 'first ran' })],
+    mailbox: { status: 'ok', computers: [{ computer: 'Mac', orders, hidden: 0 }] }
+  })
+  const log = [second, first]
+  assert.equal(orderOutcome(first, data, NOW + 10 * MIN, 'UTC', log).summary, 'first ran')
+  assert.equal(orderOutcome(second, data, NOW + 10 * MIN, 'UTC', log).summary, 'second ran')
+})
+
+test('a Mac whose clock runs 80 seconds behind still matches its own run, or says done with no summary - never another run', () => {
+  const order = macOrder(NOW, 'c'.repeat(32))
+  const behind = (extra) => quietBoard({
+    runs: [intelRun(NOW - 80_000, NOW - 40_000, { summary: 'fast' }), ...extra],
+    mailbox: { status: 'ok', computers: [{ computer: 'Mac', hidden: 0, orders: [{ id: order.id, action: 'run', state: 'ok', at: at(NOW - 40_000), startedAt: at(NOW - 79_000), finishedAt: at(NOW - 40_000) }] }] }
+  })
+  assert.equal(orderOutcome(order, behind([]), NOW + 5 * MIN).summary, 'fast')
+  // An older run of the same job is nobody\'s answer: the Mac says when its own run began and ended.
+  const older = intelRun(NOW - 3 * 86400_000, NOW - 3 * 86400_000 + MIN, { summary: 'three days ago' })
+  const stranger = quietBoard({
+    runs: [older],
+    mailbox: { status: 'ok', computers: [{ computer: 'Mac', hidden: 0, orders: [{ id: order.id, action: 'run', state: 'ok', at: at(NOW - 40_000), startedAt: at(NOW - 79_000), finishedAt: at(NOW - 40_000) }] }] }
+  })
+  assert.deepEqual(orderOutcome(order, stranger, NOW + 5 * MIN), { name: 'Intel', outcome: 'done', summary: '' })
+})
+
+test('two orders for the same task title, seconds apart: the second does not take the first one\'s card', () => {
+  const first = { kind: 'task', title: 'Write the report', sentAt: at(NOW), before: [] }
+  const second = { kind: 'task', title: 'Write the report', sentAt: at(NOW + 30_000), before: [] }
+  const card = (slug) => ({ slug, title: 'Write the report', doing: false })
+  const board = (todo) => ({ ...basePayload(), board: { ...basePayload().board, todo } })
+  const log = [second, first]
+  const one = board([card('2026-10-09-write-the-report')])
+  assert.equal(orderOutcome(first, one, NOW + 2 * MIN, 'UTC', log).outcome, 'filed')
+  assert.equal(orderOutcome(second, one, NOW + 2 * MIN, 'UTC', log), null, 'the second order took the first\'s card')
+  const two = board([card('2026-10-09-write-the-report'), card('2026-10-09-write-the-report-2')])
+  assert.equal(orderOutcome(second, two, NOW + 3 * MIN, 'UTC', log).outcome, 'filed')
+})
+
+test('with no board loaded when a task is sent, no snapshot is kept, so no card is taken for its answer by title', async () => {
+  const browser = await connected({ answer: { orders: ORDERS }, data: {} })
+  call(browser, 'add_task', { title: 'Chase the invoice' }, 'call_task')
+  await yes(browser)
+  assert.equal(browser.state.orders.length, 1)
+  assert.equal(browser.state.orders[0].before, undefined)
+})
+
+test('an old order does not take a run that began a few seconds before today\'s order was sent', () => {
+  const monday = siteOrder(NOW - 5 * 86400_000)
+  const saturday = siteOrder(NOW)
+  const early = quietBoard({ runs: [intelRun(NOW - 30_000, NOW + 2 * MIN, { summary: 'saturday early start' })] })
+  assert.equal(orderOutcome(saturday, early, NOW + 5 * MIN, 'UTC', [saturday, monday]).summary, 'saturday early start')
+})
+
+test('a Mac task order that was refused does not take the card of its retry', () => {
+  const ID1 = 'd'.repeat(32)
+  const ID2 = 'e'.repeat(32)
+  const mk = (sentMs, id) => ({ kind: 'task', title: 'Write the report', sentAt: at(sentMs), before: [], via: 'mac', id, expiresAt: at(sentMs + 15 * MIN), pollSeconds: 60 })
+  const first = mk(NOW, ID1)
+  const retry = mk(NOW + 10 * MIN, ID2)
+  const data = {
+    ...basePayload(),
+    board: { ...basePayload().board, todo: [{ slug: '2026-10-09-write-the-report', title: 'Write the report', doing: false }] },
+    mailbox: { status: 'ok', computers: [{ computer: 'Mac', hidden: 0, orders: [{ id: ID1, action: 'task', state: 'refused', why: 'not-valid', at: at(NOW + MIN) }, { id: ID2, action: 'task', state: 'ok', at: at(NOW + 11 * MIN), finishedAt: at(NOW + 11 * MIN) }] }] }
+  }
+  assert.equal(orderOutcome(retry, data, NOW + 12 * MIN, 'UTC', [retry, first]).outcome, 'filed')
+})

@@ -1152,16 +1152,19 @@ const resultText = (value, most) => {
   return text === '' || /\p{Cc}/u.test(text) || hiddenText(text) ? '' : text.slice(0, most)
 }
 const MAC_ENDS = { 'refused by your Mac': 'refused', 'failed on your Mac': 'failed', expired: 'expired', 'outcome unknown': 'unclear' }
+// The longest an order is watched; orders sent further apart than this are not competing for one result.
+const ORDER_WATCH_MS = 30 * 60_000
 
 // The cards that already carry this title, noted when a task order is sent: a card with one of these
 // slugs is an old card, never the answer to the order. The board has no "created at" for a card.
 function taskCardSlugs(data, title) {
+  if (!data?.board || typeof data.board !== 'object') return null
   const cards = [...toolList(data?.board?.todo), ...toolList(data?.board?.done), ...toolList(data?.board?.finishedTasks)]
   return [...new Set(cards.filter((card) => card.kind !== 'run' && card.title === title && typeof card.slug === 'string').map((card) => card.slug.slice(0, 120)))].slice(0, 20)
 }
 
-// `siblings` are the other voice orders on this device (their log), so that two orders for the same job
-// each get a run of their own: the older order takes the older run.
+// `siblings` are the other voice orders on this device (their log): within the watch limit of this one, they
+// are told apart from it, so each order gets a run or a card of its own and none takes another's.
 export function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblings = []) {
   if (!order || typeof order !== 'object' || (order.kind !== 'run' && order.kind !== 'task')) return null
   const sentAt = Date.parse(order.sentAt)
@@ -1175,43 +1178,77 @@ export function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblin
   const mac = macOrderSaid(order, data, now, zone)
   if (mac && Object.hasOwn(MAC_ENDS, mac.state)) return ended(MAC_ENDS[mac.state], mac.said)
   if (mac && !mac.done) return null
+  // The other voice orders that could be competing for the same run or card: this job's or title's, sent
+  // within the watch limit of this one (30 minutes), and not ones the Mac already ended without a result.
+  const near = toolList(siblings).filter((one) => one.kind === order.kind && one.sentAt !== order.sentAt &&
+    Math.abs(Date.parse(one.sentAt) - sentAt) <= ORDER_WATCH_MS &&
+    (order.kind === 'run' ? one.slug === order.slug : one.title === order.title))
+  const endedByMac = (one) => {
+    const said = macOrderSaid(one, data, now, zone)
+    return Boolean(said) && Object.hasOwn(MAC_ENDS, said.state)
+  }
+  const peers = near.filter((one) => !endedByMac(one))
   if (order.kind === 'run') {
     const running = toolList(data?.board?.running)
     const isRunning = (one) => running.some((live) => live.name === one.workflow && live.started_at === one.started_at)
+    const mine = toolList(data?.runs).filter((one) => one.workflow === order.slug || one.workflow === order.name)
+    if (mac) {
+      // The Mac records when its own run began and ended, on the same clock as the run's log: the run
+      // inside that window is this order's, whatever the board's clock says. None inside: done, no summary.
+      const entry = toolList(data?.mailbox?.computers).flatMap((computer) => toolList(computer.orders)).find((one) => one.id === order.id)
+      const from = Date.parse(entry?.startedAt) - 60_000
+      const to = Date.parse(entry?.finishedAt) + 60_000
+      const run = mine.filter((one) => Date.parse(one.started_at) >= (Number.isFinite(from) ? from : sentAt - ORDER_RUN_SLACK_MS) && (!Number.isFinite(to) || Date.parse(one.started_at) <= to))
+        .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at))[0]
+      if (!run) return ended('done')
+      return isRunning(run) ? null : ended(FINISHED_BADLY.includes(run.status) ? 'failed' : 'done', run.summary)
+    }
     // A run answers an order when it began no earlier than the slack before it (a routine stamps its
     // start from its own clock) and did not finish before it; with no finish stamped, it began after it.
-    const answers = (one, at) => {
+    const answers = (one) => {
       const began = Date.parse(one.started_at)
       const finished = Date.parse(one.finished_at)
-      if (Number.isFinite(finished)) return finished >= at && began >= at - ORDER_RUN_SLACK_MS
-      return began >= at || (isRunning(one) && began >= at - ORDER_RUN_SLACK_MS)
+      if (Number.isFinite(finished)) return finished >= sentAt && began >= sentAt - ORDER_RUN_SLACK_MS
+      return began >= sentAt || (isRunning(one) && began >= sentAt - ORDER_RUN_SLACK_MS)
     }
-    const candidates = (for_) => toolList(data?.runs)
-      .filter((one) => (one.workflow === for_.slug || one.workflow === for_.name) && answers(one, Date.parse(for_.sentAt)))
-      .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at))
-    const same = [order, ...toolList(siblings).filter((one) => one.kind === 'run' && one.slug === order.slug && one.sentAt !== order.sentAt && !Number.isNaN(Date.parse(one.sentAt)))]
-      .sort((a, b) => Date.parse(a.sentAt) - Date.parse(b.sentAt))
-    const taken = new Set()
-    let run = null
-    for (const one of same) {
-      const pick = candidates(one).find((candidate) => !taken.has(candidate))
-      if (one === order) run = pick
-      else if (pick) taken.add(pick)
+    // A run belongs to the latest order sent at or before it began (so an order that never ran does not
+    // take its retry's run); one that began a little before every order belongs to the earliest.
+    const contenders = [order, ...peers.filter((one) => !one.via)].sort((a, b) => Date.parse(a.sentAt) - Date.parse(b.sentAt))
+    const ownerOf = (one) => {
+      const began = Date.parse(one.started_at)
+      const earlier = contenders.filter((other) => Date.parse(other.sentAt) <= began)
+      return earlier.length ? earlier.at(-1) : contenders.find((other) => began >= Date.parse(other.sentAt) - ORDER_RUN_SLACK_MS)
     }
-    if (!run) return mac ? ended('done') : null
-    if (isRunning(run)) return null
-    return ended(FINISHED_BADLY.includes(run.status) ? 'failed' : 'done', run.summary)
+    const run = mine.filter((one) => answers(one) && ownerOf(one) === order).sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at))[0]
+    if (!run) return null
+    return isRunning(run) ? null : ended(FINISHED_BADLY.includes(run.status) ? 'failed' : 'done', run.summary)
   }
   // A card counts only if it was not on the board when the order was sent (order.before, its slugs), and
   // a card that says it was closed before the day of the order never does. No snapshot: no title match.
-  const before = Array.isArray(order.before) ? order.before : null
-  const fresh = (card) => before !== null && typeof card.slug === 'string' && !before.includes(card.slug)
-  const open = toolList(data?.board?.todo).find((card) => card.title === order.title && fresh(card))
-  if (open) return ended('filed', `in ${open.doing ? 'doing' : 'to do'}${typeof open.for === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(open.for) ? ` for ${open.for}` : ''}`)
-  const dayBefore = new Date(sentAt - 86_400_000).toISOString().slice(0, 10)
-  const finished = [...toolList(data?.board?.done), ...toolList(data?.board?.finishedTasks)]
-    .some((card) => card.kind === 'task' && card.title === order.title && fresh(card) && !(typeof card.doneAt === 'string' && card.doneAt < dayBefore))
-  return finished || mac ? ended('done') : null
+  // Cards an earlier order of the same title has already taken are not this order's.
+  const cards = new Map()
+  for (const card of toolList(data?.board?.todo)) if (typeof card.slug === 'string' && !cards.has(card.slug)) cards.set(card.slug, { card, open: true })
+  for (const card of [...toolList(data?.board?.done), ...toolList(data?.board?.finishedTasks)]) {
+    if (card.kind === 'task' && typeof card.slug === 'string' && !cards.has(card.slug)) cards.set(card.slug, { card, open: false })
+  }
+  const claimable = (one) => {
+    if (!Array.isArray(one.before)) return []
+    const dayBefore = new Date(Date.parse(one.sentAt) - 86_400_000).toISOString().slice(0, 10)
+    return [...cards.values()]
+      .filter(({ card }) => card.title === order.title && !one.before.includes(card.slug) && !(typeof card.doneAt === 'string' && card.doneAt < dayBefore))
+      .sort((a, b) => (a.card.slug < b.card.slug ? -1 : 1))
+  }
+  const taken = new Set()
+  for (const earlier of peers.filter((one) => Date.parse(one.sentAt) < sentAt).sort((a, b) => Date.parse(a.sentAt) - Date.parse(b.sentAt))) {
+    const pick = claimable(earlier).find(({ card }) => !taken.has(card.slug))
+    if (pick) taken.add(pick.card.slug)
+  }
+  const found = claimable(order).find(({ card }) => !taken.has(card.slug))
+  if (found?.open) {
+    const doing = found.card.doing ? 'doing' : 'to do'
+    return ended('filed', `in ${doing}${typeof found.card.for === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(found.card.for) ? ` for ${found.card.for}` : ''}`)
+  }
+  return found || mac ? ended('done') : null
 }
 
 // --- "find my note" (search_memory, open_note) ---
