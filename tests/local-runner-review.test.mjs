@@ -9,9 +9,9 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'nod
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { createLocalRunner, makeWorkCopy, runnerEnvironment, runnerGit, runnerSpawn } from '../local/runner.mjs'
+import { createLocalRunner, makeWorkCopy, prepareJobs, runnerEnvironment, runnerGit, runnerSpawn } from '../local/runner.mjs'
 import { createCollector } from '../local/collector.mjs'
-import { NO_RUNNER, RUNNER_CODE } from './helpers/local-runner-world.mjs'
+import { NO_RUNNER, RUNNER_CODE, makeWorld } from './helpers/local-runner-world.mjs'
 
 const temp = (name) => realpathSync(mkdtempSync(join(tmpdir(), `${name}-`)))
 const fromRunner = (...parts) => import(pathToFileURL(join(RUNNER_CODE, 'scripts', 'lib', ...parts)).href)
@@ -78,6 +78,32 @@ test('no program the runner starts sees a key: its spawn applies the short envir
     for (const name of Object.keys(call.env)) assert.ok(!KEY_NAMES.test(name), `${call.file} saw ${name}`)
   }
   assert.deepEqual(seen[1].env, { HOME: 'h' }, 'an environment the runner gives is kept as given')
+})
+
+test('the spawn prepareJobs hands the runner starts programs with the short environment: no key of the board, the computer or the mailbox', { skip: NO_RUNNER, timeout: 60_000 }, async () => {
+  const world = makeWorld()
+  try {
+    let handed = null
+    // The runner's own main, with its tick replaced: it keeps what it was given as `spawn` and does nothing else.
+    const tick = async (ctx) => { handed = ctx.spawn; return { state: 'done' } }
+    const env = { ...ENV_WITH_KEYS, PICTURE_STORE: 'folder', PICTURE_FOLDER: join(world.state, 'pictures') } // the board's queue, as Start Board sets it
+    const jobs = await prepareJobs({ boardDir: world.board, stateDir: world.state, teamFolder: world.team, env, log: () => {}, places: { workDir: world.work, codeDir: RUNNER_CODE }, overrides: { tick }, everyMs: 3_600_000 })
+    assert.ok(jobs, 'jobs did not turn on')
+    assert.ok(env.MAILBOX_SECRET && env.MAILBOX_KEY, 'the board\'s environment holds the mailbox secrets now')
+    await jobs.tick()
+    assert.equal(typeof handed, 'function')
+    // A program started with no environment of its own, as the runner starts taskkill.
+    const child = handed(process.execPath, ['-e', 'process.stdout.write(JSON.stringify(Object.keys(process.env)))'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
+    let out = ''
+    child.stdout.on('data', (chunk) => { out += chunk })
+    await new Promise((resolve, reject) => { child.on('error', reject); child.on('close', resolve) })
+    const names = JSON.parse(out)
+    assert.ok(names.length > 0)
+    for (const name of names) assert.ok(!KEY_NAMES.test(name), `a program the runner started saw ${name}`)
+    await jobs.stop()
+  } finally {
+    world.done()
+  }
 })
 
 test('the collector\'s taskkill sees no key either', async () => {
