@@ -12,7 +12,14 @@ import { loadPage, flush, html, script } from './helpers/page-harness.mjs'
 import { basePayload } from './helpers/page-payload.mjs'
 import { shapeReadiness, orderCards, countCards } from '../api/_readiness.js'
 
-const NOW = Date.now()
+// A fixed moment, midday in UTC. The tests that print a time ("ran clean at 11:30 AM") and the ones that
+// say "today" or "yesterday" were written against the real clock, so they failed for half an hour after
+// midnight UTC (when 30 minutes ago was yesterday). The page is given the same moment as its clock.
+const NOW = Date.UTC(2026, 9, 14, 12, 0, 0)
+class FixedDate extends Date {
+  constructor(...args) { if (args.length) super(...args); else super(NOW) }
+  static now() { return NOW }
+}
 const iso = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z')
 const walk = (node, found = []) => {
   found.push(node)
@@ -43,7 +50,7 @@ const wallPayload = (workflows = referenceWorkflows(), extra = {}) => ({
 
 const CLOCK = "readinessClock.locale = 'en-US'; readinessClock.zone = 'UTC'"
 async function boot(payload, options = {}) {
-  const page = loadPage({ payload, hash: '#readiness', after: CLOCK, expose: ['ageReadiness', 'readinessScheduleText', 'readinessSentence', 'readinessWhen', 'readinessOrder', 'readinessCount', 'readinessCountsText', 'renderReadiness', 'readinessClock'], ...options })
+  const page = loadPage({ date: FixedDate, payload, hash: '#readiness', after: CLOCK, expose: ['ageReadiness', 'readinessScheduleText', 'readinessSentence', 'readinessWhen', 'readinessOrder', 'readinessCount', 'readinessCountsText', 'renderReadiness', 'readinessClock'], ...options })
   await flush()
   return page
 }
@@ -490,7 +497,7 @@ test('Refresh reads the board again, draws it, and keeps the reader where they w
   const first = wallPayload([workflow()])
   const second = wallPayload([workflow(), workflow({ slug: 'new', name: 'New one', arm: 'declared' })])
   let calls = 0
-  const page = loadPage({
+  const page = loadPage({ date: FixedDate,
     hash: '#readiness',
     after: CLOCK,
     scrollY: 321,
@@ -512,7 +519,7 @@ test('Refresh reads the board again, draws it, and keeps the reader where they w
 
 test('a refresh that fails says so on the screen and leaves the lights as they were', async () => {
   let calls = 0
-  const page = loadPage({
+  const page = loadPage({ date: FixedDate,
     hash: '#readiness',
     after: CLOCK,
     fetch: async (url) => (String(url).startsWith('/api/state')
