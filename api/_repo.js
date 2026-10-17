@@ -23,7 +23,9 @@
 // - Each call has a time limit and an output limit, and at most MAX_AT_ONCE run together.
 
 import { execFile, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, realpathSync, statSync } from 'node:fs'
+import { lstat, readdir, readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -407,9 +409,104 @@ function makeContentCache() {
 }
 const REVPARSE_KEPT_MS = 2000
 
+// ---- this computer's own status files (the board on this computer only) ----------------------------------
+// The status collector the local board runs (local/collector.mjs) writes its files to a folder OUTSIDE every repo.
+// When the reader is given that folder (REPO_STATUS_FOLDER, read only in folder mode), it lays those files over what
+// git has, at the same paths, so the board's readers find them where they read them today. Only these paths, only
+// plain files with no link anywhere on the way, each at most OVERLAY_MAX_BYTES, a few per folder. The website has no
+// folder, so it never reads the setting. (Same-user races - swapping a folder for a link between the check and the
+// read - are accepted as in the picture folder: that person can already read every file here.)
+export const OVERLAY_FOLDERS = Object.freeze(['.agent-team/status/usage', '.agent-team/status/connections', '.agent-team/status/hermes', '.agent-team/status/jobs', '.agent-team/status/vaults'])
+const OVERLAY_FILES = Object.freeze(['runs/heartbeat/hermes.json'])
+const OVERLAY_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}\.json$/
+const OVERLAY_MAX_BYTES = 512 * 1024
+const OVERLAY_MAX_PER_FOLDER = 10
+const OVERLAY_KEPT_MS = 5000
+
+export function isOverlayPath(repoPath) {
+  if (typeof repoPath !== 'string') return false
+  if (OVERLAY_FILES.includes(repoPath)) return true
+  const slash = repoPath.lastIndexOf('/')
+  return slash > 0 && OVERLAY_FOLDERS.includes(repoPath.slice(0, slash)) && OVERLAY_NAME.test(repoPath.slice(slash + 1))
+}
+
+export function statusFolder(env = process.env) {
+  return typeof env.REPO_STATUS_FOLDER === 'string' && path.isAbsolute(env.REPO_STATUS_FOLDER) ? env.REPO_STATUS_FOLDER : null
+}
+
+// The folder at root/parts, if every step is a real folder (lstat: a link is never followed), else null.
+async function plainFolder(root, parts) {
+  let at = root
+  try {
+    if (!(await lstat(at)).isDirectory()) return null
+    for (const part of parts) {
+      at = path.join(at, part)
+      if (!(await lstat(at)).isDirectory()) return null
+    }
+    return at
+  } catch {
+    return null
+  }
+}
+
+async function plainFile(file) {
+  try {
+    const info = await lstat(file)
+    if (!info.isFile() || info.size > OVERLAY_MAX_BYTES) return null
+    const bytes = await readFile(file)
+    return bytes.length > OVERLAY_MAX_BYTES ? null : bytes
+  } catch {
+    return null
+  }
+}
+
+// repo path -> bytes, for every overlay file there is now.
+export async function readOverlay(root) {
+  const found = new Map()
+  if (!root) return found
+  for (const folder of OVERLAY_FOLDERS) {
+    const dir = await plainFolder(root, folder.split('/'))
+    if (!dir) continue
+    let names
+    try {
+      names = (await readdir(dir)).filter((name) => OVERLAY_NAME.test(name)).sort().slice(0, OVERLAY_MAX_PER_FOLDER)
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      const bytes = await plainFile(path.join(dir, name))
+      if (bytes) found.set(`${folder}/${name}`, bytes)
+    }
+  }
+  for (const file of OVERLAY_FILES) {
+    const parts = file.split('/')
+    const dir = await plainFolder(root, parts.slice(0, -1))
+    const bytes = dir ? await plainFile(path.join(dir, parts.at(-1))) : null
+    if (bytes) found.set(file, bytes)
+  }
+  return found
+}
+
+// What git itself would call the file: the id of a blob with these bytes.
+const blobId = (bytes) => createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex')
+
 // One folder's reader. `run` and `now` are injectable for the tests.
-export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = MAX_TREE_ENTRIES, batch } = {}) {
+export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = MAX_TREE_ENTRIES, batch, overlay = null } = {}) {
   if (typeof folder !== 'string' || !path.isAbsolute(folder)) throw new Error('The repo folder must be an absolute path.')
+  let overlayKept = { at: -Infinity, files: new Map() }
+  async function overlayFiles({ fresh }) {
+    if (!overlay) return null
+    if (!fresh && now() - overlayKept.at < OVERLAY_KEPT_MS) return overlayKept.files
+    overlayKept = { at: now(), files: await readOverlay(overlay) }
+    return overlayKept.files
+  }
+  // The tree with this computer's own status files laid over it (a new list; the kept one is never changed).
+  async function withOverlay(listing) {
+    const files = await overlayFiles({ fresh: true })
+    if (!files || !files.size) return listing
+    const laid = [...files].map(([repoPath, bytes]) => ({ path: repoPath, type: 'blob', mode: '100644', sha: blobId(bytes), size: bytes.length }))
+    return { ...listing, tree: [...listing.tree.filter((entry) => !files.has(entry.path)), ...laid] }
+  }
   // Files are read through one long-lived git program - unless the tests handed in their own runner.
   const reader = batch === undefined ? (run === runGit ? batchReaderFor(folder) : null) : batch
   const contents = makeContentCache()
@@ -508,7 +605,7 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     if (treeKept.has(commit)) {
       const kept = treeKept.get(commit)
       trees.set(commit, kept.shas)
-      return { sha: kept.sha, tree: kept.tree.slice(), truncated: kept.truncated }
+      return withOverlay({ sha: kept.sha, tree: kept.tree.slice(), truncated: kept.truncated })
     }
     let stdout
     try {
@@ -535,7 +632,7 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     while (trees.size > KEEP_TREES) trees.delete(trees.keys().next().value)
     treeKept.set(commit, { sha: commit, tree: entries, truncated, shas })
     while (treeKept.size > KEEP_TREES) treeKept.delete(treeKept.keys().next().value)
-    return { sha: commit, tree: entries.slice(), truncated }
+    return withOverlay({ sha: commit, tree: entries.slice(), truncated })
   }
 
   // One object through the long-lived program, kept by what it is called at that commit.
@@ -556,6 +653,10 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
   // One committed file's text, or null when the commit has no such file.
   async function file(ref, repoPath) {
     if (!isRepoPath(repoPath)) return null
+    if (overlay && isOverlayPath(repoPath)) {
+      const laid = (await overlayFiles({ fresh: false })).get(repoPath)
+      if (laid) return laid.toString('utf8')
+    }
     const commit = await commitOf(ref)
     if (!commit) return null
     if (reader) return readThrough(`${commit}:${repoPath}`, `${commit}:${repoPath}`)
@@ -611,7 +712,7 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
 // known blobs are shared by every request.
 const readers = new Map()
 export function repoReader(folder) {
-  if (!readers.has(folder)) readers.set(folder, folderRepo(folder))
+  if (!readers.has(folder)) readers.set(folder, folderRepo(folder, { overlay: statusFolder() }))
   return readers.get(folder)
 }
 
