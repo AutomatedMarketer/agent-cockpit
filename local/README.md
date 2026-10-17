@@ -1,6 +1,6 @@
 # Board on this computer (Student Edition) - not ready for students yet
 
-Status: the server (T1), the team-folder reader (T2), the picture folder (T3), the sign-in wall (T4) and the start files (T5) are done. **Not handed to students until a real Mac and Windows double-click test (below) has been done.**
+Status: the server (T1), the team-folder reader (T2), the picture folder (T3), the sign-in wall (T4), the start files (T5) and jobs on this computer (T8, on the `student-runner` branch) are done. **Not handed to students until a real Mac and Windows double-click test (below) has been done.**
 
 Starting it (T5): double-click **`Start Board.command`** (Mac) or **`Start Board.bat`** (Windows). Both
 check for Node 20 or newer and say in plain words if it is missing, run Node by its full path from an
@@ -115,6 +115,66 @@ What the board shows (student edition, started by Start Board):
   that has been pushed (a folder with no remote is read at its own branch and says "jobs are off"),
   and the folder named in `board.json` (or the board inside it).
 
+Jobs on this computer (T8) - the Run, task and card buttons:
+
+- **What happens on Run.** `/api/fire` checks the order exactly as on the website and, in mailbox mode, signs it and
+  keeps it in the board's queue (the picture folder). Right after it answers, the board gives the team's own mailbox
+  runner one tick (`--once`), in this same program; a tick every 5 minutes settles anything left over, and the
+  runner's own lock keeps it to one at a time. The board never writes the team repo: the runner does, in its own copy,
+  and pushes; the board reads the result back with git like every other file.
+- **The runner's board is `https://this-computer.invalid`**, a name no network can resolve. The fetch the runner is
+  handed answers only `GET https://this-computer.invalid/api/mailbox`, by calling the real `api/mailbox.js` here
+  (Authorization header only, no cookie, Origin or Sec-Fetch-Site); any other address, method or body is refused.
+- **Every wall of the Mac runner comes along unchanged**: its allowlist and day limits, claims (never run twice), and
+  Claude Code with `--restricted`, no shell, **no connectors** (`--disallowedTools mcp__*`, an empty MCP list), file
+  tools only in its own work copy, a time limit, a self-test before any run.
+- **Written on the first start, never over an existing file, never shown:** in `<state folder>/runner/`
+  `runner.env` (`MAILBOX_KEY`, `MAILBOX_SECRET_k1`: 64 random hex digits each, 0600) and `allowed-orders.yml`
+  (board `https://this-computer.invalid`, runner `this-computer`, computer `This computer`, the repo from the team
+  folder's GitHub origin, both jobs, 40 orders and 6 runs a day). The board reads the same `runner.env` the runner
+  reads and sets `FIRE_MODE=mailbox`, `MAILBOX_*`, `GITHUB_OWNER` / `GITHUB_REPO` for its handlers; a `FIRE_TRIGGERS`,
+  `FIRE_KEY` or `MAILBOX_*` the computer already had is removed.
+- **Where things are** (none overlaps another or the team folder; checked at start and by the runner every tick):
+
+| | Windows | Mac |
+|---|---|---|
+| runner code (pinned) | `%USERPROFILE%\Agent Board\runner-code` (next to Start Board) | `~/Agent Board/runner-code` |
+| runner state + secrets | `%LOCALAPPDATA%\Agent Board\state\runner` | `~/Library/Application Support/Agent Board/state/runner` |
+| work copy | `%LOCALAPPDATA%\Agent Board\work` (cloned from the team folder's origin on the first start) | `~/Library/Application Support/Agent Board/work` |
+
+  The runner's state is a folder of its own inside the board's state folder (not the state folder itself): the
+  runner's Windows lock reads every file of its folder on every tick, and the board writes pictures all the time.
+- **Install (for `/onboard`, T17):** clone the student's own team repo, at its current commit, to `runner-code` next to
+  Start Board (`runner-code/` is in `.gitignore`). Start the board once (it writes the files above), close it, then run
+  the runner's self-test with the same places, for example on Windows:
+  `node runner-code\scripts\mailbox-runner.mjs --selftest --state-dir "%LOCALAPPDATA%\Agent Board\state\runner" --work-dir "%LOCALAPPDATA%\Agent Board\work" --env-file "%LOCALAPPDATA%\Agent Board\state\runner\runner.env"`.
+  Until it passes, card orders work and Run orders are refused as "not ready".
+- **Jobs stay off**, with one line in the Start window, when the team folder is not on GitHub, `runner-code` is missing
+  (or is inside the team folder), or the runner's files cannot be written or read.
+- git for the runner is found once on PATH by its full path (never one inside the team folder, the board, the runner
+  code or its work copy), started from git's own folder with `-C`; the runner and every program it starts get only
+  where-things-are variables (PATH, HOME, the Windows profile folders...), never a key, the per-run key or a board setting.
+
+This computer's numbers (T8) - usage and connections:
+
+- The collector from `runner-code` (never the team folder) runs with this board's own Node, from an empty folder, with
+  `--out <state folder>/status` (outside every repo, nothing committed): every part at start, usage every 15 minutes,
+  and every part on **Refresh now** in the Settings box (`POST /api/local-refresh`, behind the same wall as Settings).
+- The team folder reader lays those files over the repo at the same paths (`REPO_STATUS_FOLDER`, folder mode only):
+  only `.agent-team/status/{usage,connections,hermes,jobs,vaults}/<name>.json` and `runs/heartbeat/hermes.json`, plain
+  files only (no link on the way), 512 KB each at most. Never a mailbox status file, an agent or anything else.
+- After a refresh, the page's 60-second check is answered in full once, so new numbers show without a commit.
+
+Known limits of jobs on this computer:
+
+- The runner refuses orders issued in the first 2 minutes after its claim store is first made (its own rule against a
+  clock that runs behind). On a brand-new install, the very first order sent within 2 minutes of the first start is
+  refused ("did not pass its checks").
+- The board's queue still allows 8 orders a day (`MAILBOX_ORDERS_PER_DAY`, set for the website's free picture store).
+- Some mailbox answers still say "your Mac" (the website's words).
+- Closing the Start window while a job runs stops Claude; the order shows "outcome unknown" and is settled by reading
+  the team repo at the next start, never run again.
+
 Only a double-click proves (not checkable from node, to be tried on a real Mac and a real Windows PC):
 
 - the `.command` file opens in Terminal from Finder with no Gatekeeper block after a `git clone`, and keeps its run bit;
@@ -136,5 +196,9 @@ Files:
 | `routes.mjs` | the list of `api/` files that are served; a test fails if it differs from the folder |
 | `headers.mjs` | reads the security headers from `vercel.json` |
 | `static.mjs` | serves `public/` with clean URLs and refuses paths that leave it |
+| `runner.mjs` | jobs on this computer: the runner's files, its in-process board, its git, the kick after `/api/fire` |
+| `collector.mjs` | this computer's numbers: the collector on a schedule and Refresh now, and the full read after a refresh |
 
-Run its tests with `node --test tests/local-server.test.mjs`.
+Run its tests with `node --test tests/local-server.test.mjs`; jobs and numbers with
+`node --test tests/local-runner.test.mjs tests/local-runner-walls.test.mjs tests/local-collector.test.mjs` (the runner
+tests use the template checkout next to this repo, or `AGENT_TEAM_TEMPLATE`, read only; they skip without it).
