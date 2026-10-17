@@ -82,6 +82,7 @@ export function createBoardServer({
   dynamicScripts = {}, // address -> () => text, small scripts whose content depends on the board's settings
   localize = null, // (json) => json: the website's sentences in a student's words (startLocalBoard sets it)
   localPage = false, // true: the page gets local-mode.js in front of app.js (startLocalBoard sets it)
+  wrapHandler = null, // (name, handler) => handler: jobs on this computer kick the runner after /api/fire (local/runner.mjs)
   loadHandler = async (name) => (await import(pathToFileURL(join(root, 'api', `${name}.js`)).href)).default
 } = {}) {
   const { headers: securityHeaders } = loadVercelConfig(join(root, 'vercel.json'))
@@ -122,7 +123,8 @@ export function createBoardServer({
         }
         throw failure
       }
-      const handler = own ?? (await loadHandler(name))
+      const loaded = own ?? (await loadHandler(name))
+      const handler = wrapHandler && !own ? wrapHandler(name, loaded) : loaded
       if (localize) {
         const sendJson = response.json
         response.json = (value) => sendJson.call(response, localize(value))
@@ -199,7 +201,8 @@ export async function startBoardServer({ port = DEFAULT_PORT, host = LOOPBACK, b
 
 // The board as a person gets it: the server plus the sign-in wall. Returns openLink(), which makes
 // a NEW one-time link each time it is called - print it once and do not log it anywhere else.
-export async function startLocalBoard({ now, settingsFile, settingsOptions = {}, voiceOptions = {}, localRoutes = {}, ...options } = {}) {
+// `jobs` (local/runner.mjs, prepareJobs): when the runner is set up, /api/fire kicks it after an order is queued.
+export async function startLocalBoard({ now, settingsFile, settingsOptions = {}, voiceOptions = {}, localRoutes = {}, jobs = null, ...options } = {}) {
   const login = createLocalGate({ now })
   applyLocalEnv(login.viewKey)
   // The Settings box's keys: read back into the handlers' environment now, saved there when pasted.
@@ -213,7 +216,7 @@ export async function startLocalBoard({ now, settingsFile, settingsOptions = {},
     Object.assign(routes, voice.routes)
     scripts[VOICE_CONFIG_SCRIPT] = voice.configScript
   }
-  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true, localRoutes: routes, dynamicScripts: scripts, localize: localizeResponse })
+  const board = await startBoardServer({ ...options, gate: login.gate, localPage: true, localRoutes: routes, dynamicScripts: scripts, localize: localizeResponse, wrapHandler: jobs?.wrapHandler ?? null })
   const openLink = () => `http://${board.host}:${board.port}${OPEN_PATH}?t=${login.issueOpenToken()}`
   return { ...board, openLink, starterSecret: login.starterSecret, apiToken: login.apiToken }
 }

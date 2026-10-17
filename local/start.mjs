@@ -23,6 +23,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { startLocalBoard } from './server.mjs'
 import { OPEN_PATH, STARTER_PATH } from './gate.mjs'
 import { answerCode, askCode, codesMatch } from './starter-auth.mjs'
+import { prepareJobs } from './runner.mjs'
 
 // Short and plain. The operating system opens the LAST-USED browser profile, which may not be the window the student is looking at.
 export const OPENED_SAY = "The board opened in your browser. If you don't see it, look in your other browser windows."
@@ -264,7 +265,9 @@ export async function runStart({
   log = console.log,
   boardDir = join(dirname(fileURLToPath(import.meta.url)), '..'),
   teamFolder, // undefined: leave the settings alone (tests); null: not found, so stop; a path: use it
-  teamFolderWhy = 'I could not find your team folder.'
+  teamFolderWhy = 'I could not find your team folder.',
+  // Jobs on this computer (local/runner.mjs): false leaves them out; an object is handed to prepareJobs (tests).
+  jobs: jobsOptions = {}
 } = {}) {
   privateDir(stateDir, { lock: true })
 
@@ -277,25 +280,31 @@ export async function runStart({
   rmSync(join(stateDir, STATE_FILE), { force: true }) // a board that is gone, or not ours
   if (teamFolder === null) throw new Error(teamFolderWhy)
 
+  let jobs = null
   if (teamFolder) {
     const pictureFolder = picturesDirFor(stateDir)
     privateDir(pictureFolder)
     applyStudentEnv(process.env, { teamFolder, pictureFolder })
+    // The runner in this process, kicked on each order (null: jobs are off, and it has said why).
+    if (jobsOptions !== false) jobs = await prepareJobs({ boardDir, stateDir, teamFolder, platform, home, env: process.env, log, ...jobsOptions })
   }
-  const board = await pickPort(basePort, tries, (port) => startBoard({ port, settingsFile: join(stateDir, 'settings.json') }))
+  const board = await pickPort(basePort, tries, (port) => startBoard({ port, settingsFile: join(stateDir, 'settings.json'), jobs }))
   const stateFile = join(stateDir, STATE_FILE)
   writePrivateFile(stateFile, JSON.stringify({ port: board.port, secret: board.starterSecret, startedAt: new Date().toISOString() }))
 
   const close = async () => {
+    await jobs?.stop()
     const mine = readRunning(stateDir)
     if (mine && mine.secret === board.starterSecret) rmSync(stateFile, { force: true })
     await new Promise((done) => { board.server.close(done); board.server.closeAllConnections?.() })
   }
 
+  // The first tick settles anything a closed window left behind; then one every five minutes.
+  jobs?.start().catch(() => {})
   await openLink({ link: board.openLink(), stateDir, openFile, lingerMs })
   log(OPENED_SAY)
   log('Keep this window open while you use the board. Close it to stop the board.')
-  return { mode: 'started', port: board.port, server: board.server, close }
+  return { mode: 'started', port: board.port, server: board.server, close, jobs }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

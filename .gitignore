@@ -14,3 +14,6 @@ Thumbs.db
 
 # Where this computer's team folder is (student edition): personal, never committed.
 board.json
+
+# The runner code the board on this computer runs (a clone of the student's own team repo, at one commit).
+runner-code/
