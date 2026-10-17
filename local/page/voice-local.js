@@ -164,6 +164,20 @@
 
       function onChunk(samples, rate) {
         if (closed) return
+        // The page rests the microphone while a reply plays on a computer's speakers (and 300 ms after): whatever
+        // comes in then is the board hearing itself or the room's tail of it. Nothing is kept from it, and a turn
+        // that was under way is over - so the first words after the rest start from a clean page, not from the echo.
+        if (ctx.resting && ctx.resting()) {
+          preroll = []
+          prerollSamples = 0
+          loudRun = 0
+          if (turn) {
+            turn = null
+            emit({ type: 'input_audio_buffer.speech_stopped' })
+            emit({ type: 'error', error: { code: 'unheard' } })
+          }
+          return
+        }
         var sum = 0
         for (var i = 0; i < samples.length; i++) sum += samples[i] * samples[i]
         var level = Math.sqrt(sum / samples.length)

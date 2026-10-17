@@ -587,11 +587,11 @@ const loud = (n = 2048, level = 0.4) => Float32Array.from({ length: n }, (_, i) 
 const quiet = (n = 2048) => new Float32Array(n)
 const flush = async () => { for (let i = 0; i < 30; i += 1) await new Promise((resolve) => setImmediate(resolve)) }
 
-async function openAdapter(board, { rate = 16000 } = {}) {
+async function openAdapter(board, { rate = 16000, resting } = {}) {
   const world = adapterWorld({ board })
   const context = fakeContext(rate)
   const notes = []
-  const local = await world.window.__BOARD_LOCAL_VOICE__.open({ stream: {}, context, name: 'Jarvis', names: ['Jarvis'], timeZone: 'UTC', note: (words) => notes.push(words) })
+  const local = await world.window.__BOARD_LOCAL_VOICE__.open({ stream: {}, context, name: 'Jarvis', names: ['Jarvis'], timeZone: 'UTC', note: (words) => notes.push(words), resting })
   local.channel.onmessage = (message) => world.events.push(JSON.parse(message.data))
   let opened = 0
   local.channel.onopen = () => { opened += 1 }
@@ -910,4 +910,42 @@ test('think: the model gets 50 seconds - less than the board\'s own 60 - and a m
     await never.close()
     done()
   }
+})
+
+test('adapter: while the page rests the microphone nothing is kept or heard, and a turn under way is over', async () => {
+  let rest = false
+  const sent = []
+  const mine = await openAdapter((address, init) => {
+    const reply = (status, json) => Promise.resolve({ ok: status < 300, status, json: () => Promise.resolve(json) })
+    if (address === '/api/local-voice/start') return reply(200, STARTED)
+    if (address === '/api/local-voice/hear') { sent.push(Buffer.from(init.body)); return reply(200, { text: 'hello' }) }
+    return reply(200, { text: 'Hi.', calls: [], empty: false })
+  }, { resting: () => rest })
+  // Resting: loud sound (the board's own voice in the room) starts nothing.
+  rest = true
+  mine.feed(Array.from({ length: 30 }, () => loud(2048, 0.9)))
+  await flush()
+  assert.deepEqual(mine.world.events, [], 'the board heard itself')
+  assert.equal(sent.length, 0)
+  // Awake again: the first words start from a clean page - none of what was heard while resting is in them.
+  rest = false
+  await mine.speak()
+  assert.equal(sent.length, 1)
+  const samples = []
+  for (let at = 44; at + 1 < sent[0].length; at += 2) samples.push(Math.abs(sent[0].readInt16LE(at)))
+  const loudest = Math.max(...samples) / 32767
+  assert.ok(loudest < 0.6, `the echo from the resting time was in the words (loudest ${loudest.toFixed(2)})`)
+  // A turn under way when the page starts resting is dropped, and the page is told it was not heard.
+  const before = sent.length
+  mine.world.events.length = 0
+  mine.feed([loud(), loud(), loud(), loud()])
+  assert.equal(mine.world.events.at(-1).type, 'input_audio_buffer.speech_started')
+  rest = true
+  mine.feed([loud()])
+  const types = mine.world.events.map((event) => event.type)
+  assert.deepEqual(types.slice(-2), ['input_audio_buffer.speech_stopped', 'error'])
+  rest = false
+  mine.feed(Array.from({ length: 40 }, () => quiet()))
+  await flush()
+  assert.equal(sent.length, before, 'a dropped turn was sent to be heard')
 })

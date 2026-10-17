@@ -6475,7 +6475,7 @@ function openVoice(deps, ui) {
   async function connectLocal(stream) {
     let local
     try {
-      local = await window.__BOARD_LOCAL_VOICE__.open({ stream, context: session.context, name: voiceName(), names: voiceNamesOnBoard(), timeZone: voiceTimeZone(), note: (words) => ui.note?.(words) })
+      local = await window.__BOARD_LOCAL_VOICE__.open({ stream, context: session.context, name: voiceName(), names: voiceNamesOnBoard(), timeZone: voiceTimeZone(), note: (words) => ui.note?.(words), resting: () => session.micMuted })
     } catch (error) {
       throw voiceSaid(error?.message || VOICE_NO_START)
     }
