@@ -173,7 +173,13 @@ Known limits of jobs on this computer:
 - The board's queue still allows 8 orders a day (`MAILBOX_ORDERS_PER_DAY`, set for the website's free picture store).
 - Some mailbox answers still say "your Mac" (the website's words).
 - Closing the Start window while a job runs stops Claude; the order shows "outcome unknown" and is settled by reading
-  the team repo at the next start, never run again.
+  the team repo at the next start, never run again. The runner keeps its lock until that tick has really ended
+  (`keepLockOnSignal`, in the template from the `stop-lock` branch on): `runner-code` must be at or after that commit.
+- Refresh now freshens only the next 60-second answer the board gives after it (`freshAfterRefresh`): with two tabs
+  open, the second one shows the new numbers on its next full reload or the next commit.
+- An order lives about 17 minutes (three 5-minute polls and two minutes), but a run may take up to 30. An order made
+  while a long run is going waits for the next tick, and can expire before it ("it expired before your Mac picked it
+  up"); send it again once the run has finished.
 
 Only a double-click proves (not checkable from node, to be tried on a real Mac and a real Windows PC):
 
