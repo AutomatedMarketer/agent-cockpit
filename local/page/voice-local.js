@@ -130,7 +130,7 @@
       }
 
       // ---- what the person said ----
-      function heard(wav) {
+      function heard(wav, itemId) {
         var controller = new AbortController()
         inflight = controller
         fetch(ADDRESS.hear, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'x-voice-ticket': ticket }, body: wav, signal: controller.signal })
@@ -141,7 +141,6 @@
             if (!result.ok) { failed(result.json.error); return }
             var words = typeof result.json.text === 'string' ? result.json.text.trim() : ''
             if (!words) { emit({ type: 'error', error: { code: 'unheard' } }); return }
-            var itemId = 'item_' + (++counter)
             emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: itemId, transcript: words })
             history.push({ id: itemId, role: 'user', content: words })
             runBrain()
@@ -174,11 +173,13 @@
           while (prerollSamples - preroll[0].length > rate * PREROLL_MS / 1000) prerollSamples -= preroll.shift().length
           loudRun = level > START_LEVEL ? loudRun + 1 : 0
           if (loudRun >= START_FRAMES) {
-            turn = { chunks: preroll.slice(), samples: prerollSamples, loudSamples: samples.length * START_FRAMES, quietSamples: 0 }
+            // The turn's id is made now, said with its start and used again for its words: the page files how a turn
+            // began (was a reply playing, was the microphone resting) under this id, and a spoken yes is judged by it.
+            turn = { id: 'item_' + (++counter), chunks: preroll.slice(), samples: prerollSamples, loudSamples: samples.length * START_FRAMES, quietSamples: 0 }
             preroll = []
             prerollSamples = 0
             loudRun = 0
-            emit({ type: 'input_audio_buffer.speech_started' })
+            emit({ type: 'input_audio_buffer.speech_started', item_id: turn.id })
           }
           return
         }
@@ -196,7 +197,7 @@
         var all = new Float32Array(finished.samples)
         var at = 0
         finished.chunks.forEach(function (chunk) { all.set(chunk, at); at += chunk.length })
-        heard(wavOf(all, rate))
+        heard(wavOf(all, rate), finished.id)
       }
 
       function start() {

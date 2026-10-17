@@ -833,3 +833,22 @@ test('the page is told "cloud" when the board has no settings file at all', asyn
     for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
   }
 })
+
+test('adapter: a turn has one id from the moment speech starts to its words, so the page can judge a spoken yes by how the turn began', async () => {
+  const mine = await openAdapter((address) => {
+    const reply = (status, json) => Promise.resolve({ ok: status < 300, status, json: () => Promise.resolve(json) })
+    if (address === '/api/local-voice/start') return reply(200, STARTED)
+    if (address === '/api/local-voice/hear') return reply(200, { text: 'yes' })
+    return reply(200, { text: 'Sending it.', calls: [], empty: false })
+  })
+  await mine.speak()
+  const started = mine.world.events.find((event) => event.type === 'input_audio_buffer.speech_started')
+  const words = mine.world.events.find((event) => event.type === 'conversation.item.input_audio_transcription.completed')
+  assert.match(started.item_id, /^item_\d+$/)
+  assert.equal(words.item_id, started.item_id, 'the words came under a different id than the start of the turn')
+  await mine.speak()
+  const second = mine.world.events.filter((event) => event.type === 'input_audio_buffer.speech_started')[1]
+  assert.notEqual(second.item_id, started.item_id, 'two turns shared an id')
+  const secondWords = mine.world.events.filter((event) => event.type.endsWith('transcription.completed'))[1]
+  assert.equal(secondWords.item_id, second.item_id)
+})
