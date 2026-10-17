@@ -22,7 +22,7 @@
 //   like would redirect git); git never asks anything on a terminal.
 // - Each call has a time limit and an output limit, and at most MAX_AT_ONCE run together.
 
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { mkdtempSync, realpathSync, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -117,6 +117,11 @@ export function gitEnvironment(source = process.env) {
   return env
 }
 
+// How many git programs this process has started (the speed tests count them: reading a repo must cost a
+// handful, not one per file).
+let started = 0
+export const gitProcessesStarted = () => started
+
 let running = 0
 const waiting = []
 function slot() {
@@ -143,6 +148,7 @@ export async function runGit(args, { cwd, timeoutMs = READ_TIMEOUT_MS, maxBuffer
     // A program inside the team folder would be run with the student's rights by whoever put it
     // there: refused, whatever the PATH says.
     if (cwd && isInside(cwd, program)) throw ourFailure(FOLDER_UNREADABLE)
+    started += 1
     return await new Promise((resolve, reject) => {
       execFile(
         program,
@@ -223,9 +229,192 @@ const isMissing = (error) => error?.code === 128 && MISSING.test(stderrText(erro
 // A file bigger than the output limit is not shown, like one that is not there - it must not take the whole board down with it.
 const isTooBig = (error) => error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
 
+// ---- reading many files with ONE git program ------------------------------------------------------------
+// `git cat-file --batch` is told an object on each line of its input and answers with the object's size
+// and bytes. One such program serves every file of a repo, one request at a time, instead of one program per
+// file (a repo of 300 files took 15 seconds to load that way; starting git costs most of 50 ms here).
+//
+// Every rule of the one-at-a-time way holds: git by its full path started from git's own folder, never from the
+// team folder; the cleaned environment; the same fixed options; a name is checked before it is written (a commit
+// id, and a path with no control character, so nothing but one object can be asked for); a time limit on each
+// answer; a size limit on what is kept; and the program stops by itself when it has had nothing to do for a while.
+const BATCH_IDLE_MS = 5_000
+const batchReaders = new Map()
+export function closeBatchReaders() {
+  for (const reader of [...batchReaders.values()]) reader.close()
+  batchReaders.clear()
+}
+
+function makeBatchReader(folder) {
+  let child = null
+  let buffer = Buffer.alloc(0)
+  let part = { kind: 'header' } // or { kind: 'body', type, size, left, chunks, keep }
+  const jobs = []
+  let current = null
+  let jobTimer = null
+  let idleTimer = null
+
+  function reset() {
+    buffer = Buffer.alloc(0)
+    part = { kind: 'header' }
+  }
+  function fail(error) {
+    clearTimeout(jobTimer)
+    const dead = current ? [current, ...jobs.splice(0)] : jobs.splice(0)
+    current = null
+    for (const job of dead) job.reject(error)
+  }
+  function stop() {
+    clearTimeout(idleTimer)
+    clearTimeout(jobTimer)
+    const gone = child
+    child = null
+    reset()
+    if (gone) {
+      gone.removeAllListeners()
+      gone.stdout?.removeAllListeners()
+      try { gone.kill('SIGKILL') } catch { /* already gone */ }
+    }
+  }
+  function settle(answer) {
+    clearTimeout(jobTimer)
+    const job = current
+    current = null
+    job?.resolve(answer)
+    pump()
+  }
+
+  function onData(chunk) {
+    buffer = buffer.length ? Buffer.concat([buffer, chunk]) : chunk
+    for (;;) {
+      if (!current) return
+      if (part.kind === 'header') {
+        const end = buffer.indexOf(10)
+        if (end < 0) {
+          if (buffer.length > 4096) { stop(); fail(ourFailure(FOLDER_UNREADABLE)) }
+          return
+        }
+        const line = buffer.subarray(0, end).toString('latin1')
+        buffer = buffer.subarray(end + 1)
+        const found = /^[0-9a-f]{40} (\w+) (\d+)$/.exec(line)
+        if (found) {
+          const size = Number(found[2])
+          part = { kind: 'body', type: found[1], size, left: size + 1, chunks: [], keep: found[1] === 'blob' && size <= MAX_FILE_BYTES }
+        } else if (/ (missing|ambiguous)$/.test(line)) {
+          settle({ missing: true })
+        } else {
+          stop()
+          fail(ourFailure(FOLDER_UNREADABLE))
+          return
+        }
+      } else {
+        if (!buffer.length) return
+        const take = Math.min(part.left, buffer.length)
+        if (part.keep) part.chunks.push(buffer.subarray(0, take))
+        buffer = buffer.subarray(take)
+        part.left -= take
+        if (part.left > 0) return
+        const done = part
+        part = { kind: 'header' }
+        if (done.type !== 'blob') settle({ missing: true })
+        else if (!done.keep) settle({ tooBig: true })
+        else settle({ bytes: Buffer.concat(done.chunks).subarray(0, done.size) })
+      }
+    }
+  }
+
+  function start() {
+    const program = gitProgram()
+    if (isInside(folder, program)) throw ourFailure(FOLDER_UNREADABLE)
+    started += 1
+    // Named by its .git folder, not entered with -C: a program that is "in" the team folder stops the student
+    // from moving or deleting it for as long as the program lives. (A .git that is a file - a work tree, a
+    // submodule - cannot be named this way, so that one is entered.)
+    let where = ['-C', folder]
+    try {
+      if (statSync(path.join(folder, '.git')).isDirectory()) where = ['--git-dir', path.join(folder, '.git')]
+    } catch { /* entered with -C */ }
+    child = spawn(program, [...fixedGitOptions(), ...where, 'cat-file', '--batch'], {
+      cwd: path.dirname(program), env: gitEnvironment(), stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true
+    })
+    const mine = child
+    reset()
+    mine.stdout.on('data', onData)
+    mine.stdin.on('error', () => {})
+    mine.on('error', () => { if (child === mine) { stop(); fail(ourFailure(FOLDER_UNREADABLE)) } })
+    mine.on('close', () => { if (child === mine) { stop(); fail(ourFailure(FOLDER_UNREADABLE)) } })
+  }
+
+  function pump() {
+    if (current) return
+    clearTimeout(idleTimer)
+    if (!jobs.length) {
+      idleTimer = setTimeout(stop, BATCH_IDLE_MS)
+      idleTimer.unref?.()
+      return
+    }
+    try {
+      if (!child) start()
+    } catch (error) {
+      jobs.splice(0).forEach((job) => job.reject(error))
+      return
+    }
+    current = jobs.shift()
+    reset()
+    jobTimer = setTimeout(() => { stop(); fail(ourFailure(FOLDER_UNREADABLE)) }, READ_TIMEOUT_MS)
+    jobTimer.unref?.()
+    child.stdin.write(current.query + String.fromCharCode(10))
+  }
+
+  return {
+    // query: "<40 hex>" or "<40 hex>:<path>". Resolves { bytes } | { missing: true } | { tooBig: true }.
+    read(query) {
+      if (typeof query !== 'string' || !/^[0-9a-f]{40}(:[^\u0000-\u001f\u007f]{1,500})?$/.test(query)) return Promise.resolve({ missing: true })
+      return new Promise((resolve, reject) => {
+        jobs.push({ query, resolve, reject })
+        pump()
+      })
+    },
+    close() { stop(); fail(ourFailure(FOLDER_UNREADABLE)) }
+  }
+}
+
+function batchReaderFor(folder) {
+  if (!batchReaders.has(folder)) batchReaders.set(folder, makeBatchReader(folder))
+  return batchReaders.get(folder)
+}
+
+// What was read at a commit is kept: a commit never changes, so a name at a commit is always the same bytes.
+const CACHE_BYTES = 64 * 1024 * 1024
+const CACHE_ENTRIES = 30_000
+function makeContentCache() {
+  const items = new Map()
+  let bytes = 0
+  const sizeOf = (value) => (value === null ? 0 : Buffer.byteLength(value))
+  return {
+    get: (key) => items.get(key),
+    set(key, value) {
+      if (items.has(key)) bytes -= sizeOf(items.get(key))
+      items.set(key, value)
+      bytes += sizeOf(value)
+      while ((bytes > CACHE_BYTES || items.size > CACHE_ENTRIES) && items.size > 1) {
+        const oldest = items.keys().next().value
+        bytes -= sizeOf(items.get(oldest))
+        items.delete(oldest)
+      }
+    }
+  }
+}
+const REVPARSE_KEPT_MS = 2000
+
 // One folder's reader. `run` and `now` are injectable for the tests.
-export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = MAX_TREE_ENTRIES } = {}) {
+export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = MAX_TREE_ENTRIES, batch } = {}) {
   if (typeof folder !== 'string' || !path.isAbsolute(folder)) throw new Error('The repo folder must be an absolute path.')
+  // Files are read through one long-lived git program - unless the tests handed in their own runner.
+  const reader = batch === undefined ? (run === runGit ? batchReaderFor(folder) : null) : batch
+  const contents = makeContentCache()
+  const treeKept = new Map() // commit -> the listing
+  let revKept = { ref: null, id: null, at: -Infinity }
   const git = (args, options) => run(args, { cwd: folder, ...options })
   let lastFetch = { at: -Infinity, promise: null }
   const trees = new Map() // commit -> Set of blob ids it lists
@@ -280,10 +469,14 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
   }
 
   async function revParse(refName) {
+    // The same answer for a moment, unless a fetch has been started since it was asked.
+    if (revKept.ref === refName && now() - revKept.at < REVPARSE_KEPT_MS && lastFetch.at <= revKept.at) return revKept.id
     try {
       const { stdout } = await git(['rev-parse', '--verify', '--quiet', `${refName}^{commit}`], { maxBuffer: 4096 })
       const id = stdout.toString('utf8').trim()
-      return COMMIT_ID.test(id) ? id : null
+      const found = COMMIT_ID.test(id) ? id : null
+      if (found) revKept = { ref: refName, id: found, at: now() }
+      return found
     } catch {
       return null
     }
@@ -312,6 +505,11 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
   async function tree(ref) {
     const commit = await commitOf(ref)
     if (!commit) throw ourFailure(FOLDER_UNREADABLE)
+    if (treeKept.has(commit)) {
+      const kept = treeKept.get(commit)
+      trees.set(commit, kept.shas)
+      return { sha: kept.sha, tree: kept.tree.slice(), truncated: kept.truncated }
+    }
     let stdout
     try {
       ;({ stdout } = await git(['ls-tree', '-r', '-l', '-z', commit], { maxBuffer: MAX_TREE_BYTES }))
@@ -335,7 +533,24 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     }
     trees.set(commit, shas)
     while (trees.size > KEEP_TREES) trees.delete(trees.keys().next().value)
-    return { sha: commit, tree: entries, truncated }
+    treeKept.set(commit, { sha: commit, tree: entries, truncated, shas })
+    while (treeKept.size > KEEP_TREES) treeKept.delete(treeKept.keys().next().value)
+    return { sha: commit, tree: entries.slice(), truncated }
+  }
+
+  // One object through the long-lived program, kept by what it is called at that commit.
+  async function readThrough(query, key) {
+    const kept = contents.get(key)
+    if (kept !== undefined) return kept
+    let answer
+    try {
+      answer = await reader.read(query)
+    } catch {
+      throw ourFailure(FOLDER_UNREADABLE)
+    }
+    const text = answer.bytes ? answer.bytes.toString('utf8') : null // missing, a folder, too big: like a file that is not there
+    contents.set(key, text)
+    return text
   }
 
   // One committed file's text, or null when the commit has no such file.
@@ -343,6 +558,7 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     if (!isRepoPath(repoPath)) return null
     const commit = await commitOf(ref)
     if (!commit) return null
+    if (reader) return readThrough(`${commit}:${repoPath}`, `${commit}:${repoPath}`)
     try {
       const { stdout } = await git(['cat-file', 'blob', `${commit}:${repoPath}`])
       return stdout.toString('utf8')
@@ -356,6 +572,7 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
   async function blob(sha) {
     if (typeof sha !== 'string' || !COMMIT_ID.test(sha)) return null
     if (![...trees.values()].some((shas) => shas.has(sha))) return null
+    if (reader) return readThrough(sha, `blob:${sha}`)
     try {
       const { stdout } = await git(['cat-file', 'blob', sha])
       return stdout.toString('utf8')
