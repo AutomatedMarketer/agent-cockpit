@@ -2418,7 +2418,7 @@ function voiceResultsHtml() {
   try { zone = voiceZone(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC' } catch (error) { zone = 'UTC' }
   const rows = voiceOrdersLog().filter((entry) => entry.spoken !== true && Date.now() - Date.parse(entry.sentAt) < 86_400_000).map((entry) => {
     const ended = orderOutcome(entry, data, Date.now(), zone)
-    if (!ended) return ''
+    if (!ended || ended.outcome === 'filed') return ''
     return `<div class="gap"><b>${escapeHtml(ended.name)}</b> <span class="small">${escapeHtml(VOICE_RESULT_WORDS[ended.outcome])}.${ended.summary ? ` ${escapeHtml(ended.summary.slice(0, 200))}` : ''}</span></div>`
   }).join('')
   return rows ? sectionHead('Said by voice', '<h2>Voice orders</h2>') + `<div class="panel">${rows}</div>` : ''
@@ -4825,7 +4825,8 @@ function orderOutcome(order, data, now = Date.now(), zone = 'UTC') {
     if (running.some((one) => one.name === run.workflow && one.started_at === run.started_at)) return null
     return ended(FINISHED_BADLY.includes(run.status) ? 'failed' : 'done', run.summary)
   }
-  if (toolList(data?.board?.todo).some((card) => card.title === order.title)) return null
+  const open = toolList(data?.board?.todo).find((card) => card.title === order.title)
+  if (open) return ended('filed', `in ${open.doing ? 'doing' : 'to do'}${typeof open.for === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(open.for) ? ` for ${open.for}` : ''}`)
   const finished = [...toolList(data?.board?.done), ...toolList(data?.board?.finishedTasks)].some((card) => card.kind === 'task' && card.title === order.title)
   return finished || mac ? ended('done') : null
 }
@@ -6310,7 +6311,13 @@ function openVoice(deps, ui) {
       }
       const ended = orderOutcome(watch.order, view?.data, now, zone)
       if (!ended) continue
-      session.watches = session.watches.filter((one) => one !== watch)
+      // A task's card appearing is said once, and the watch goes on until the task is done.
+      if (ended.outcome === 'filed') {
+        if (watch.filedSaid) continue
+        watch.filedSaid = true
+      } else {
+        session.watches = session.watches.filter((one) => one !== watch)
+      }
       session.speakQueue.push({ watch, ended })
     }
     armWatch()
@@ -6343,7 +6350,7 @@ function openVoice(deps, ui) {
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ kind: 'order_result', note: VOICE_ORDER.resultNote, job: ended.name, outcome: ended.outcome, summary: ended.summary }) }
     })
-    deps.markSpoken?.(watch.order.sentAt)
+    if (ended.outcome !== 'filed') deps.markSpoken?.(watch.order.sentAt)
     session.replyRetries = 1
     askForReply()
     // Another end waiting speaks after this reply, at the next quiet moment.

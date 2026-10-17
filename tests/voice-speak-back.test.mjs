@@ -27,8 +27,15 @@ test('an order is going until the board shows an end: no run yet, or the run sti
   assert.equal(orderOutcome(runOrder, boardWith(), NOW + MIN), null)
   const running = boardWith({ runs: [runRow()], board: { ...basePayload().board, running: [{ name: 'morning-intel', started_at: runRow().started_at }] } })
   assert.equal(orderOutcome(runOrder, running, NOW + MIN), null)
-  assert.equal(orderOutcome(taskOrder, boardWith({ board: { ...basePayload().board, todo: [{ title: 'Chase the invoice' }] } }), NOW), null)
   assert.equal(orderOutcome(taskOrder, boardWith(), NOW), null, 'a card nothing has filed yet is not finished')
+})
+
+test('a task whose card is on the board is filed, with its column and agent in the board own words; finished is done', () => {
+  const card = (over) => boardWith({ board: { ...basePayload().board, todo: [{ title: 'Chase the invoice', doing: false, ...over }] } })
+  assert.deepEqual(orderOutcome(taskOrder, card({ for: 'research' }), NOW), { name: 'Chase the invoice', outcome: 'filed', summary: 'in to do for research' })
+  assert.equal(orderOutcome(taskOrder, card({}), NOW).summary, 'in to do')
+  assert.equal(orderOutcome(taskOrder, card({ doing: true }), NOW).summary, 'in doing')
+  assert.equal(orderOutcome(taskOrder, card({ for: PLANT }), NOW).summary, 'in to do', 'an agent name that is not a slug is left out')
 })
 
 test('a run that ended is done, or failed when it did not finish, with its summary as data', () => {
@@ -291,4 +298,28 @@ test('the website looks at the board every 10 seconds for a pending order; the b
   }
   assert.equal(await pace({}), 10_000)
   assert.equal(await pace({ __BOARD_LOCAL__: true }), 2000)
+})
+
+test('a task is spoken twice at most: filed when its card appears, then done when it finishes - each once', async () => {
+  const data = boardWith()
+  const browser = await connected({ answer: { orders: ORDERS }, data })
+  call(browser, 'add_task', { title: 'Chase the invoice' }, 'call_task')
+  await yes(browser)
+  await settleReply(browser)
+  await look(browser)
+  assert.equal(results(browser).length, 0, 'nothing is filed yet')
+  data.board.todo = [{ title: 'Chase the invoice', doing: false, for: 'research' }]
+  await look(browser)
+  assert.deepEqual(results(browser).map((event) => JSON.parse(event.item.output).outcome), ['filed'])
+  assert.equal(browser.state.orders[0].spoken, undefined, 'filed is not the end')
+  await settleReply(browser)
+  await look(browser)
+  assert.equal(results(browser).length, 1, 'filed was said twice')
+  data.board.todo = []
+  data.board.done = [{ kind: 'task', title: 'Chase the invoice' }]
+  await look(browser)
+  assert.deepEqual(results(browser).map((event) => JSON.parse(event.item.output).outcome), ['filed', 'done'])
+  assert.equal(browser.state.orders[0].spoken, true)
+  await settleReply(browser)
+  assert.equal(watchTimer(browser), undefined)
 })
