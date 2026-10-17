@@ -167,6 +167,8 @@ export function fakeBrowser({ micError = null, answer = {}, refusal = null, canc
     },
     saveOrder: (entry) => state.orders.push(entry),
     ordersLog: () => [...state.orders].reverse(),
+    // The device was told an order's end was spoken.
+    markSpoken: (sentAt) => { for (const entry of state.orders) if (entry.sentAt === sentAt) entry.spoken = true },
     // The board's own "has anything changed?" check: answered by `recheck`, or at once.
     recheck: () => {
       state.rechecks += 1

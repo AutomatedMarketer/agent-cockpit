@@ -236,7 +236,10 @@
         try { event = JSON.parse(text) } catch (error) { return }
         if (closed || !event) return
         if (event.type === 'conversation.item.create' && event.item) {
-          if (event.item.type === 'function_call_output') {
+          if (event.item.type === 'function_call') {
+            // A call the page makes up itself (speak-back: an order has ended) so its output below has one to answer.
+            history.push({ role: 'assistant', content: '', tool_calls: [{ id: String(event.item.call_id || ''), name: String(event.item.name || ''), arguments: String(event.item.arguments || '{}') }] })
+          } else if (event.item.type === 'function_call_output') {
             history.push({ role: 'tool', tool_call_id: event.item.call_id, content: String(event.item.output || '').slice(0, 5000) })
           } else if (event.item.type === 'message' && event.item.role === 'system') {
             var part = event.item.content && event.item.content[0]
