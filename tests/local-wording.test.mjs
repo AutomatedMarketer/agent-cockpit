@@ -15,6 +15,8 @@ import brandHandler from '../api/brand.js'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const WEBSITE_WORDS = /Vercel|redeploy|hosting environment|env var\b/i
+const FISH_SENTENCE = 'Fish did not accept FISH_API_KEY, so check the key in Vercel and redeploy.'
+const OPENAI_SENTENCE = 'OpenAI did not accept OPENAI_API_KEY, so check the key in Vercel and redeploy.'
 
 // ---- every sentence the API can say ---------------------------------------------------------------------------
 
@@ -22,23 +24,36 @@ const WEBSITE_WORDS = /Vercel|redeploy|hosting environment|env var\b/i
 // several lines is several pieces; each piece alone is enough to catch a leftover word).
 function pieces(source) {
   const found = []
-  for (const match of source.matchAll(/'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g)) {
-    const text = (match[1] ?? match[2] ?? match[3]).replace(/\\'/g, "'").replace(/\$\{[^}]*\}/g, 'X')
-    if (WEBSITE_WORDS.test(text)) found.push(text)
+  let current = null
+  let previousEnd = -1
+  const flush = () => {
+    // a package name such as '@vercel/blob' is code, not a sentence
+    if (current !== null && WEBSITE_WORDS.test(current) && !current.startsWith('@')) found.push(current)
+    current = null
   }
+  for (const match of source.matchAll(/'((?:[^'\\\n]|\\.)*)'|"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g)) {
+    const text = (match[1] ?? match[2] ?? match[3]).replace(/\\(.)/g, '$1').replace(/\$\{[^}]*\}/g, 'X')
+    // 'a long sentence ' + newline + 'written over two lines' is one sentence
+    const joined = current !== null && /^\s*\+\s*$/.test(source.slice(previousEnd, match.index))
+    if (joined) current += text
+    else { flush(); current = text }
+    previousEnd = match.index + match[0].length
+  }
+  flush()
   return found
 }
 
 test('every sentence in the API that mentions Vercel, redeploying or the hosting environment comes out without those words', () => {
   let count = 0
+  const left = []
   for (const name of readdirSync(join(ROOT, 'api')).filter((file) => file.endsWith('.js'))) {
     for (const text of pieces(readFileSync(join(ROOT, 'api', name), 'utf8'))) {
       count += 1
       const local = localizeSentence(text)
-      assert.doesNotMatch(local, WEBSITE_WORDS, `api/${name}: "${text}" came out as "${local}"`)
-      assert.ok(local.length > 10, `api/${name}: "${text}" came out empty`)
+      if (WEBSITE_WORDS.test(local) || local.length <= 10) left.push(`api/${name}: ${text}`)
     }
   }
+  assert.deepEqual(left, [], "sentences still telling a student to use Vercel or redeploy")
   assert.ok(count > 25, `only ${count} sentences were found: the scan is looking at less than the API says`)
 })
 
@@ -65,9 +80,11 @@ test('a sentence without the website\'s words is left alone, and so is everythin
   assert.equal(localizeSentence('Two things are due today.'), 'Two things are due today.')
   assert.equal(localizeSentence(5), 5)
   const payload = {
-    error: 'Set it in Vercel and redeploy.',
+    error: FISH_SENTENCE,
     tasks: [{ title: 'Move the site to Vercel and redeploy', note: 'redeploy on Friday', detail: 'in your hosting environment' }],
-    nested: { why: 'check the key in Vercel and redeploy', content: 'the README says redeploy' },
+    nested: { why: OPENAI_SENTENCE, content: 'the README says redeploy' },
+    // The team's own words, under the very keys the board's sentences use: never rewritten.
+    team: { error: 'Vercel build failed: redeploy', why: 'Vercel is cheaper', note: 'Move the site to Vercel and redeploy', say: 'ask Priya whether we still need Vercel; if not, redeploy the site elsewhere' },
     voice: { on: false, why: NO_VOICE_KEY, note: '' },
     count: 3
   }
@@ -79,7 +96,8 @@ test('a sentence without the website\'s words is left alone, and so is everythin
   assert.equal(out.tasks[0].detail, 'in your hosting environment')
   assert.equal(out.nested.content, 'the README says redeploy')
   assert.equal(out.count, 3)
-  assert.equal(payload.error, 'Set it in Vercel and redeploy.', 'the original was changed instead of copied')
+  assert.deepEqual(out.team, payload.team, 'the team\'s words under error/why/note/say were rewritten')
+  assert.equal(payload.error, FISH_SENTENCE, 'the original was changed instead of copied')
   assert.deepEqual([...SENTENCE_KEYS], ['error', 'why', 'note', 'say'])
 })
 
@@ -98,7 +116,7 @@ function raw(port, path, method, headers, body) {
 }
 
 const TEAM_TASK = 'Move the site to Vercel and redeploy'
-const WEBSITE_SENTENCE = 'Set OPENAI_API_KEY in Vercel and redeploy.'
+const WEBSITE_SENTENCE = FISH_SENTENCE
 
 async function withBoard(run, { local }) {
   const saved = Object.fromEntries(['VIEW_KEY', 'PUBLIC_FIRE', 'PUBLIC_DASHBOARD', 'EDIT_KEY', 'BOARD_PASSWORD', 'BOARD_USERNAME', 'OPENAI_API_KEY'].map((key) => [key, process.env[key]]))
@@ -143,6 +161,6 @@ test('the website is unchanged: the same handlers, served by the plain server, s
     delete process.env.PUBLIC_DASHBOARD
     assert.match((await raw(board.port, '/api/brand', 'GET', {})).text, /hosting environment and redeploy/, 'the website refusal wording changed')
     process.env.PUBLIC_DASHBOARD = 'true'
-    assert.match((await raw(board.port, '/api/state', 'GET', {})).text, /Set OPENAI_API_KEY in Vercel and redeploy\./)
+    assert.match((await raw(board.port, '/api/state', 'GET', {})).text, /Fish did not accept FISH_API_KEY, so check the key in Vercel and redeploy\./)
   }, { local: false })
 })

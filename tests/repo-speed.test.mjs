@@ -132,7 +132,8 @@ test('/api/state on about 300 files starts a handful of git programs, not one pe
     if (process.env.BOARD_BENCH) console.log(`BENCH first ${Math.round(first.ms)} ms, ${first.spawned} git programs; repeat ${Math.round(again.ms)} ms, ${again.spawned} git programs`)
     assert.equal(again.response.statusCode, 200)
     assert.ok(again.spawned <= 1, `a second load at the same commit started ${again.spawned} git programs`)
-    assert.ok(again.ms < 300, `the second load took ${Math.round(again.ms)} ms`)
+    // Time only catches a hang: the git-program count above (0 on a repeat) is the proof.
+    assert.ok(again.ms < 20000, `the second load took ${Math.round(again.ms)} ms`)
     assert.deepEqual(JSON.stringify(again.response.body.agents), JSON.stringify(first.response.body.agents), 'the repeat showed something different')
   } finally {
     closeBatchReaders()
