@@ -17,7 +17,7 @@ const SENT = new Date(NOW).toISOString()
 const MIN = 60_000
 const ORDERS = { on: true, tasks: true, jobs: ['morning-intel'], key: 'fire-key', spokenYes: true, jev: false }
 const runOrder = { kind: 'run', slug: 'morning-intel', name: 'Morning intel', sentAt: SENT }
-const taskOrder = { kind: 'task', title: 'Chase the invoice', sentAt: SENT }
+const taskOrder = { kind: 'task', title: 'Chase the invoice', sentAt: SENT, before: [] }
 const runRow = (over = {}) => ({ workflow: 'morning-intel', started_at: new Date(NOW + MIN).toISOString(), finished_at: new Date(NOW + 5 * MIN).toISOString(), status: 'ok', summary: 'Found 3 leads.', ...over })
 const boardWith = (over = {}) => ({ ...basePayload(), workflows: [{ slug: 'morning-intel', name: 'Morning intel', fire: true }], ...over })
 
@@ -31,7 +31,7 @@ test('an order is going until the board shows an end: no run yet, or the run sti
 })
 
 test('a task whose card is on the board is filed, with its column and agent in the board own words; finished is done', () => {
-  const card = (over) => boardWith({ board: { ...basePayload().board, todo: [{ title: 'Chase the invoice', doing: false, ...over }] } })
+  const card = (over) => boardWith({ board: { ...basePayload().board, todo: [{ slug: 'new-card', title: 'Chase the invoice', doing: false, ...over }] } })
   assert.deepEqual(orderOutcome(taskOrder, card({ for: 'research' }), NOW), { name: 'Chase the invoice', outcome: 'filed', summary: 'in to do for research' })
   assert.equal(orderOutcome(taskOrder, card({}), NOW).summary, 'in to do')
   assert.equal(orderOutcome(taskOrder, card({ doing: true }), NOW).summary, 'in doing')
@@ -43,7 +43,7 @@ test('a run that ended is done, or failed when it did not finish, with its summa
   for (const status of ['failed', 'blocked', 'partial']) {
     assert.equal(orderOutcome(runOrder, boardWith({ runs: [runRow({ status })] }), NOW + 6 * MIN).outcome, 'failed', status)
   }
-  const finished = boardWith({ board: { ...basePayload().board, done: [{ kind: 'task', title: 'Chase the invoice' }] } })
+  const finished = boardWith({ board: { ...basePayload().board, done: [{ kind: 'task', slug: 'new-card', title: 'Chase the invoice' }] } })
   assert.deepEqual(orderOutcome(taskOrder, finished, NOW + 6 * MIN), { name: 'Chase the invoice', outcome: 'done', summary: '' })
 })
 
@@ -279,7 +279,7 @@ test('Today shows one plain line for a voice order that ended and was never spok
 })
 
 test('while a call is open, Today does not show it: Jarvis is about to say it; when the call ends, it does', async () => {
-  const data = ({ ...basePayload(), runs: [runRow({ started_at: new Date(Date.now() - 50 * MIN).toISOString() })] })
+  const data = ({ ...basePayload(), runs: [runRow({ started_at: new Date(Date.now() - 50 * MIN).toISOString(), finished_at: new Date(Date.now() - 40 * MIN).toISOString() })] })
   const sentAt = new Date(Date.now() - 55 * MIN).toISOString()
   const loaded = await today([{ kind: 'run', slug: 'morning-intel', name: 'Morning intel', sentAt }], data)
   loaded.given.setCall({})
@@ -308,7 +308,7 @@ test('a task is spoken twice at most: filed when its card appears, then done whe
   await settleReply(browser)
   await look(browser)
   assert.equal(results(browser).length, 0, 'nothing is filed yet')
-  data.board.todo = [{ title: 'Chase the invoice', doing: false, for: 'research' }]
+  data.board.todo = [{ slug: 'new-card', title: 'Chase the invoice', doing: false, for: 'research' }]
   await look(browser)
   assert.deepEqual(results(browser).map((event) => JSON.parse(event.item.output).outcome), ['filed'])
   assert.equal(browser.state.orders[0].spoken, undefined, 'filed is not the end')
@@ -316,10 +316,162 @@ test('a task is spoken twice at most: filed when its card appears, then done whe
   await look(browser)
   assert.equal(results(browser).length, 1, 'filed was said twice')
   data.board.todo = []
-  data.board.done = [{ kind: 'task', title: 'Chase the invoice' }]
+  data.board.done = [{ kind: 'task', slug: 'new-card', title: 'Chase the invoice' }]
   await look(browser)
   assert.deepEqual(results(browser).map((event) => JSON.parse(event.item.output).outcome), ['filed', 'done'])
-  assert.equal(browser.state.orders[0].spoken, true)
   await settleReply(browser)
+  assert.equal(browser.state.orders[0].spoken, true)
   assert.equal(watchTimer(browser), undefined)
+})
+
+/* ---------- review round: old cards, old runs, busy moments, back-off, odd characters, idle ---------- */
+
+test('an OLD card with the same title is not this order: no early filed, and no done two seconds after sending', () => {
+  const old = { slug: '2026-03-01-chase-the-invoice', title: 'Chase the invoice' }
+  const sent = { ...taskOrder, before: [old.slug] }
+  const board = (extra) => boardWith({ board: { ...basePayload().board, ...extra } })
+  assert.equal(orderOutcome(sent, board({ finishedTasks: [{ ...old, kind: 'task', doneAt: '2026-03-02' }] }), NOW + 2000), null, 'an old done card')
+  assert.equal(orderOutcome(sent, board({ todo: [{ ...old, doing: false }] }), NOW + 2000), null, 'an old open card')
+  // The card this order makes is a different one, and it counts.
+  const fresh = { slug: '2026-10-17-chase-the-invoice', title: 'Chase the invoice' }
+  assert.equal(orderOutcome(sent, board({ todo: [{ ...old, doing: false }, { ...fresh, doing: false }] }), NOW + 2000).outcome, 'filed')
+  assert.equal(orderOutcome(sent, board({ finishedTasks: [{ ...old, kind: 'task', doneAt: '2026-03-02' }, { ...fresh, kind: 'task', doneAt: '2026-10-17' }] }), NOW + 2000).outcome, 'done')
+  // A card that says it was closed before this order was sent is never its answer, snapshot or not.
+  assert.equal(orderOutcome({ ...taskOrder, before: [] }, board({ finishedTasks: [{ ...fresh, kind: 'task', doneAt: '2026-03-02' }] }), NOW + 2000), null)
+  // An order with no snapshot (sent before the board kept one) never matches a card by its title alone.
+  const { before, ...bare } = taskOrder
+  assert.equal(orderOutcome(bare, board({ todo: [{ ...fresh, doing: false }] }), NOW + 2000), null)
+})
+
+test('a task order notes the cards that already carry its title when it is sent, and an old finished card never speaks', async () => {
+  const data = boardWith({ board: { ...basePayload().board, finishedTasks: [{ kind: 'task', slug: 'old', title: 'Chase the invoice', doneAt: '2026-03-02' }] } })
+  const browser = await connected({ answer: { orders: ORDERS }, data })
+  call(browser, 'add_task', { title: 'Chase the invoice' }, 'call_task')
+  await yes(browser)
+  await settleReply(browser)
+  assert.deepEqual(browser.state.orders[0].before, ['old'])
+  await look(browser, 1 / 6)
+  assert.equal(results(browser).length, 0, 'an old card with the same title was taken for the answer')
+})
+
+test('a run that finished before the order was sent, or began before it with no finish stamped, is not its answer', () => {
+  const finishedBefore = runRow({ started_at: new Date(NOW - 90_000).toISOString(), finished_at: new Date(NOW - 30_000).toISOString() })
+  assert.equal(orderOutcome(runOrder, boardWith({ runs: [finishedBefore] }), NOW + 2000), null)
+  const unstamped = runRow({ started_at: new Date(NOW - 90_000).toISOString(), finished_at: undefined })
+  assert.equal(orderOutcome(runOrder, boardWith({ runs: [unstamped] }), NOW + 2000), null)
+  // Its own clock a little early, but finishing after the order: still its run.
+  const early = runRow({ started_at: new Date(NOW - 30_000).toISOString(), finished_at: new Date(NOW + 4 * MIN).toISOString() })
+  assert.equal(orderOutcome(runOrder, boardWith({ runs: [early] }), NOW + 5 * MIN).outcome, 'done')
+})
+
+test('two orders for the same job each get their own run, the older order the older run', () => {
+  const first = { ...runOrder, sentAt: new Date(NOW).toISOString() }
+  const second = { ...runOrder, sentAt: new Date(NOW + 2 * MIN).toISOString() }
+  const one = runRow({ started_at: new Date(NOW + 10_000).toISOString(), finished_at: new Date(NOW + 3 * MIN).toISOString(), status: 'failed', summary: 'first failed' })
+  const two = runRow({ started_at: new Date(NOW + 3 * MIN).toISOString(), finished_at: new Date(NOW + 4 * MIN).toISOString(), summary: 'second ok' })
+  const data = boardWith({ runs: [two, one] })
+  const siblings = [second, first]
+  assert.equal(orderOutcome(first, data, NOW + 10 * MIN, 'UTC', siblings).summary, 'first failed')
+  assert.equal(orderOutcome(second, data, NOW + 10 * MIN, 'UTC', siblings).summary, 'second ok')
+  // Only the first run exists so far: the second order is still going.
+  assert.equal(orderOutcome(second, boardWith({ runs: [one] }), NOW + 10 * MIN, 'UTC', siblings), null)
+})
+
+test('a control character in a name or a summary drops it whole, a new line too', () => {
+  for (const summary of ['a\u0000b', 'first line\nsecond line', 'bell\u0007']) {
+    assert.equal(orderOutcome(runOrder, boardWith({ runs: [runRow({ summary })] }), NOW + 6 * MIN).summary, '', JSON.stringify(summary))
+  }
+  const named = orderOutcome({ ...runOrder, name: 'Morning\u0007 intel' }, boardWith({ runs: [runRow()] }), NOW + 6 * MIN)
+  assert.equal(named.name, 'the job')
+})
+
+test('it does not speak while a yes-card is open, and says it once the card is answered', async () => {
+  const { browser, data } = await sentRun()
+  call(browser, 'add_task', { title: 'Another thing' }, 'call_task')
+  await settleReply(browser)
+  assert.ok(browser.ui.cards.at(-1), 'no card is open')
+  data.runs = [runRow()]
+  await look(browser, 5)
+  assert.equal(results(browser).length, 0, 'it spoke over an open card')
+  browser.call.decline()
+  await settleReply(browser)
+  browser.clock.now += 1000
+  const retry = [...browser.timers.entries()].find(([, timer]) => timer.ms === 1000)
+  assert.ok(retry, 'nothing waits for the card to be answered')
+  browser.timers.delete(retry[0])
+  retry[1].fn()
+  await flush()
+  assert.equal(results(browser).length, 1)
+})
+
+test('the page backs off when the board is slow to answer, and shares a read that was just made for "is it done?"', async () => {
+  const { browser } = await sentRun()
+  browser.deps.backoffMs = () => 45_000
+  await look(browser, 1 / 6)
+  assert.ok([...browser.timers.values()].some((timer) => timer.ms === 45_000), 'the next look ignored the back-off')
+  assert.equal([...browser.timers.values()].filter((timer) => timer.ms === 10_000).length, 0)
+  // A read made a moment ago for job_status is not made again.
+  browser.deps.backoffMs = () => 0
+  call(browser, 'job_status', { which: 'last order' }, 'call_status')
+  await flush()
+  const reads = browser.state.rechecks
+  browser.clock.now += 5000
+  const [id, timer] = [...browser.timers.entries()].find(([, one]) => one.ms === 45_000)
+  browser.timers.delete(id)
+  timer.fn()
+  await flush()
+  assert.equal(browser.state.rechecks, reads, 'the board was read twice within 20 seconds')
+})
+
+test('signed out: the page stops watching and does not read the board again', async () => {
+  const { browser } = await sentRun()
+  browser.deps.locked = () => true
+  const reads = browser.state.rechecks
+  await look(browser, 1 / 6)
+  assert.equal(browser.state.rechecks, reads, 'it read the board while signed out')
+  assert.equal(watchTimer(browser), undefined, 'it kept watching while signed out')
+})
+
+test('the end of a call does not break when Today is not on the page', async () => {
+  const hide = {}
+  const loaded = loadPage({
+    fetch: async (url) => ({ ok: true, status: 200, json: async () => (url.startsWith('/api/state') ? basePayload() : {}) }),
+    expose: ['voiceDeps'],
+    after: "given.now = () => { const real = document.getElementById; document.getElementById = (id) => (id === 'today' ? null : real(id)) }",
+    given: hide
+  })
+  await flush()
+  hide.now()
+  assert.doesNotThrow(() => loaded.exposed.voiceDeps().onEnd('hangup'))
+})
+
+test('it marks an order spoken only when the reply finished; a reply that was cut off leaves it for Today', async () => {
+  const { browser, data } = await sentRun()
+  data.runs = [runRow()]
+  await look(browser, 5)
+  assert.equal(browser.state.orders[0].spoken, undefined, 'marked before it was said')
+  browser.emit({ type: 'response.created' })
+  browser.emit({ type: 'response.done', response: { status: 'cancelled', usage: REPLY_USAGE, output: [] } })
+  await flush()
+  assert.equal(browser.state.orders[0].spoken, undefined, 'a cut-off reply counted as said')
+  assert.equal(results(browser).length, 1)
+})
+
+test('while an order is pending the idle hang-up waits 5 minutes on the cloud and 30 on this computer; with nothing pending it is the board\'s own', async () => {
+  const idle = (browser) => [...browser.timers.values()].map((timer) => timer.ms).filter((ms) => ms >= 120_000)
+  const quiet = await connected({ answer: { orders: ORDERS }, data: boardWith() })
+  quiet.call.session.armIdle()
+  assert.ok(idle(quiet).includes(120_000), 'the normal wait changed with nothing pending')
+  const { browser, data } = await sentRun()
+  browser.call.session.armIdle()
+  assert.ok(idle(browser).includes(300_000), 'the cloud call hangs up before the order can end')
+  browser.call.session.local = true
+  browser.call.session.armIdle()
+  assert.ok(idle(browser).includes(30 * MIN), 'the local call hangs up before the order can end')
+  data.runs = [runRow()]
+  await look(browser, 5)
+  await settleReply(browser)
+  browser.call.session.local = false
+  browser.call.session.armIdle()
+  assert.equal(idle(browser).at(-1), 120_000, 'it stayed open after the order ended')
 })

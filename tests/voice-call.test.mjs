@@ -1935,7 +1935,7 @@ test('a task sent to the Mac is told as sent to the Mac, with its pace, and logg
   assert.equal(systemNotes(browser).at(-1).item.content[0].text, 'The owner said yes. It was sent to their Mac, which checks every 5 minutes: the card should be on the board in about 6 minutes. It is not done yet.')
   assert.equal(browser.ui.notes.at(-1), 'Sent to your Mac: "Draft it". It checks every 5 minutes, so the card should be on the board in about 6 minutes.')
   assert.deepEqual(browser.state.orders[0], {
-    kind: 'task', title: 'Draft it', sentAt: new Date(NOW + 800).toISOString(),
+    kind: 'task', title: 'Draft it', before: [], sentAt: new Date(NOW + 800).toISOString(),
     via: 'mac', id: MAC_ORDER_ID, expiresAt: new Date(NOW + 17 * 60_000).toISOString(), pollSeconds: 300
   })
 })

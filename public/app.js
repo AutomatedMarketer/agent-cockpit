@@ -2416,8 +2416,9 @@ function voiceResultsHtml() {
   if (voiceSession) return ''
   let zone = 'UTC'
   try { zone = voiceZone(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC' } catch (error) { zone = 'UTC' }
-  const rows = voiceOrdersLog().filter((entry) => entry.spoken !== true && Date.now() - Date.parse(entry.sentAt) < 86_400_000).map((entry) => {
-    const ended = orderOutcome(entry, data, Date.now(), zone)
+  const log = voiceOrdersLog()
+  const rows = log.filter((entry) => entry.spoken !== true && Date.now() - Date.parse(entry.sentAt) < 86_400_000).map((entry) => {
+    const ended = orderOutcome(entry, data, Date.now(), zone, log)
     if (!ended || ended.outcome === 'filed') return ''
     return `<div class="gap"><b>${escapeHtml(ended.name)}</b> <span class="small">${escapeHtml(VOICE_RESULT_WORDS[ended.outcome])}.${ended.summary ? ` ${escapeHtml(ended.summary.slice(0, 200))}` : ''}</span></div>`
   }).join('')
@@ -4797,13 +4798,25 @@ function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fre
 // where the Mac's status file gave the end, the words are the board's own fixed reasons. null while the
 // order is still going.
 const RESULT_SUMMARY_MAX = 500
+// Text from the repo reaches the model whole or not at all: a control character (a new line too) or a
+// hidden one drops it, and what is left is held to `most` characters.
 const resultText = (value, most) => {
-  const text = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+  if (typeof value !== 'string' || /\p{Cc}/u.test(value)) return ''
+  const text = value.replace(/\s+/g, ' ').trim()
   return hiddenText(text) ? '' : text.slice(0, most)
 }
 const MAC_ENDS = { 'refused by your Mac': 'refused', 'failed on your Mac': 'failed', expired: 'expired', 'outcome unknown': 'unclear' }
 
-function orderOutcome(order, data, now = Date.now(), zone = 'UTC') {
+// The cards that already carry this title, noted when a task order is sent: a card with one of these
+// slugs is an old card, never the answer to the order. The board has no "created at" for a card.
+function taskCardSlugs(data, title) {
+  const cards = [...toolList(data?.board?.todo), ...toolList(data?.board?.done), ...toolList(data?.board?.finishedTasks)]
+  return [...new Set(cards.filter((card) => card.kind !== 'run' && card.title === title && typeof card.slug === 'string').map((card) => card.slug.slice(0, 120)))].slice(0, 20)
+}
+
+// `siblings` are the other voice orders on this device (their log), so that two orders for the same job
+// each get a run of their own: the older order takes the older run.
+function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblings = []) {
   if (!order || typeof order !== 'object' || (order.kind !== 'run' && order.kind !== 'task')) return null
   const sentAt = Date.parse(order.sentAt)
   if (Number.isNaN(sentAt)) return null
@@ -4818,16 +4831,40 @@ function orderOutcome(order, data, now = Date.now(), zone = 'UTC') {
   if (mac && !mac.done) return null
   if (order.kind === 'run') {
     const running = toolList(data?.board?.running)
-    const run = toolList(data?.runs)
-      .filter((one) => (one.workflow === order.slug || one.workflow === order.name) && Date.parse(one.started_at) >= sentAt - ORDER_RUN_SLACK_MS)
-      .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))[0]
+    const isRunning = (one) => running.some((live) => live.name === one.workflow && live.started_at === one.started_at)
+    // A run answers an order when it began no earlier than the slack before it (a routine stamps its
+    // start from its own clock) and did not finish before it; with no finish stamped, it began after it.
+    const answers = (one, at) => {
+      const began = Date.parse(one.started_at)
+      const finished = Date.parse(one.finished_at)
+      if (Number.isFinite(finished)) return finished >= at && began >= at - ORDER_RUN_SLACK_MS
+      return began >= at || (isRunning(one) && began >= at - ORDER_RUN_SLACK_MS)
+    }
+    const candidates = (for_) => toolList(data?.runs)
+      .filter((one) => (one.workflow === for_.slug || one.workflow === for_.name) && answers(one, Date.parse(for_.sentAt)))
+      .sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at))
+    const same = [order, ...toolList(siblings).filter((one) => one.kind === 'run' && one.slug === order.slug && one.sentAt !== order.sentAt && !Number.isNaN(Date.parse(one.sentAt)))]
+      .sort((a, b) => Date.parse(a.sentAt) - Date.parse(b.sentAt))
+    const taken = new Set()
+    let run = null
+    for (const one of same) {
+      const pick = candidates(one).find((candidate) => !taken.has(candidate))
+      if (one === order) run = pick
+      else if (pick) taken.add(pick)
+    }
     if (!run) return mac ? ended('done') : null
-    if (running.some((one) => one.name === run.workflow && one.started_at === run.started_at)) return null
+    if (isRunning(run)) return null
     return ended(FINISHED_BADLY.includes(run.status) ? 'failed' : 'done', run.summary)
   }
-  const open = toolList(data?.board?.todo).find((card) => card.title === order.title)
+  // A card counts only if it was not on the board when the order was sent (order.before, its slugs), and
+  // a card that says it was closed before the day of the order never does. No snapshot: no title match.
+  const before = Array.isArray(order.before) ? order.before : null
+  const fresh = (card) => before !== null && typeof card.slug === 'string' && !before.includes(card.slug)
+  const open = toolList(data?.board?.todo).find((card) => card.title === order.title && fresh(card))
   if (open) return ended('filed', `in ${open.doing ? 'doing' : 'to do'}${typeof open.for === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(open.for) ? ` for ${open.for}` : ''}`)
-  const finished = [...toolList(data?.board?.done), ...toolList(data?.board?.finishedTasks)].some((card) => card.kind === 'task' && card.title === order.title)
+  const dayBefore = new Date(sentAt - 86_400_000).toISOString().slice(0, 10)
+  const finished = [...toolList(data?.board?.done), ...toolList(data?.board?.finishedTasks)]
+    .some((card) => card.kind === 'task' && card.title === order.title && fresh(card) && !(typeof card.doneAt === 'string' && card.doneAt < dayBefore))
   return finished || mac ? ended('done') : null
 }
 
@@ -5194,7 +5231,7 @@ function voiceDeps() {
       voiceSession = null
       sendVoiceReports()
       // An order that ended while nobody was listening shows on Today now.
-      if (data) renderToday()
+      if (data && el('today')) renderToday()
     },
     setTimeout: (fn, ms) => setTimeout(fn, ms),
     clearTimeout: (id) => clearTimeout(id),
@@ -5219,6 +5256,9 @@ function voiceDeps() {
     ordersLog: voiceOrdersLog,
     // Speak-back: the local board is on this computer, so it looks more often than a website may.
     watchEveryMs: () => (LOCAL_BOARD ? 2000 : WATCH_EVERY_MS),
+    // Slow or told to wait (the Readiness wall's own back-off), and signed out.
+    backoffMs: () => Math.max(readinessWaitMs, readinessFailures > 0 ? readinessDelay() : 0),
+    locked: () => readinessLocked,
     markSpoken: (sentAt) => writeStore(VOICE_ORDERS_STORE, JSON.stringify(voiceOrdersLog().map((entry) => (entry.sentAt === sentAt ? { ...entry, spoken: true } : entry)))),
     // The Readiness wall's own check: one small call when nothing changed, the new board when it has.
     recheck: () => recheckBoardNow(),
@@ -5609,7 +5649,11 @@ function voiceOrdersLog() {
   return (Array.isArray(parsed) ? parsed : []).filter((entry) => isRecord(entry) && text(entry.sentAt) && !Number.isNaN(Date.parse(entry.sentAt)) &&
     ((entry.kind === 'task' && text(entry.title)) || (entry.kind === 'run' && text(entry.slug) && text(entry.name)))).slice(0, VOICE_ORDERS_KEPT)
     // An order sent to the Mac keeps its id, expiry and pace only in the board's own shape.
-    .map(({ via, id, expiresAt, pollSeconds, ...entry }) => ({ ...entry, ...macLogFields({ via, orderId: id, expiresAt, pollSeconds }) }))
+    .map(({ via, id, expiresAt, pollSeconds, before, ...entry }) => ({
+      ...entry,
+      ...(Array.isArray(before) ? { before: before.filter((slug) => typeof slug === 'string' && slug.length <= 120).slice(0, 20) } : {}),
+      ...macLogFields({ via, orderId: id, expiresAt, pollSeconds })
+    }))
 }
 // What the board said orders may do on this call (api/_orders.js, ordersView), or off.
 function voiceOrdersFrom(raw) {
@@ -5767,7 +5811,7 @@ function openVoice(deps, ui) {
     orders: { on: false }, card: null, cardSeq: 0, sent: [], utterances: new Map(), hearingNow: null,
     recheckedAt: -Infinity, recheckOk: false,
     // Speak-back: the orders sent by voice on this call that have not ended, the ends waiting for a quiet moment.
-    watches: [], speakQueue: [], watchTimer: null, speakTimer: null, resultSeq: 0,
+    watches: [], speakQueue: [], pendingSpoken: null, watchTimer: null, speakTimer: null, resultSeq: 0,
     timer: null, stream: null, pc: null, channel: null, audio: null, context: null
   }
   const show = (state, words) => {
@@ -5907,7 +5951,11 @@ function openVoice(deps, ui) {
   // forgotten tab stops costing.
   const armIdle = () => {
     deps.clearTimeout(session.timer)
-    if (!session.stopped) session.timer = deps.setTimeout(() => end('idle'), session.idleMinutes * 60_000)
+    // A voice order still going keeps the call open for its result: 5 minutes on the cloud (it costs
+    // by the minute), up to the watch's 30 on this computer (free). Never shorter than the board's own.
+    const waiting = session.watches.length > 0 || session.speakQueue.length > 0
+    const minutes = waiting ? Math.max(session.idleMinutes, session.local ? WATCH_GIVE_UP_MS / 60_000 : 5) : session.idleMinutes
+    if (!session.stopped) session.timer = deps.setTimeout(() => end('idle'), minutes * 60_000)
   }
 
   const saveTally = () => {
@@ -6258,6 +6306,8 @@ function openVoice(deps, ui) {
         kind: order.kind,
         ...(order.kind === 'task' ? { title: order.title } : { slug: order.slug, name: order.name }),
         sentAt: new Date(sent.at).toISOString(),
+        // The cards that already carry this title: none of them is the answer to this order.
+        ...(order.kind === 'task' ? { before: taskCardSlugs(deps.view()?.data, order.title) } : {}),
         ...macLogFields(result.payload)
       }
       deps.saveOrder?.(logged)
@@ -6292,15 +6342,26 @@ function openVoice(deps, ui) {
   function watchOrder(logged) {
     session.watches.push({ order: logged, since: deps.now() })
     armWatch()
+    armIdle()
   }
   function armWatch() {
     if (session.watchTimer || session.stopped || !session.watches.length) return
-    session.watchTimer = deps.setTimeout(watchLook, deps.watchEveryMs?.() ?? WATCH_EVERY_MS)
+    // The pace asked for, or the board's own back-off when it has been slow or told the page to wait.
+    session.watchTimer = deps.setTimeout(watchLook, Math.max(deps.watchEveryMs?.() ?? WATCH_EVERY_MS, deps.backoffMs?.() ?? 0))
   }
   async function watchLook() {
     session.watchTimer = null
     if (session.stopped) return
-    try { await deps.recheck?.() } catch (error) { /* the next look tries again */ }
+    // Signed out: nobody can answer the board's question, so the watch ends (Today says it later).
+    if (deps.locked?.() === true) {
+      session.watches = []
+      return
+    }
+    // A read made a moment ago for "is it done?" is shared, not made again.
+    if (!(deps.now() - session.recheckedAt < JOB_STATUS_EVERY_MS && session.recheckOk)) {
+      try { await deps.recheck?.() } catch (error) { /* the next look tries again */ }
+    }
+    if (session.stopped) return
     const view = deps.view()
     const zone = voiceZone(view?.timeZone) ?? 'UTC'
     const now = deps.now()
@@ -6309,7 +6370,7 @@ function openVoice(deps, ui) {
         session.watches = session.watches.filter((one) => one !== watch)
         continue
       }
-      const ended = orderOutcome(watch.order, view?.data, now, zone)
+      const ended = orderOutcome(watch.order, view?.data, now, zone, deps.ordersLog?.() ?? [])
       if (!ended) continue
       // A task's card appearing is said once, and the watch goes on until the task is done.
       if (ended.outcome === 'filed') {
@@ -6326,7 +6387,7 @@ function openVoice(deps, ui) {
   // Only in a quiet moment: nobody talking, no reply running or owed, no sound playing, no tool answer
   // or order on its way. Not quiet yet: look again in a second.
   const quietNow = () => !session.responding && !session.userSpeaking && !session.replyOwed && !session.soundPlaying &&
-    session.calls.size === 0 && !session.card?.busy && session.state === 'listening'
+    session.calls.size === 0 && !session.card && session.state === 'listening'
   function speakResults() {
     if (session.stopped || !session.speakQueue.length) return
     if (!quietNow()) {
@@ -6350,7 +6411,9 @@ function openVoice(deps, ui) {
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: callId, output: JSON.stringify({ kind: 'order_result', note: VOICE_ORDER.resultNote, job: ended.name, outcome: ended.outcome, summary: ended.summary }) }
     })
-    if (ended.outcome !== 'filed') deps.markSpoken?.(watch.order.sentAt)
+    // Marked spoken only when the reply to it completes (response.done), so a reply that was cut off
+    // leaves it for Today.
+    session.pendingSpoken = ended.outcome === 'filed' ? null : { sentAt: watch.order.sentAt, bound: false }
     session.replyRetries = 1
     askForReply()
     // Another end waiting speaks after this reply, at the next quiet moment.
@@ -6476,6 +6539,7 @@ function openVoice(deps, ui) {
       }
       case 'response.created':
         session.responding = true
+        if (session.pendingSpoken) session.pendingSpoken.bound = true
         session.replyHadOutput = false
         session.cancelledByUs = false
         session.soundStartedAt = null
@@ -6523,6 +6587,10 @@ function openVoice(deps, ui) {
         break
       case 'response.done': {
         session.responding = false
+        if (session.pendingSpoken?.bound) {
+          if (event.response?.status === 'completed') deps.markSpoken?.(session.pendingSpoken.sentAt)
+          session.pendingSpoken = null
+        }
         // Empty: nothing said or heard, no message and no tool call in it. Not ours to report when the
         // page cancelled it, the person is talking over it, or a tool reply is owed after it.
         const output = Array.isArray(event.response?.output) ? event.response.output : []
