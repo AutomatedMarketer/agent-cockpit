@@ -223,7 +223,7 @@ test('the board\'s real handlers accept the signed-in browser (view gate and fir
       assert.notEqual(fire.status, 401)
       assert.notEqual(fire.status, 403, 'the same-origin check refused the own page')
       // 503 here is only 'no routines set up in this test': the gates in front of it passed.
-      assert.match(await fire.text(), /FIRE_TRIGGERS|mailbox|configured/i)
+      assert.match(await fire.text(), /FIRE_TRIGGERS|mailbox|configured|not set up on this computer/i)
     } finally {
       globalThis.fetch = realFetch
     }
