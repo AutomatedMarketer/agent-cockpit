@@ -53,11 +53,14 @@ const SAY = {
 
 const timedOut = (error) => error?.name === 'TimeoutError' || error?.name === 'AbortError'
 
+// `code` tells the page how to count a refusal. 'key' and 'credit' will not get better within a call, so the
+// page switches to OpenAI's voice at once. 'down' (Fish not answering, or a 5xx) may be a blip: the page
+// switches only after two in a row. Busy (429) and slow carry none: the piece is just skipped.
 function refusalFor(status) {
-  if (status === 401 || status === 403) return { status: 502, error: SAY.key }
-  if (status === 402) return { status: 402, error: SAY.credit }
+  if (status === 401 || status === 403) return { status: 502, error: SAY.key, code: 'key' }
+  if (status === 402) return { status: 402, error: SAY.credit, code: 'credit' }
   if (status === 429) return { status: 429, error: SAY.busy }
-  return { status: 502, error: SAY.failed }
+  return status >= 500 ? { status: 502, error: SAY.failed, code: 'down' } : { status: 502, error: SAY.failed }
 }
 
 export function makeHandler({ env, now = () => new Date() } = {}) {
@@ -119,14 +122,14 @@ export function makeHandler({ env, now = () => new Date() } = {}) {
     } catch (error) {
       // The error's own message is not looked at: it can carry whatever the request carried.
       const slow = timedOut(error)
-      response.status(slow ? 504 : 502).json({ error: slow ? SAY.slow : SAY.failed })
+      response.status(slow ? 504 : 502).json(slow ? { error: SAY.slow } : { error: SAY.failed, code: 'down' })
       return
     }
     if (!upstream.ok) {
       // Fish's answer is not read at all: its status is enough to choose a sentence.
       await upstream.body?.cancel().catch(() => {})
-      const { status, error } = refusalFor(upstream.status)
-      response.status(status).json({ error })
+      const { status, error, code } = refusalFor(upstream.status)
+      response.status(status).json(code ? { error, code } : { error })
       return
     }
 

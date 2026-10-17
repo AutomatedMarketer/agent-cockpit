@@ -5424,6 +5424,14 @@ const VOICE_UNHEARD = 'OpenAI could not answer that, so try asking again.'
 const VOICE_NO_REPLY = 'No reply came back. Say it again.'
 // A reply OpenAI stopped at its length limit (VOICE_REPLY_TOKENS): said under it, until the next reply.
 const VOICE_CUT_SHORT = 'That answer was cut short. Ask me to go on.'
+// Fish refused (its key, its credit, or no answer at all) and the call moved to OpenAI's voice. One line, once.
+const VOICE_FISH_FELL_BACK = 'Your Fish voice is not working, so the rest of that answer was not spoken. Ask me again and it will use the OpenAI voice.'
+// OpenAI did not take the voice switch: the call carries on in text.
+const VOICE_TEXT_ONLY = 'OpenAI would not switch voices, so this call is text only. The answers are on screen.'
+// What /api/speak calls a refusal that will not get better within a call.
+const FISH_GIVES_UP = ['key', 'credit']
+// 'down' (no answer, or a 5xx) counts: the call switches on the second in a row.
+const FISH_DOWN_LIMIT = 2
 // What it is doing while it looks something up: a short line for each tool it asked for, in the
 // state line, so the wait between a question and its answer is not a blank on screen. The board's
 // own words for each tool it defines - never the name the model sent.
@@ -5803,6 +5811,27 @@ function openVoice(deps, ui) {
     if (session.channel?.readyState === 'open') session.channel.send(JSON.stringify(event))
   }
 
+  // Fish refused for good: the rest of the call is in OpenAI's voice, once, with one plain line saying so.
+  // Only a Fish session that was told which OpenAI voice to use can move; anything else stays as it was.
+  session.fishRefused = () => {
+    if (session.stopped || session.mouth !== 'fish' || !session.fallback) return
+    deps.fish?.stop(session)
+    session.mouth = 'openai'
+    send({
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        output_modalities: ['audio'],
+        max_output_tokens: session.fallback.replyTokens,
+        audio: { output: { voice: session.fallback.voice } }
+      }
+    })
+    ui.note?.(VOICE_FISH_FELL_BACK)
+    session.noteIsCut = false
+    // Until OpenAI says session.updated, the switch is unconfirmed; an error in that time is its refusal.
+    session.voiceSwitchPending = true
+  }
+
   // No talking for idleMinutes - the person's or the assistant's - ends the call. Not a cap: a
   // forgotten tab stops costing.
   const armIdle = () => {
@@ -6132,9 +6161,12 @@ function openVoice(deps, ui) {
     const order = card.order
     const forAgent = order.kind === 'task' && owner && card.words.owners.some((one) => one.value === owner) ? owner : ''
     const tier = order.kind === 'task' && model && card.words.models.some((one) => one.value === model) ? model : ''
+    // The card's own id, with this call's: the board fires an id it has already answered only once, so a
+    // double yes or a retry that reaches it twice starts one run (api/_once.js).
+    const requestId = `${session.claims.sid}-${card.id}`
     const body = order.kind === 'task'
-      ? { action: 'task', title: order.title, ...(order.details ? { details: order.details } : {}), ...(forAgent ? { for: forAgent } : {}), ...(tier ? { model: tier } : {}) }
-      : { workflow: order.slug, action: 'run' }
+      ? { requestId, action: 'task', title: order.title, ...(order.details ? { details: order.details } : {}), ...(forAgent ? { for: forAgent } : {}), ...(tier ? { model: tier } : {}) }
+      : { requestId, workflow: order.slug, action: 'run' }
     const sent = { key: orderKey(order), at: deps.now() }
     session.sent.push(sent)
     let result
@@ -6382,7 +6414,17 @@ function openVoice(deps, ui) {
         }
         break
       }
+      case 'session.updated':
+        session.voiceSwitchPending = false
+        break
       case 'error':
+        if (session.voiceSwitchPending) {
+          session.voiceSwitchPending = false
+          ui.note?.(VOICE_TEXT_ONLY)
+          session.noteIsCut = false
+          show('listening')
+          break
+        }
         // Cancelling a reply that had already finished is not worth a word.
         if (event.error?.code === 'response_cancel_not_active') break
         // Our request for a tool reply arrived while a response was running: ask again once, after it.
@@ -6459,6 +6501,10 @@ function openVoice(deps, ui) {
     session.ticket = answer.ticket
     session.claims = claims
     session.mouth = claims.mouth
+    // With Fish: the OpenAI voice to move to if Fish refuses (a name and a number from the board).
+    const fallback = answer.fallback
+    session.fallback = claims.mouth === 'fish' && /^[a-z]{3,20}$/.test(fallback?.voice) && Number.isInteger(fallback?.replyTokens) && fallback.replyTokens > 0
+      ? { voice: fallback.voice, replyTokens: fallback.replyTokens } : null
     session.idleMinutes = Number.isInteger(answer.idleMinutes) && answer.idleMinutes >= 1 && answer.idleMinutes <= 10 ? answer.idleMinutes : 2
     session.captions = answer.captions !== false
     // The echo guard is for a computer in talk-over mode (headphones); in speakers mode the microphone
@@ -6605,14 +6651,24 @@ function fishMouth(io) {
     fish.aborts.add(controller)
     fish.pending += 1
     const fetched = io.speak({ ticket: session.ticket, text: piece }, controller.signal)
-      .then((response) => (response?.ok ? response.arrayBuffer() : null))
+      .then(async (response) => {
+        if (response?.ok) {
+          session.fishDown = 0
+          return response.arrayBuffer()
+        }
+        // The board names the refusals that will not get better; any other piece is just skipped.
+        const code = await response?.json?.().then((body) => body?.code, () => null)
+        if (code === 'down') session.fishDown = (session.fishDown ?? 0) + 1
+        if (FISH_GIVES_UP.includes(code) || session.fishDown >= FISH_DOWN_LIMIT) session.fishRefused?.()
+        return null
+      })
       .catch(() => null)
       .finally(() => fish.aborts.delete(controller))
     // Each piece waits for the one cut before it, so the order is the order they were cut in -
     // and the first, with nothing before it, plays the moment it is decoded.
     fish.chain = fish.chain.then(async () => {
       const bytes = await fetched
-      if (!bytes || session.stopped || isStale(session.turns, turn)) return
+      if (!bytes || session.stopped || session.mouth !== 'fish' || isStale(session.turns, turn)) return
       let sound
       try {
         sound = await session.context.decodeAudioData(bytes)

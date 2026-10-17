@@ -399,11 +399,15 @@ export function instructionsFor(name, zone = null, orders = null) {
 // realtime-conversations, read 2026-10-09.
 // The spelling hint from the assistant's name and the names the page sent: plain names only (the same
 // rule a name is saved under), each once, at most MAX_NAME_HINTS and MAX_NAME_HINT_CHARS.
+// A name made of (or containing) a confirmation word is dropped: a name in the transcriber's hint could
+// bias it towards hearing "yes", and the spoken yes can send an order.
+const CONFIRMATION_WORD = /(?:^|[^a-z])(?:yes|yeah|yep|yup|send|confirm|do it|go ahead|no|cancel)(?:[^a-z]|$)/i
+
 export function nameHint(name, names) {
   const kept = []
   for (const candidate of [name, ...(Array.isArray(names) ? names : [])]) {
     const clean = cleanName(candidate)
-    if (!clean || clean === 'your assistant' || kept.includes(clean)) continue
+    if (!clean || clean === 'your assistant' || kept.includes(clean) || CONFIRMATION_WORD.test(clean)) continue
     if (kept.length >= MAX_NAME_HINTS) break
     const next = `Names that may be said: ${[...kept, clean].join(', ')}.`
     if (next.length > MAX_NAME_HINT_CHARS) break

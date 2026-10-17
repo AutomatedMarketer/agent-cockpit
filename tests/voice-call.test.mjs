@@ -1193,7 +1193,7 @@ test('only the owner\'s trusted tap on Yes sends - never the model\'s words, a t
   assert.deepEqual(browser.state.dispatched, [], 'something other than the owner sent the order')
   assert.equal(tapYes(browser, 'research'), true)
   await flush()
-  assert.deepEqual(browser.state.dispatched, [{ body: { action: 'task', title: 'Draft this week\'s newsletter', for: 'research' }, options: { ask: true } }])
+  assert.deepEqual(browser.state.dispatched.map(({ requestId, ...one }) => one), [{ body: { action: 'task', title: 'Draft this week\'s newsletter', for: 'research' }, options: { ask: true } }])
 })
 
 test('a yes is told to the model in a system note, then it is asked to say it; the card goes and the sheet says what was sent', async () => {
@@ -1322,7 +1322,7 @@ test('the owner\'s own "yes" after the card sends it, once, with no key prompt',
   browser.clock.now += 2000
   say(browser, 'item_yes', 'Yes, please.')
   await flush()
-  assert.deepEqual(browser.state.dispatched, [{ body: { action: 'task', title: 'Draft it' }, options: { ask: false } }])
+  assert.deepEqual(browser.state.dispatched.map(({ requestId, ...one }) => one), [{ body: { action: 'task', title: 'Draft it' }, options: { ask: false } }])
   say(browser, 'item_again', 'yes')
   await flush()
   assert.equal(browser.state.dispatched.length, 1, 'a second yes sent it again')
@@ -1971,4 +1971,27 @@ test('a Mac answer that is not the board\'s own shape is still a send, but nothi
     }
     assert.ok(!JSON.stringify(systemNotes(browser)).includes('Chase the invoice'))
   }
+})
+
+/* ---------- the same card, sent twice, is one order on the board ---------- */
+
+test('every order carries an id made from this call and this card, so the board can tell a repeat from a new order', async () => {
+  const browser = await ordering()
+  propose(browser, 'add_task', { title: 'Draft it' })
+  tapYes(browser)
+  await flush()
+  propose(browser, 'add_task', { title: 'Draft another' }, 'call_two')
+  tapYes(browser)
+  await flush()
+  const [first, second] = browser.state.dispatched.map((one) => one.requestId)
+  const sid = browser.ticket && JSON.parse(Buffer.from(browser.ticket.split('.')[0], 'base64url').toString()).sid
+  assert.match(first, /^[A-Za-z0-9_-]{8,64}$/, 'the id is not one the board accepts')
+  assert.equal(first, sid + '-card-1')
+  assert.equal(second, sid + '-card-2')
+  // Another call has its own session id, so its first card is not this call's first card.
+  const other = await ordering()
+  propose(other, 'add_task', { title: 'Draft it' })
+  tapYes(other)
+  await flush()
+  assert.notEqual(other.state.dispatched[0].requestId, first)
 })

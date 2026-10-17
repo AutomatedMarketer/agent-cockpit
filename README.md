@@ -557,6 +557,14 @@ A yes sends the order the way the board's own buttons do, through `/api/fire`: a
 `tasks/` about a minute later, made by your `task-intake` routine, and a run starts that job's
 routine. The board still never writes to your repo.
 
+**One yes is one order.** Each card has an id, and the order carries it to `/api/fire`. Say yes twice,
+tap and say yes, or let a slow connection retry, and the board answers the second with the first's
+answer and starts, files or queues nothing more. The id is kept with a fingerprint of the whole
+order: the same id with a different order is refused as a conflict (409) and nothing runs. It remembers an id for ten minutes, in the running
+function's memory. Vercel does not promise two requests reach the same running instance, so it
+catches a double send that does, but is not a promise across a cold start or a second instance. Refused
+orders are forgotten at once, so trying again after a refusal still works.
+
 **Switch them on.** Orders are off until the board's Run buttons are set up, and until then the
 assistant says so, plainly. The board starts your routines through Claude Code's routines API: each
 routine has its own address and its own token, and both stay in Vercel.
@@ -734,6 +742,10 @@ Fish Audio can speak the answers in a voice you pick from its library.
 - Free-plan voices are for **personal use only**. Using one for a business needs a paid Fish plan
 - With Fish, OpenAI answers in text and Fish speaks it, a sentence at a time, so the first words can
   take a moment longer
+- If Fish refuses its key or has no credit, the call moves to OpenAI's voice at once. If Fish just does not
+  answer (or errors), it moves after two failures in a row; one only skips a sentence. The panel says the
+  rest of that answer was not spoken and to ask again. If OpenAI will not take the switch, it says the
+  call is text only. The next call tries Fish again. Nothing changes if Fish was never set up.
 
 ### What goes where
 
@@ -1017,7 +1029,7 @@ Locally:
 npm test
 ```
 
-2489 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2511 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -

@@ -116,6 +116,15 @@ test('with Fish set up the session is text only and the ticket says Fish, with t
   assert.ok(!everythingSent(response).includes(FISH_KEY), 'the Fish key reached the page')
 })
 
+test('a Fish session also carries the OpenAI voice to fall back to; an OpenAI session carries none', async (t) => {
+  stubOpenAI(t, answered())
+  const fishEnv = { ...ENV, FISH_API_KEY: FISH_KEY, FISH_VOICE_ID: FISH_VOICE, OPENAI_VOICE: 'cedar' }
+  const fish = await board({ env: fishEnv }).offer()
+  assert.deepEqual(fish.body.fallback, { voice: 'cedar', replyTokens: voiceConfig(fishEnv).replyTokens })
+  const plain = await board().offer()
+  assert.equal(plain.body.fallback, undefined)
+})
+
 test('the assistant\'s name comes from the store, never from anything in the request', async (t) => {
   const calls = stubOpenAI(t, answered())
   const { offer, store } = board()

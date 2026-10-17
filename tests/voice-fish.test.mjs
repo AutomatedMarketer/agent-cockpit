@@ -9,7 +9,8 @@ import { flush } from './helpers/page-harness.mjs'
 import { REPLY_USAGE } from './helpers/voice-fixtures.mjs'
 import { connected, ticketFor } from './helpers/voice-browser.mjs'
 
-const fish = () => connected({ answer: { ticket: ticketFor('fish'), mouth: 'fish' } })
+const FALLBACK = { voice: 'cedar', replyTokens: 400 }
+const fish = () => connected({ answer: { ticket: ticketFor('fish'), mouth: 'fish', fallback: FALLBACK } })
 const text = (browser, delta) => browser.emit({ type: 'response.output_text.delta', delta })
 const pieces = (browser) => browser.speeches.filter((speech) => !speech.body.warm).map((speech) => speech.body.text)
 
@@ -274,4 +275,95 @@ test('25 Fish pieces queued at once keep the microphone rested until the last ha
   tail.fn()
   assert.deepEqual(mic(), [true])
   assert.equal(browser.lastState(), 'listening')
+})
+
+/* ---------- Fish refuses: the call goes on in OpenAI's voice ---------- */
+
+const updates = (browser) => browser.state.channel.sent.filter((event) => event.type === 'session.update')
+
+for (const [what, status, code] of [['a bad key', 502, 'key'], ['no credit', 402, 'credit']]) {
+  test(`${what}: the session switches to OpenAI voice at once, says the rest was cut, and stops asking Fish`, async () => {
+    const browser = await fish()
+    browser.emit({ type: 'response.created' })
+    text(browser, 'Three jobs are due today, and one has gone quiet. The brief runs at six.')
+    const [first, second] = browser.speeches
+    first.refuse(status, code)
+    await flush()
+    assert.equal(updates(browser).length, 1, 'the session was not switched to OpenAI voice')
+    assert.deepEqual(updates(browser)[0].session, {
+      type: 'realtime', output_modalities: ['audio'], max_output_tokens: 400, audio: { output: { voice: 'cedar' } }
+    })
+    const note = browser.ui.notes.at(-1)
+    assert.match(note, /Fish/)
+    assert.match(note, /rest of that answer was not spoken/)
+    assert.match(note, /ask me again/i)
+    assert.equal(second.signal.aborted, true, 'a piece still on its way to Fish was not dropped')
+    const before = browser.speeches.length
+    text(browser, ' More words. And more.')
+    browser.emit({ type: 'response.output_text.done' })
+    browser.emit({ type: 'response.done', response: { status: 'completed', output: [], usage: REPLY_USAGE } })
+    assert.equal(browser.lastState(), 'listening', 'the page did not go back to listening')
+    browser.emit({ type: 'response.created' })
+    text(browser, 'Next reply. Still going.')
+    assert.equal(browser.speeches.length, before, 'Fish was asked again after it refused')
+    second.refuse(status, code)
+    await flush()
+    assert.equal(updates(browser).length, 1, 'switched to OpenAI voice twice')
+  })
+}
+
+test('Fish down (unreachable or a 5xx): one failure only skips the sentence; two in a row switch the voice; a good piece in between resets the count', async () => {
+  const browser = await fish()
+  browser.emit({ type: 'response.created' })
+  text(browser, 'One piece of the answer here. Another piece of the answer here. A third piece of the answer. ')
+  const [a, b, c] = browser.speeches
+  a.refuse(502, 'down')
+  await flush()
+  assert.equal(updates(browser).length, 0, 'one failure switched the voice')
+  b.answer()
+  await flush()
+  c.refuse(502, 'down')
+  await flush()
+  assert.equal(updates(browser).length, 0, 'a good piece in between did not reset the count')
+  text(browser, 'And a fourth piece of it all. ')
+  browser.speeches.at(-1).refuse(502, 'down')
+  await flush()
+  assert.equal(updates(browser).length, 1, 'two failures in a row did not switch')
+  assert.match(browser.ui.notes.at(-1), /ask me again/i)
+})
+
+test('the page waits for OpenAI to accept the voice switch; if it refuses, it says the call is text only', async () => {
+  const accepted = await fish()
+  accepted.emit({ type: 'response.created' })
+  text(accepted, 'Three jobs are due today, and one has gone quiet. ')
+  accepted.speeches[0].refuse(402, 'credit')
+  await flush()
+  accepted.emit({ type: 'session.updated', session: {} })
+  assert.doesNotMatch(accepted.ui.notes.at(-1), /text only/)
+  const refused = await fish()
+  refused.emit({ type: 'response.created' })
+  text(refused, 'Three jobs are due today, and one has gone quiet. ')
+  refused.speeches[0].refuse(402, 'credit')
+  await flush()
+  refused.emit({ type: 'error', error: { code: 'invalid_value', message: 'cannot change voice' } })
+  assert.match(refused.ui.notes.at(-1), /text only/i)
+  assert.equal(refused.lastState(), 'listening')
+})
+
+test('a busy or one-off Fish failure skips the piece but keeps the Fish voice', async () => {
+  const browser = await fish()
+  browser.emit({ type: 'response.created' })
+  text(browser, 'Three jobs are due today, and one has gone quiet. ')
+  browser.speeches[0].refuse(429)
+  await flush()
+  assert.equal(updates(browser).length, 0)
+})
+
+test('a switch with no OpenAI voice to go to (an old answer) changes nothing but the piece skipped', async () => {
+  const browser = await connected({ answer: { ticket: ticketFor('fish'), mouth: 'fish' } })
+  browser.emit({ type: 'response.created' })
+  text(browser, 'Three jobs are due today, and one has gone quiet. ')
+  browser.speeches[0].refuse(402, 'credit')
+  await flush()
+  assert.equal(updates(browser).length, 0)
 })
