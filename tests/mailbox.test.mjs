@@ -76,6 +76,8 @@ test('mailbox parity: the board\'s numbers, shapes and lists are the contract\'s
   assert.deepEqual(status.reasons, fixture.status.reasons)
   assert.deepEqual(status.allowedKeys, fixture.status.allowedKeys)
   assert.deepEqual(status.requiredKeys, fixture.status.requiredKeys)
+  assert.equal(status.maxSteps, fixture.status.maxSteps, 'status.maxSteps')
+  assert.deepEqual(status.optionalKeys, fixture.status.optionalKeys)
   // A claim outlives every way its order could still pass the other checks.
   assert.equal(fixture.claims.keepSeconds, fixture.life.maxSeconds + fixture.life.futureSkewSeconds)
   assert.equal(contract.claims.keepSeconds, fixture.claims.keepSeconds)

@@ -92,7 +92,12 @@ export const MAILBOX_CONTRACT = Object.freeze({
       file: ['schema', 'takenAt', 'computer', 'runner', 'allows', 'orders'],
       allows: ['actions', 'jobs'],
       order: ['id', 'action', 'state', 'at', 'startedAt', 'finishedAt', 'commit', 'why', 'landed']
-    }
+    },
+    // Keys an order may have and need not: a status file from before them is as valid as ever.
+    optionalKeys: {
+      order: ['steps']
+    },
+    maxSteps: 100000
   })
 })
 
