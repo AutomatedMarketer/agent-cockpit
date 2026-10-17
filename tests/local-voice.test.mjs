@@ -852,3 +852,34 @@ test('adapter: a turn has one id from the moment speech starts to its words, so 
   const secondWords = mine.world.events.filter((event) => event.type.endsWith('transcription.completed'))[1]
   assert.equal(secondWords.item_id, second.item_id)
 })
+
+test('cleaning: "We need to call the tool", Thinking Process blocks, printed call JSON, chat-template markers and [TOOL_CALLS] never reach the speaker', () => {
+  const cases = [
+    ['We need to call the job_status tool. Two jobs ran today.', 'Two jobs ran today.'],
+    ['We should check the board first. We will call whats_due. Nothing is due.', 'Nothing is due.'],
+    ['We need the name of the job. Which one?', 'We need the name of the job. Which one?'],
+    ['We can do that once you say yes.', 'We can do that once you say yes.'],
+    ['Thinking Process:\n1. Analyze the request.\n2. Call tool.\n\nTwo jobs ran today.', 'Two jobs ran today.'],
+    ['Thinking Process:\n1. Analyze.\n2. Decide.\nFinal answer: Two jobs ran today.', 'Two jobs ran today.'],
+    ['Reasoning: the person wants jobs.\n\nTwo jobs ran today.', 'Two jobs ran today.'],
+    ['Thinking Process:\n1. Only thinking, no answer', ''],
+    ['{"name": "run_job", "arguments": {"slug": "daily-brief"}}', ''],
+    ['Sure.{"name":"run_job","arguments":{"slug":"a}b","note":"has \\" and { inside"}} Done.', 'Sure. Done.'],
+    ['{"name": "run_job", "arguments": {"slug": "daily', ''],
+    ['{"tool_calls":[{"function":{"name":"x","arguments":"{}"}}]} Anything else?', 'Anything else?'],
+    ['The result was {"count": 2}. Two jobs ran.', 'The result was {"count": 2}. Two jobs ran.'],
+    ['<|im_start|>assistant Sure. <|im_end|>', 'Sure.'],
+    ['<|im_start|>assistant\nSure.<|im_end|>\n<|im_start|>user\nand then?', 'Sure.'],
+    ['Sure.<|im_end|><|im_start|>user hello', 'Sure.'],
+    ['<|eot_id|>', ''],
+    ['Yes.<|endoftext|>more nonsense', 'Yes.'],
+    ['<|assistant|>Two jobs ran.', 'Two jobs ran.'],
+    ['[INST] hi [/INST] Hello there.', 'hi Hello there.'],
+    ['[TOOL_CALLS] run_job {"slug":"x"}', ''],
+    ['[TOOL_CALLS][{"name":"x","arguments":{}}]', ''],
+    ['Sure. [TOOL_CALLS] run_job {"slug":"x"}', 'Sure.']
+  ]
+  for (const [raw, want] of cases) assert.equal(cleanReply(raw), want, JSON.stringify(raw))
+  // And what is spoken by the speaking path is held to the same markup rules.
+  for (const raw of ['<|im_start|>assistant Sure.<|im_end|>', '[TOOL_CALLS] x', '{"name":"x","arguments":{}} Hello.']) assert.ok(!/<\||\[TOOL_CALLS\]|"name"/.test(stripMarkup(raw)), raw)
+})

@@ -63,21 +63,70 @@ export const SAY = Object.freeze({
 
 // Sentences that are the model talking to itself. Narrow on purpose: a real answer such as "I need the
 // name of the job" must survive, so only the shapes the spike saw leak out are matched.
-const REASONING_START = /^(?:(?:okay|ok|alright|all right|hmm+|so|well)[,.!:\s]+)?(?:the user(?:'s| is| wants| asked| said| has| might| may)|(?:let me|let's) (?:think|see|check|figure|call|use|look|try|recall)|i (?:need|have|should|will|must) to (?:call|check|use|figure|find|look|answer|respond|make sure|see|think|recall)|i(?:'ll| should| will| must| need) (?:call|use|check|look up)|first,? (?:i|let)|now,? (?:i|let)|thinking[:.]|reasoning:|the (?:tool|function) (?:call|result|returned))/i
+const REASONING_START = /^(?:(?:okay|ok|alright|all right|hmm+|so|well)[,.!:\s]+)?(?:we (?:need|have|should|must) to (?:call|check|use|figure|find|look|answer|respond|make sure|see|think|recall)|we(?:'ll| will| should) (?:call|use|check|look up)|the user(?:'s| is| wants| asked| said| has| might| may)|(?:let me|let's) (?:think|see|check|figure|call|use|look|try|recall)|i (?:need|have|should|will|must) to (?:call|check|use|figure|find|look|answer|respond|make sure|see|think|recall)|i(?:'ll| should| will| must| need) (?:call|use|check|look up)|first,? (?:i|let)|now,? (?:i|let)|thinking[:.]|reasoning:|the (?:tool|function) (?:call|result|returned))/i
+
+// A paragraph that opens with one of these is the model's working, list and all.
+const THINKING_BLOCK = /^\s*(?:thinking process|thought process|thinking|reasoning|analysis|plan|chain of thought)\s*:/i
 
 // <think> blocks (closed, or cut off), and tool-call markup the model printed instead of calling.
 export function stripMarkup(raw) {
   let text = typeof raw === 'string' ? raw : ''
   text = text.replace(/<think>[\s\S]*?<\/think>/gi, ' ').replace(/<think>[\s\S]*$/i, ' ').replace(/<\/?think>/gi, ' ')
   text = text.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, ' ').replace(/<tool_call>[\s\S]*$/i, ' ').replace(/<\/?tool_call>/gi, ' ')
-  return text.replace(/```[\s\S]*?```/g, ' ')
+  text = text.replace(/```[\s\S]*?```/g, ' ')
+  // Chat-template markers a model prints when its template did not take them: a message ends at its end marker,
+  // and a turn it invents for someone else (user, system, tool) is not an answer at all.
+  text = text.replace(/<\|im_start\|>\s*(?:user|system|tool)[\s\S]*$/i, ' ')
+  text = text.replace(/<\|(?:im_end|endoftext|eot_id|end_of_turn|end)\|>[\s\S]*$/i, ' ')
+  text = text.replace(/<\|im_start\|>\s*(?:assistant)?/gi, ' ').replace(/<\|[a-z_]{1,24}\|>/gi, ' ')
+  text = text.replace(/\[\/?(?:INST|SYS|\/INST)\]/gi, ' ')
+  // Mistral-style call markers: everything after one is a call that was never made, not words.
+  text = text.replace(/\[TOOL_CALLS\][\s\S]*$/i, ' ').replace(/\[\/?TOOL_(?:CALLS|RESULTS)\]/gi, ' ')
+  return stripPrintedCalls(text)
+}
+
+// A tool call printed as plain JSON - {"name": "run_job", "arguments": {...}} - instead of made. Found by its
+// opening and followed to its matching brace (strings and escapes respected), so a sentence around it survives.
+function stripPrintedCalls(text) {
+  const opener = /\{\s*"(?:name|tool|tool_name|function|tool_calls|arguments)"\s*:/g
+  let out = ''
+  let from = 0
+  for (let found = opener.exec(text); found; found = opener.exec(text)) {
+    if (found.index < from) continue
+    let depth = 0
+    let inString = false
+    let end = -1
+    for (let at = found.index; at < text.length; at += 1) {
+      const character = text[at]
+      if (inString) {
+        if (character === '\\') at += 1
+        else if (character === '"') inString = false
+      } else if (character === '"') inString = true
+      else if (character === '{') depth += 1
+      else if (character === '}') {
+        depth -= 1
+        if (depth === 0) { end = at + 1; break }
+      }
+    }
+    out += text.slice(from, found.index) + ' '
+    from = end === -1 ? text.length : end // a call cut off in the middle ends the text
+    opener.lastIndex = from
+  }
+  return out + text.slice(from)
 }
 
 // Words that are not the answer: the markup above, and the "Okay, the user is asking..." the model
 // sometimes writes out before answering. What is left is what may be spoken.
 export function cleanReply(raw) {
   const kept = []
-  for (const paragraph of stripMarkup(raw).split(/\n\s*\n/)) {
+  for (const block of stripMarkup(raw).split(/\n\s*\n/)) {
+    let paragraph = block
+    if (THINKING_BLOCK.test(paragraph)) {
+      // "Thinking Process: 1. ... 2. ... Final answer: Two jobs ran." keeps only what follows the marker.
+      const after = /\n\s*(?:final answer|final response|response|answer)\s*:\s*([\s\S]*)$/i.exec(paragraph)
+      if (!after) continue
+      paragraph = after[1]
+    }
     const sentences = paragraph.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/).filter(Boolean)
     let at = 0
     while (at < sentences.length && REASONING_START.test(sentences[at])) at += 1
