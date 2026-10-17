@@ -4798,12 +4798,12 @@ function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fre
 // where the Mac's status file gave the end, the words are the board's own fixed reasons. null while the
 // order is still going.
 const RESULT_SUMMARY_MAX = 500
-// Text from the repo reaches the model whole or not at all: a control character (a new line too) or a
-// hidden one drops it, and what is left is held to `most` characters.
+// Text from the repo reaches the model whole or not at all. A new line, return or tab becomes a space
+// (a summary of several lines is one line); any other control character, or a hidden one, drops it. What
+// is left is held to `most` characters, after the lines are joined.
 const resultText = (value, most) => {
-  if (typeof value !== 'string' || /\p{Cc}/u.test(value)) return ''
-  const text = value.replace(/\s+/g, ' ').trim()
-  return hiddenText(text) ? '' : text.slice(0, most)
+  const text = typeof value === 'string' ? value.replace(/[\n\r\t]+/g, ' ').replace(/ {2,}/g, ' ').trim() : ''
+  return text === '' || /\p{Cc}/u.test(text) || hiddenText(text) ? '' : text.slice(0, most)
 }
 const MAC_ENDS = { 'refused by your Mac': 'refused', 'failed on your Mac': 'failed', expired: 'expired', 'outcome unknown': 'unclear' }
 

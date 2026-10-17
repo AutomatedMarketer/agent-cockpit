@@ -377,8 +377,13 @@ test('two orders for the same job each get their own run, the older order the ol
   assert.equal(orderOutcome(second, boardWith({ runs: [one] }), NOW + 10 * MIN, 'UTC', siblings), null)
 })
 
-test('a control character in a name or a summary drops it whole, a new line too', () => {
-  for (const summary of ['a\u0000b', 'first line\nsecond line', 'bell\u0007']) {
+test('a new line, return or tab becomes one space, so a 3-line summary is one line; any other control character drops it whole', () => {
+  const lines = orderOutcome(runOrder, boardWith({ runs: [runRow({ summary: 'Found 3 leads.\r\n\n  Sent 2 emails.\t\tOne bounced.' })] }), NOW + 6 * MIN)
+  assert.equal(lines.summary, 'Found 3 leads. Sent 2 emails. One bounced.')
+  const joined = orderOutcome(runOrder, boardWith({ runs: [runRow({ summary: `${'x'.repeat(400)}\n${'y'.repeat(400)}` })] }), NOW + 6 * MIN).summary
+  assert.equal(joined.length, 500)
+  assert.equal(joined[400], ' ', 'the cap came before the lines were joined')
+  for (const summary of ['a\u0000b', 'bell\u0007', 'line\none\u0007two', 'a\u000bb']) {
     assert.equal(orderOutcome(runOrder, boardWith({ runs: [runRow({ summary })] }), NOW + 6 * MIN).summary, '', JSON.stringify(summary))
   }
   const named = orderOutcome({ ...runOrder, name: 'Morning\u0007 intel' }, boardWith({ runs: [runRow()] }), NOW + 6 * MIN)
