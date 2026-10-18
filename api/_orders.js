@@ -40,19 +40,22 @@ const extras = (env, tasks) => ({
 // state.js); until it has pushed one, task cards are on and no job is offered. fire.js still checks
 // fire: true, and the computer its own list, on every order.
 const LOCAL_RUNNER_NAME = 'this-computer'
-function mailboxOrders(env, mac, publicFire) {
+// Off, on a student's computer: no Vercel, no keys. Jobs start by themselves when Start Board finds the team folder on GitHub
+// and the runner code (local/README.md); the Start Board window says which one is missing. KEEP IN SYNC: local/localize.mjs.
+export const LOCAL_ORDERS_OFF = 'Orders by voice are off, because jobs are not switched on for this board yet. The Start Board window says why. Fix that, then double-click Start Board again.'
+function mailboxOrders(env, mac, publicFire, student) {
   const settings = mailboxConfig(env)
   const keyed = publicFire || mailboxFireKeyOk(env.FIRE_KEY)
-  if (!settings.ready || !keyed) return off(MAILBOX_ORDERS_OFF)
+  if (!settings.ready || !keyed) return off(student ? LOCAL_ORDERS_OFF : MAILBOX_ORDERS_OFF)
   const actions = mac?.allows?.actions ?? null
   const tasks = actions ? actions.includes('task') : true
   const jobs = actions && actions.includes('run')
     ? [...new Set((mac.allows.jobs ?? []).filter((slug) => isValidSlug(slug)))].sort().slice(0, MAX_ORDER_JOBS)
     : []
-  if (!tasks && !jobs.length) return off(MAILBOX_ORDERS_OFF)
+  if (!tasks && !jobs.length) return off(student ? LOCAL_ORDERS_OFF : MAILBOX_ORDERS_OFF)
   // The board that runs on a student's own computer names its runner this (local/runner.mjs LOCAL_RUNNER): its
   // orders are done on that computer at once, and its words say so.
-  const here = settings.runner === LOCAL_RUNNER_NAME
+  const here = student || settings.runner === LOCAL_RUNNER_NAME
   return { on: true, tasks, jobs, key: publicFire ? 'public' : 'fire-key', via: 'mac', ...(here ? { local: true } : {}), ...extras(env, tasks) }
 }
 
@@ -60,9 +63,11 @@ export function ordersConfig(env = {}, mac = null) {
   // The same two rules fire.js applies, in the same words: PUBLIC_FIRE waives the fire key, except on
   // a board open to everyone, where there is no first key and so the fire key is required.
   const publicFire = env.PUBLIC_FIRE === 'true' && env.PUBLIC_DASHBOARD !== 'true'
-  if (mailboxConfig(env).mode !== 'cloud') return mailboxOrders(env, mac, publicFire)
+  // The board running on a student's own computer (local/gate.mjs applyLocalEnv) says so in its environment.
+  const student = env.BOARD_LOCAL === 'true'
+  if (mailboxConfig(env).mode !== 'cloud') return mailboxOrders(env, mac, publicFire, student)
   const triggers = parseTriggers(env.FIRE_TRIGGERS)
-  if (!triggers || (!env.FIRE_KEY && !publicFire)) return off()
+  if (!triggers || (!env.FIRE_KEY && !publicFire)) return off(student ? LOCAL_ORDERS_OFF : ORDERS_OFF)
   // A routine's URL and token, in the shape fire.js keeps (parseTriggers drops any other).
   const linked = (slug) => Boolean(triggerFor(triggers, slug))
   const tasks = linked(TASK_INTAKE_SLUG)
@@ -70,7 +75,7 @@ export function ordersConfig(env = {}, mac = null) {
     .filter((slug) => slug !== TASK_INTAKE_SLUG && isValidSlug(slug) && linked(slug))
     .sort()
     .slice(0, MAX_ORDER_JOBS)
-  if (!tasks && !jobs.length) return off()
+  if (!tasks && !jobs.length) return off(student ? LOCAL_ORDERS_OFF : ORDERS_OFF)
   return {
     on: true,
     tasks,

@@ -64,43 +64,71 @@ test('the website\'s Readiness lines are untouched, and the sample reaches the l
   assert.ok(strings.length > 150, `only ${strings.length} strings were looked at`)
 })
 
+// Where each of the board's own lines sits in the answer. Only these places are ever rewritten.
+const sentenceOf = (text, extra = {}) => localizeResponse({ readiness: { cards: [{ source: 'launchd', name: 'Job', sentence: { text }, ...extra }] } }).readiness.cards[0].sentence.text
+const scheduleOf = (text) => localizeResponse({ readiness: { cards: [{ source: 'launchd', name: 'Job', schedule: { text } }] } }).readiness.cards[0].schedule.text
+const silentOf = (text) => localizeResponse({ readiness: { cards: [{ source: 'launchd', name: 'Job', silentSentence: { text } }] } }).readiness.cards[0].silentSentence.text
+const reasonOf = (reason) => localizeResponse({ readiness: { switchedOff: [{ name: 'Job', reason }] } }).readiness.switchedOff[0].reason
+const restartOf = (text, where = 'Mac Mini') => localizeResponse({ readiness: { restarts: [{ where, text, at: TAKEN }] } }).readiness.restarts[0]
+const labelOf = (source, name, ref) => localizeResponse({ readiness: { cards: [{ source, name, ref }] } }).readiness.cards[0]
+
 test('local: every Readiness line comes out without "Mac"', () => {
   for (const [index, wall] of SAMPLES('This computer').entries()) {
     const left = everyString(localizeResponse({ readiness: wall }).readiness).filter((text) => MAC.test(text))
     assert.deepEqual(left, [], `sample ${index}`)
   }
-  // Every sentence the wall can say, including the ones the samples do not reach.
-  for (const text of [...Object.values(READINESS_WORDS), ...Object.values(SWITCHED_OFF)]) {
-    assert.doesNotMatch(localizeResponse({ readiness: { text } }).readiness.text, MAC, text)
+  // Every sentence the wall can say, including the ones the samples do not reach, in the place it is said.
+  for (const text of Object.values(READINESS_WORDS)) {
+    assert.doesNotMatch(sentenceOf(text), MAC, text)
+    assert.doesNotMatch(sentenceOf(text, { source: 'mailbox' }), MAC, text)
+    assert.doesNotMatch(silentOf(text), MAC, text)
   }
+  for (const text of Object.values(SWITCHED_OFF)) assert.doesNotMatch(reasonOf(text), MAC, text)
 })
 
 test('local: the Readiness lines, before and after, in plain words', () => {
-  const say = (text) => localizeResponse({ readiness: { text } }).readiness.text
   const rows = [
     ['Your Mac last reported on its orders at {time}, and none failed in the last day.', 'This computer last reported on its orders at {time}, and none failed in the last day.'],
     ['An order failed on your Mac at {time}. Nothing it changed left the Mac; send it again from the board.', 'An order failed on this computer at {time}. Nothing it changed left this computer; send it again from the board.'],
     ['Your Mac lost track of an order at {time} and will not run it again by itself. Check the board, then send it again if it is not there.', 'This computer lost track of an order at {time} and will not run it again by itself. Check the board, then send it again if it is not there.'],
     ['Your Mac has not reported on an order since {date}, so the board cannot vouch for its mailbox.', 'This computer has not reported on an order since {date}, so the board cannot vouch for its orders.'],
-    ['Mac mailbox', 'Orders from the board'],
-    ['Mac LaunchAgents', 'Scheduled jobs'],
-    ['Mac restarted at {stamp}', 'This computer restarted at {stamp}'],
-    ['Every day at 6:15am (Mac time)', 'Every day at 6:15am (this computer\'s time)'],
     ['Hermes was running when the Mac checked at {time}.', 'Hermes was running when this computer checked at {time}.'],
-    ['Not checked since {date}. The Mac\'s last reading is {hours} h old.', 'Not checked since {date}. This computer\'s last reading is {hours} h old.'],
-    ['{name} is installed but not switched on in the Mac\'s scheduler, so it will not run.', '{name} is installed but not switched on in this computer\'s scheduler, so it will not run.'],
-    ['{name} stopped with error code {code}. The Mac does not say why; its log on the Mac has the reason.', '{name} stopped with error code {code}. This computer does not say why; its log has the reason.'],
-    ['Its scheduler is running. Whether its last report was written is checked on the Mac control center, not here.', 'Its scheduler is running. Whether its last report was written is not checked here.'],
-    ['Switched off: turned off on the Mac (its plist says Disabled), so the Mac\'s scheduler is told not to run it.', 'Switched off: turned off on this computer, so its scheduler is told not to run it.']
+    ['Daily brief was running when the Mac checked at {time}. Its scheduler is running. Whether its last report was written is checked on the Mac control center, not here.', 'Daily brief was running when this computer checked at {time}. Its scheduler is running. Whether its last report was written is not checked here.'],
+    ["Daily brief is installed but not switched on in the Mac's scheduler, so it will not run.", "Daily brief is installed but not switched on in this computer's scheduler, so it will not run."],
+    ['Daily brief stopped with error code 2. The Mac does not say why; its log on the Mac has the reason.', 'Daily brief stopped with error code 2. This computer does not say why; its log has the reason.'],
+    ['Daily brief stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a restart.', 'Daily brief stopped right after this computer restarted at {time}. Jobs like this need a person to check them after a restart.'],
+    ["The Mac's list of LaunchAgents was not available at {time}: permission denied.", "This computer's list of LaunchAgents was not available at {time}: permission denied."]
   ]
-  for (const [before, after] of rows) assert.equal(say(before), after, before)
+  for (const [before, after] of rows) assert.equal(sentenceOf(before), after, before)
+  assert.equal(silentOf("Not checked since {date}. The Mac's last reading is {hours} h old."), "Not checked since {date}. This computer's last reading is {hours} h old.")
+  assert.equal(silentOf('The status collector has not written its readings since {date}, so nothing on the Mac is being checked.'), 'The status collector has not written its readings since {date}, so nothing on this computer is being checked.')
+  assert.equal(scheduleOf('Every day at 6:15am (Mac time)'), "Every day at 6:15am (this computer's time)")
+  assert.equal(restartOf('Mac restarted at {stamp}').text, 'This computer restarted at {stamp}')
+  assert.equal(restartOf('Mac restarted at {stamp}', 'Mac').where, 'This computer')
+  assert.equal(reasonOf("Switched off: turned off on the Mac (its plist says Disabled), so the Mac's scheduler is told not to run it."), 'Switched off: turned off on this computer, so its scheduler is told not to run it.')
+  const mailbox = labelOf('mailbox', 'Mac mailbox', 'This computer · Mac mailbox')
+  assert.deepEqual([mailbox.name, mailbox.ref], ['Orders from the board', 'This computer · Orders from the board'])
+  const list = labelOf('jobs-list', 'Mac LaunchAgents', 'This computer · LaunchAgents list')
+  assert.deepEqual([list.name, list.ref], ['Scheduled jobs', 'This computer · LaunchAgents list'])
 })
 
-test('local: only the board\'s own words change - a job called "Back up the Mac" keeps its name', () => {
-  const out = localizeResponse({ readiness: { cards: [{ name: 'Back up the Mac', ref: 'This computer · local.Mac-backup', sentence: { text: 'Back up the Mac ran clean at {time}.' } }] } })
-  assert.equal(out.readiness.cards[0].name, 'Back up the Mac')
-  assert.equal(out.readiness.cards[0].ref, 'This computer · local.Mac-backup')
-  assert.equal(out.readiness.cards[0].sentence.text, 'Back up the Mac ran clean at {time}.')
+test('local: a job\'s own name is never touched, whatever it says - even the board\'s own label words', () => {
+  for (const name of ['Back up the Mac', 'Mac mailbox', 'Mac LaunchAgents', 'Mac restarted at 5', 'Your Mac last reported', 'Wait when the Mac checked at noon']) {
+    for (const source of ['workflow', 'launchd', 'hermes', 'routine']) {
+      const card = labelOf(source, name, `Team repo · ${name}`)
+      assert.equal(card.name, name, `${source}: ${name}`)
+      assert.equal(card.ref, `Team repo · ${name}`, `${source}: ${name}`)
+    }
+    // Its own sentence keeps the name word for word, and the board's words around it still change.
+    assert.equal(sentenceOf(`${name} ran clean at {time}.`), `${name} ran clean at {time}.`)
+    assert.equal(sentenceOf(`${name} was not running when the Mac checked at {time}.`), `${name} was not running when this computer checked at {time}.`)
+    assert.equal(sentenceOf(`${name} stopped right after the Mac restarted at {time}. Jobs like this need a person to check them after a restart.`), `${name} stopped right after this computer restarted at {time}. Jobs like this need a person to check them after a restart.`)
+    const gone = localizeResponse({ readiness: { switchedOff: [{ name, reason: 'Switched off: it is not armed.' }] } }).readiness.switchedOff[0]
+    assert.equal(gone.name, name)
+  }
+  // A run's own summary, which came from the repo, is left alone.
+  assert.equal(sentenceOf('Daily brief did not finish at {time}. Ask the Mac mini why.'), 'Daily brief did not finish at {time}. Ask the Mac mini why.')
+  assert.equal(restartOf('Mac restarted at 5 was my label').text, 'Mac restarted at 5 was my label')
 })
 
 test('local: the mailbox status line and file messages say "this computer"', () => {

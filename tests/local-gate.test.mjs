@@ -248,7 +248,7 @@ test('an ambient VIEW_KEY or PUBLIC_DASHBOARD on this computer does not decide w
 test('applyLocalEnv sets the run\'s settings and clears the ones that would change who may write', () => {
   const env = { VIEW_KEY: 'old', PUBLIC_DASHBOARD: 'true', EDIT_KEY: 'x', BOARD_PASSWORD: 'p', BOARD_USERNAME: 'u' }
   applyLocalEnv('new-key', env)
-  assert.deepEqual(env, { VIEW_KEY: 'new-key', PUBLIC_FIRE: 'true' })
+  assert.deepEqual(env, { VIEW_KEY: 'new-key', PUBLIC_FIRE: 'true', BOARD_LOCAL: 'true' })
 })
 
 test('the link is printed once by the command line and appears nowhere else, even after use and reuse', async () => {

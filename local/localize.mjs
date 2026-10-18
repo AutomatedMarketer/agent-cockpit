@@ -11,6 +11,8 @@
 // tests/local-wording.test.mjs reads every sentence in api/ and fails if one comes out still telling a student to
 // use Vercel or redeploy, so a new website sentence needs its rule here.
 
+import { READINESS_WORDS } from '../api/_readiness.js'
+
 const TRIGGER = /Vercel|redeploy|hosting environment|env var\b|\bMac\b/i
 export const SENTENCE_KEYS = Object.freeze(['error', 'why', 'note', 'say'])
 
@@ -19,7 +21,11 @@ const JOBS_NOT_YET = 'Starting jobs from the board is not set up on this compute
 const PICTURES = 'the pictures folder'
 
 // [exact wording from api/, what a student reads instead]. Specific rules go first.
+const ORDERS_OFF_HERE = "Orders by voice are off, because jobs are not switched on for this board yet. The Start Board window says why. Fix that, then double-click Start Board again."
 const RULES = [
+  // Orders by voice are off: on this computer the way back on is the Start Board window, not a website setting
+  [/^Orders by voice are off, because this board sends its orders to your Mac and the Mac mailbox is not set up yet\. The README's "Orders on your own computer" steps switch it on\.$/g, ORDERS_OFF_HERE],
+  [/^Orders by voice are off, because this board's Run buttons are not set up yet\. To switch them on, follow the README's "Orders by voice" steps: [^]*redeploy\.$/g, ORDERS_OFF_HERE],
   // OpenAI key: voice, pictures, meaning search
   [/set OPENAI_API_KEY in Vercel( \([^)]*\))? and redeploy/g, 'paste an OpenAI key in Settings$1'],
   [/set it in Vercel( \([^)]*\))? and redeploy/g, 'paste an OpenAI key in Settings$1'],
@@ -51,7 +57,6 @@ const RULES = [
   [/, or remove it, then redeploy\./g, ', or remove it.'],
   [/ then FIRE_KEY and FIRE_TRIGGERS in Vercel, then redeploy\./g, ' then FIRE_KEY and FIRE_TRIGGERS.'],
   // The Mac: on a student's computer the orders are done on this computer, at once
-  [/Orders by voice are off, because this board sends its orders to your Mac and the Mac mailbox is not set up yet\. The README's "Orders on your own computer" steps switch it on\./g, 'Orders by voice are off, because starting jobs from the board is not set up on this computer yet.'],
   [/(\d+) orders are already waiting for your Mac, so nothing was sent: check that your Mac is on and awake, then try again\./g, '$1 orders are already waiting, so nothing was sent: wait for this computer to finish some, then try again.'],
   [/Codex is not ready on your Mac/g, 'Codex is not ready on this computer'],
   [/^Your Mac has not reported on an order yet\./g, 'This computer has not reported on an order yet.'],
@@ -73,53 +78,111 @@ const RULES = [
   [/Set it in the hosting environment, then redeploy\./g, NOT_YET]
 ]
 
+// Only a string a rule really changed is tidied. A student's own words (a task, a note in stack.yml or proposals.yml) that
+// happen to say "Mac" or "Vercel" come back exactly as they were, spacing and all.
 export function localizeSentence(text) {
   if (typeof text !== 'string' || !TRIGGER.test(text)) return text
   let out = text
   for (const [pattern, replacement] of RULES) out = out.replace(pattern, replacement)
+  if (out === text) return text
   return out.replace(/\s+([.,;:])/g, '$1').replace(/\s{2,}/g, ' ').trim()
 }
 
-// The Readiness wall's lines (api/_readiness.js), built on the server for a Mac. Same rule as above: only the board's own
-// exact wording is rewritten, so a job called "Back up the Mac", or a label such as local.Mac-backup, is never touched.
-// The words are for a beginner: "this computer", and no "plist" or "control center".
-const READINESS_RULES = [
-  [/ Whether its last report was written is checked on the Mac control center, not here\./g, ' Whether its last report was written is not checked here.'],
-  [/\(its plist says Disabled\), so the Mac's scheduler is told/g, 'so its scheduler is told'],
-  [/turned off on the Mac so its scheduler/g, 'turned off on this computer, so its scheduler'],
-  [/The Mac does not say why; its log on the Mac has the reason\./g, 'This computer does not say why; its log has the reason.'],
-  [/The Mac's list of /g, "This computer's list of "],
-  [/and the Mac did not say why/g, 'and this computer did not say why'],
-  [/in the Mac's scheduler/g, "in this computer's scheduler"],
-  [/The Mac's last reading is/g, "This computer's last reading is"],
-  [/when the Mac checked at/g, 'when this computer checked at'],
-  [/right after the Mac restarted at/g, 'right after this computer restarted at'],
-  [/^Mac restarted at /g, 'This computer restarted at '],
-  [/so nothing on the Mac is being checked/g, 'so nothing on this computer is being checked'],
-  [/Nothing it changed left the Mac;/g, 'Nothing it changed left this computer;'],
-  [/^Your Mac (last reported|lost track|has not reported)/g, 'This computer $1'],
-  [/failed on your Mac at/g, 'failed on this computer at'],
-  [/cannot vouch for its mailbox\./g, 'cannot vouch for its orders.'],
-  [/ \(Mac time\)/g, " (this computer's time)"],
-  [/^Mac mailbox$/g, 'Orders from the board'],
-  [/ · Mac mailbox$/g, ' · Orders from the board'],
-  [/^Mac LaunchAgents$/g, 'Scheduled jobs']
-]
+// The Readiness wall's lines (api/_readiness.js), built on the server for a Mac. Stricter than the sentences above, because
+// this wall is full of the team's own words (job names, labels, a run's own summary):
+//  - only named places in the answer are looked at (a card's sentence, schedule and quiet-reason text, a restart line, a
+//    switched-off reason, the board's own two card labels) - never a job's name;
+//  - inside a place, a line is rewritten only when it is, whole, one of the board's own sentences from api/_readiness.js
+//    (matched with the job's name and the like left as they are); anything else comes back as it was.
+// A new sentence in api/_readiness.js that says "Mac" needs its line in READINESS_LINES: tests/local-readiness-words.test.mjs
+// goes through every one.
+const READINESS_LINES = {
+  listUnavailable: "This computer's list of {what} was not available at {time}: {why}.",
+  listUnavailableNoWhy: "This computer's list of {what} was not available at {time}, and this computer did not say why.",
+  notChecked: "Not checked since {date}. This computer's last reading is {hours} h old.",
+  notLoaded: "{name} is installed but not switched on in this computer's scheduler, so it will not run.",
+  notRunning: '{name} was not running when this computer checked at {time}.',
+  running: '{name} was running when this computer checked at {time}.',
+  failedExit: '{name} stopped with error code {code}. This computer does not say why; its log has the reason.',
+  failedAfterRestart: '{name} stopped right after this computer restarted at {time}. Jobs like this need a person to check them after a restart.',
+  restartedAt: 'This computer restarted at {stamp}',
+  hermesRunning: 'Hermes was running when this computer checked at {time}.',
+  hermesDown: 'Hermes was not running when this computer checked at {time}.',
+  collectorSilent: 'The status collector has not written its readings since {date}, so nothing on this computer is being checked.',
+  mailboxFine: 'This computer last reported on its orders at {time}, and none failed in the last day.',
+  mailboxFailed: 'An order failed on this computer at {time}. Nothing it changed left this computer; send it again from the board.',
+  mailboxLost: 'This computer lost track of an order at {time} and will not run it again by itself. Check the board, then send it again if it is not there.',
+  mailboxSilent: 'This computer has not reported on an order since {date}, so the board cannot vouch for its orders.'
+}
+const MANAGED_OWNER_BEFORE = 'Whether its last report was written is checked on the Mac control center, not here.'
+const MANAGED_OWNER_AFTER = 'Whether its last report was written is not checked here.'
+const DISABLED_BEFORE = "Switched off: turned off on the Mac (its plist says Disabled), so the Mac's scheduler is told not to run it."
+const DISABLED_AFTER = 'Switched off: turned off on this computer, so its scheduler is told not to run it.'
+// The board fills these in the sentence before it leaves; {time}, {date}, {hours} and {stamp} stay for the page.
+const FILLED_BY_BOARD = new Set(['name', 'code', 'what', 'why', 'summary'])
 
-// A readiness string; `key` is the field it sits in ("where" is a computer's name, "Mac" when it gave none).
-function localizeReadinessText(text, key) {
-  if (key === 'where' && text === 'Mac') return 'This computer'
-  let out = text
-  for (const [pattern, replacement] of READINESS_RULES) out = out.replace(pattern, replacement)
-  return out.replace(/^Mac · /, 'This computer · ')
+function lineRule(before, after) {
+  const names = []
+  const source = before.split(/(\{\w+\})/).map((part) => {
+    const holder = /^\{(\w+)\}$/.exec(part)
+    if (!holder) return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (!FILLED_BY_BOARD.has(holder[1])) return part.replace(/[{}]/g, '\\$&')
+    names.push(holder[1])
+    return '([\\s\\S]*?)'
+  }).join('')
+  const pattern = new RegExp(`^${source}$`)
+  return (text) => {
+    const found = pattern.exec(text)
+    return found ? after.replace(/\{(\w+)\}/g, (whole, name) => (names.includes(name) ? found[names.indexOf(name) + 1] : whole)) : null
+  }
+}
+let lineRules = null
+function readinessLine(text) {
+  if (text === READINESS_WORDS.managedOwner) return `Its scheduler is running. ${MANAGED_OWNER_AFTER}`
+  lineRules ??= Object.entries(READINESS_LINES).map(([key, after]) => lineRule(READINESS_WORDS[key], after))
+  // A scheduler line is followed by a second sentence of the board's: split that off (it is at the very end), then the rest.
+  const tail = ` Its scheduler is running. ${MANAGED_OWNER_BEFORE}`
+  const body = text.endsWith(tail) ? text.slice(0, -tail.length) : text
+  const [done] = lineRules.map((rule) => rule(body)).filter((one) => one !== null)
+  if (done === undefined) return text.endsWith(tail) ? `${text.slice(0, -tail.length)} Its scheduler is running. ${MANAGED_OWNER_AFTER}` : text
+  return text.endsWith(tail) ? `${done} Its scheduler is running. ${MANAGED_OWNER_AFTER}` : done
+}
+const readinessSchedule = (text) => (text.endsWith(' (Mac time)') ? `${text.slice(0, -' (Mac time)'.length)} (this computer's time)` : text)
+const MAC_SIDE = new Set(['launchd', 'hermes', 'hermes-service', 'collector', 'mailbox', 'jobs-list'])
+
+function readinessCard(card) {
+  if (card === null || typeof card !== 'object') return card
+  const out = { ...card }
+  for (const key of ['sentence', 'silentSentence', 'lastReport']) {
+    if (typeof card[key]?.text === 'string') out[key] = { ...card[key], text: readinessLine(card[key].text) }
+  }
+  if (typeof card.schedule?.text === 'string') out.schedule = { ...card.schedule, text: readinessSchedule(card.schedule.text) }
+  // The board's own two labels; a job that is merely CALLED the same keeps its name (its source is not these).
+  if (card.source === 'mailbox') {
+    if (card.name === 'Mac mailbox') out.name = 'Orders from the board'
+    if (typeof card.ref === 'string' && card.ref.endsWith(' · Mac mailbox')) out.ref = `${card.ref.slice(0, -' · Mac mailbox'.length)} · Orders from the board`
+  }
+  if (card.source === 'jobs-list' && card.name === 'Mac LaunchAgents') out.name = 'Scheduled jobs'
+  // A card for a computer that gave no name is labelled "Mac" by the board.
+  if (MAC_SIDE.has(card.source) && typeof out.ref === 'string' && out.ref.startsWith('Mac · ')) out.ref = `This computer · ${out.ref.slice('Mac · '.length)}`
+  return out
 }
 
-export function localizeReadiness(value, key = '', depth = 0) {
-  if (typeof value === 'string') return localizeReadinessText(value, key)
-  if (depth > 12 || value === null || typeof value !== 'object') return value
-  if (Array.isArray(value)) return value.map((item) => localizeReadiness(item, key, depth + 1))
-  const out = {}
-  for (const [name, inner] of Object.entries(value)) out[name] = localizeReadiness(inner, name, depth + 1)
+export function localizeReadiness(readiness) {
+  if (readiness === null || typeof readiness !== 'object' || Array.isArray(readiness)) return readiness
+  const out = { ...readiness }
+  if (Array.isArray(readiness.cards)) out.cards = readiness.cards.map(readinessCard)
+  if (Array.isArray(readiness.restarts)) {
+    out.restarts = readiness.restarts.map((line) => (line === null || typeof line !== 'object' ? line : {
+      ...line,
+      ...(line.where === 'Mac' ? { where: 'This computer' } : {}),
+      ...(line.text === READINESS_WORDS.restartedAt ? { text: READINESS_LINES.restartedAt } : {})
+    }))
+  }
+  if (Array.isArray(readiness.switchedOff)) {
+    out.switchedOff = readiness.switchedOff.map((entry) => (entry?.reason === DISABLED_BEFORE ? { ...entry, reason: DISABLED_AFTER } : entry))
+  }
+  if (typeof readiness.jobs?.why === 'string') out.jobs = { ...readiness.jobs, why: localizeSentence(readiness.jobs.why) }
   return out
 }
 

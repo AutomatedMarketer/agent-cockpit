@@ -218,6 +218,7 @@ function splitUrl(url) {
 export function applyLocalEnv(viewKey, env = process.env) {
   env.VIEW_KEY = viewKey
   env.PUBLIC_FIRE = 'true' // the fire key is waived; the view gate and same-origin check still run
+  env.BOARD_LOCAL = 'true' // the board's own words (api/_orders.js) are a student's, not the website's
   delete env.PUBLIC_DASHBOARD
   delete env.EDIT_KEY
   delete env.BOARD_PASSWORD
