@@ -32,6 +32,7 @@ test('the reasons the Mac gives are said in the contract\'s own words, both kind
   const expected = {}
   for (const state of ['refused', 'failed']) expected[state] = { ...fixture.status.reasons[state], ...fixture.status.workers.reasons[state] }
   expected.failed['tool-refused'] = 'it tried a tool it may not use'
+  expected.refused['codex-repo-refused'] = 'your team repo has something Codex could pick up and follow (a .codex or .agents folder, or a link), so it was not run'
   assert.deepEqual(MAC_REASON_WORDS, expected)
   assert.deepEqual(MAILBOX_CONTRACT.status.reasons, fixture.status.reasons)
 })

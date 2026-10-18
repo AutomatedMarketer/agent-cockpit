@@ -4893,7 +4893,8 @@ const MAC_REASON_WORDS = {
     'several-rows': 'more than one row in proposals.yml matches it',
     'no-workflow': 'that job has no workflow file',
     'not-ready': 'its daily check found a problem with its login or settings',
-    'worker-not-allowed': 'that job is set to another worker on that computer'
+    'worker-not-allowed': 'that job is set to another worker on that computer',
+    'codex-repo-refused': 'your team repo has something Codex could pick up and follow (a .codex or .agents folder, or a link), so it was not run'
   },
   failed: {
     'change-refused': 'the change touched files it may not touch',

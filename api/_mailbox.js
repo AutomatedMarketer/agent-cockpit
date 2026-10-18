@@ -107,7 +107,9 @@ export const MAILBOX_CONTRACT = Object.freeze({
       values: Object.freeze(['claude', 'codex']),
       allowsOptional: Object.freeze(['workers', 'codexJobs']),
       reasons: Object.freeze({
-        refused: Object.freeze({ 'worker-not-allowed': 'that job is set to another worker on that computer' }),
+        refused: Object.freeze({ 'worker-not-allowed': 'that job is set to another worker on that computer',
+          'codex-repo-refused': 'the team repo holds something Codex would read or follow (a .codex or .agents folder at its top, or a link)'
+        }),
         failed: Object.freeze({ 'codex-failed': 'Codex stopped with an error' })
       })
     })

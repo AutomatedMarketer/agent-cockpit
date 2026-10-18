@@ -85,9 +85,11 @@ test('workers and codexJobs are size-capped and read as a stranger\'s: a long or
 
 test('the two new reason words are read in an order of the right kind, and only there', () => {
   const entry = (state, why) => ({ ...clone(SAMPLE.orders.find((one) => one.state === state)), id: 'ab'.repeat(16), why })
-  const refused = clone(SAMPLE)
-  refused.orders = [entry('refused', 'worker-not-allowed')]
-  assert.equal(computerOf(refused).orders[0].why, 'worker-not-allowed')
+  for (const word of Object.keys(WORKERS.reasons.refused)) {
+    const refused = clone(SAMPLE)
+    refused.orders = [entry('refused', word)]
+    assert.equal(computerOf(refused).orders[0].why, word)
+  }
   const failed = clone(SAMPLE)
   failed.orders = [entry('failed', 'codex-failed')]
   assert.equal(computerOf(failed).orders[0].why, 'codex-failed')
@@ -107,6 +109,9 @@ test('the sentences said for a reason: the contract\'s words, plus the two new o
     }
   }
   assert.equal(MAC_REASON_WORDS.refused['worker-not-allowed'], WORKERS.reasons.refused['worker-not-allowed'])
+  // The contract's sentence for a repo Codex would trust is jargon; the board says it plainly, and this pins the words.
+  assert.ok(Object.hasOwn(WORKERS.reasons.refused, 'codex-repo-refused'))
+  assert.equal(MAC_REASON_WORDS.refused['codex-repo-refused'], 'your team repo has something Codex could pick up and follow (a .codex or .agents folder, or a link), so it was not run')
   assert.equal(MAC_REASON_WORDS.failed['codex-failed'], WORKERS.reasons.failed['codex-failed'])
   // A tool refused may be Claude's or Codex's: the sentence names neither.
   assert.doesNotMatch(MAC_REASON_WORDS.failed['tool-refused'], /claude|codex/i)
