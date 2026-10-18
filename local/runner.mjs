@@ -27,7 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import { addressHasLogin, findGit, gitEnvironment, githubNames, isInside, refreshNow, runGit } from '../api/_repo.js'
+import { addressHasLogin, checkOriginAddresses, findGit, gitEnvironment, githubNames, isInside, readOriginConfig, refreshNow, runGit } from '../api/_repo.js'
 import { mailboxConfig } from '../api/_mailbox.js'
 import mailboxHandler from '../api/mailbox.js'
 import { shimResponse } from './vercel-shim.mjs'
@@ -52,7 +52,7 @@ export const MAILBOX_NAMES = Object.freeze(['FIRE_MODE', 'FIRE_TRIGGERS', 'FIRE_
 
 export const SAY = Object.freeze({
   notGitHub: 'Jobs are off: the team folder is not on GitHub, so the board cannot send it orders.',
-  hasLogin: 'Jobs are off: the team folder\'s GitHub address holds a password or token, which any program on this computer could read while git runs. Clone it again with a plain https://github.com/... address and let Git\'s sign-in helper hold the login.',
+  hasLogin: 'Jobs are off: the team folder\'s GitHub address holds a user name, password or token, which any program on this computer could read while git runs. Clone it again with a plain https://github.com/... address and let Git\'s sign-in helper hold the login.',
   noCode: 'Jobs are off: the runner code is not installed next to the board (the runner-code folder). Ask Claude to set up jobs on this computer.',
   badPlaces: 'Jobs are off: the board\'s folders overlap the team folder. Ask Claude to set up jobs on this computer again.',
   badFiles: 'Jobs are off: the runner\'s settings could not be written or read. Ask Claude to set up jobs on this computer again.',
@@ -398,15 +398,16 @@ export function kickAfterOrders(handler, kick) {
 
 // ---- turning jobs on at start --------------------------------------------------------------------------------
 
-// The team folder's origin: { url } as its config writes it, and `login` - whether git would hand a login to GitHub with it,
-// asked of the address as written and as git will really use it (`ls-remote --get-url` applies url.<base>.insteadOf rules,
-// which can put a token into a plain address, and talks to no server). null when git would not say.
+// The team folder's origin, asked with no network the way the board's folder reader asks it (api/_repo.js): { url, login,
+// usable }. url is the first address as written; login and usable come from every fetch and push address, written and as
+// git will use them (insteadOf, pushInsteadOf, pushurl) - checkOriginAddresses. null when git would not say.
 async function originAddress(teamFolder) {
-  const ask = async (args) => (await runGit(args, { cwd: teamFolder, maxBuffer: 4096 })).stdout.toString('utf8').trim()
+  const run = (args, options) => runGit(args, { cwd: teamFolder, ...options })
   try {
-    const url = await ask(['config', '--get', 'remote.origin.url'])
-    const used = url ? await ask(['ls-remote', '--get-url', 'origin']) : ''
-    return { url, login: addressHasLogin(url) || addressHasLogin(used) }
+    const read = await readOriginConfig(run)
+    if (read === null) return null
+    const answer = await checkOriginAddresses(run, read.urls)
+    return answer === null ? null : { url: read.urls[0] ?? '', ...answer }
   } catch {
     return null
   }
@@ -482,7 +483,7 @@ export async function prepareJobs({
   }
   const origin = await originAddress(teamFolder)
   if (origin?.login) return off(SAY.hasLogin)
-  const url = origin?.url
+  const url = origin?.usable ? origin.url : null
   const names = url ? githubNames(url) : null
   if (!names) return off(SAY.notGitHub)
   const repo = `${names.owner}/${names.repo}`

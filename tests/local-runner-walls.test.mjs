@@ -497,3 +497,88 @@ test('addressHasLogin is the runner\'s own rule, case for case (when the runner 
   ]
   for (const value of cases) assert.equal(addressHasLogin(value), workcopy.addressHasLogin(value), String(value))
 })
+
+// The user's own git config (~/.gitconfig) for the length of `work`: HOME and USERPROFILE point at a folder holding `text`.
+async function withHomeConfig(text, work) {
+  const home = temp('jobs-home')
+  writeFileSync(join(home, '.gitconfig'), text)
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+  try {
+    process.env.HOME = home
+    process.env.USERPROFILE = home
+    delete process.env.XDG_CONFIG_HOME
+    return await work()
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+test('jobs stay off when a push address holds a token: a pushurl, or a pushInsteadOf in the repo or in ~/.gitconfig', async () => {
+  const pushLogin = `https://x-access-token:${FAKE_TOKEN}@github.com/`
+  const cases = [
+    ['pushurl', (team) => git(team, 'config', 'remote.origin.pushurl', LOGIN_GH), ''],
+    ['repo pushInsteadOf', (team) => git(team, 'config', `url.${pushLogin}.pushInsteadOf`, 'https://github.com/'), ''],
+    ['global pushInsteadOf', () => {}, `[url "${pushLogin}"]\n\tpushInsteadOf = https://github.com/\n`]
+  ]
+  for (const [name, setup, home] of cases) {
+    const world = makeWorld()
+    try {
+      setup(world.team)
+      await withHomeConfig(home, async () => {
+        const off = jobsOffForLogin(world)
+        assert.equal(await off.run(), null, name)
+        assert.deepEqual(off.lines, [SAY.hasLogin], name)
+        assert.equal(existsSync(world.work), false, name)
+      })
+    } finally {
+      world.done()
+    }
+  }
+})
+
+test('jobs stay off when git would send the team repo anywhere but GitHub, or the first of two url lines holds a token', async () => {
+  const cases = [
+    ['a rewrite to another host', (team, world) => { git(team, 'config', '--unset', `url.${world.bare}.insteadOf`); git(team, 'config', 'url.https://evil.example/.insteadOf', 'https://github.com/') }, SAY.notGitHub],
+    ['a token with a space before the @', (team, world) => { git(team, 'config', '--unset', `url.${world.bare}.insteadOf`); git(team, 'config', `url.https://${FAKE_TOKEN} @github.com/.insteadOf`, 'https://github.com/') }, SAY.notGitHub],
+    ['two url lines, the first with a token', (team, world) => {
+      git(team, 'config', '--unset-all', 'remote.origin.url')
+      git(team, 'config', '--add', 'remote.origin.url', LOGIN_GH)
+      git(team, 'config', '--add', 'remote.origin.url', PLAIN_GH)
+      git(team, 'config', `url.${world.bare}.insteadOf`, LOGIN_GH)
+    }, SAY.hasLogin]
+  ]
+  for (const [name, setup, said] of cases) {
+    const world = makeWorld()
+    try {
+      setup(world.team, world)
+      await withHomeConfig('', async () => {
+        const off = jobsOffForLogin(world)
+        assert.equal(await off.run(), null, name)
+        assert.deepEqual(off.lines, [said], name)
+        assert.ok(!off.lines.join('\n').includes(FAKE_TOKEN), name)
+        assert.equal(existsSync(world.work), false, name)
+      })
+    } finally {
+      world.done()
+    }
+  }
+})
+
+test('the jobs line says user name, password or token, and a user name alone keeps jobs off too', async () => {
+  assert.match(SAY.hasLogin, /holds a user name, password or token/)
+  const world = makeWorld()
+  try {
+    const named = 'https://someone@github.com/ExampleOwner/example-team.git'
+    git(world.team, 'remote', 'set-url', 'origin', named)
+    git(world.team, 'config', `url.${world.bare}.insteadOf`, named)
+    const off = jobsOffForLogin(world)
+    assert.equal(await off.run(), null)
+    assert.deepEqual(off.lines, [SAY.hasLogin])
+  } finally {
+    world.done()
+  }
+})

@@ -64,6 +64,60 @@ export function githubNames(url) {
   return found ? { owner: found[1], repo: found[2] } : null
 }
 
+// A folder on this computer (C:\... on Windows, /... elsewhere), as an address: git reads it itself, with no
+// program that talks to a server and nothing on a network. (The tests point GitHub addresses at such folders.)
+function isLocalFolder(address, platform = process.platform) {
+  return platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(address) : /^\/(?!\/)/.test(address)
+}
+
+// The origin as the repo's config writes it, asked with one `git config` and no network: { urls, partial }, where urls
+// is every remote.origin.url line ([] for no origin) and partial says the folder is a partial clone (one whose reads
+// can fetch a missing object). null when git
+// would not say (exit status 1 is git's "none of these settings"; anything else is no answer). `run(args, options)`
+// runs git in the folder. Asked with `config`, not `remote`: the options git is started with can make a remote
+// appear in the list.
+export async function readOriginConfig(run) {
+  let text
+  try {
+    text = (await run(['config', '-z', '--get-regexp', '^(remote\\.origin\\.url|extensions\\.partialclone|remote\\..+\\.promisor)$'], { maxBuffer: 65536 })).stdout.toString('utf8')
+  } catch (error) {
+    return error?.code === 1 ? { urls: [], partial: false } : null
+  }
+  const urls = []
+  let partial = false
+  for (const record of text.split('\0')) {
+    const cut = record.indexOf('\n')
+    const key = (cut < 0 ? record : record.slice(0, cut)).toLowerCase()
+    if (key === 'remote.origin.url' && cut >= 0) urls.push(record.slice(cut + 1).trim())
+    // A partial clone names the remote it fetches missing objects from: extensions.partialClone (older git) or
+    // remote.<name>.promisor (newer git). Any such setting counts unless it says false.
+    else if (key === 'extensions.partialclone') partial = true
+    else if (/^remote\..+\.promisor$/.test(key) && !/^(?:false|no|off|0)$/i.test(cut < 0 ? 'true' : record.slice(cut + 1).trim())) partial = true
+  }
+  return { urls, partial }
+}
+
+// Whether git may fetch from origin, asked of every address git WILL use as well as of those written: a
+// url.<base>.insteadOf or pushInsteadOf (in the repo's config, the user's or the system's) changes the address at
+// the moment git connects, and a pushurl is an address of its own. `git remote get-url --all` and
+// `--push --all` apply those rules and touch no network (the runner asks the same two). Returns
+// { login, usable }: login when any address holds a user name, password or token (addressHasLogin); usable when
+// none does, every written one is a GitHub address, and every one git will use is a GitHub address or a folder on
+// this computer. null when git would not say. The addresses themselves are never returned.
+export async function checkOriginAddresses(run, urls) {
+  if (!urls.length) return { login: false, usable: false }
+  const lines = async (args) => (await run(args, { maxBuffer: 65536 })).stdout.toString('utf8').split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  let used
+  try {
+    used = [...(await lines(['remote', 'get-url', '--all', 'origin'])), ...(await lines(['remote', 'get-url', '--push', '--all', 'origin']))]
+  } catch {
+    return null
+  }
+  const login = [...urls, ...used].some(addressHasLogin)
+  const usable = !login && used.length > 0 && urls.every((url) => githubNames(url) !== null) && used.every((url) => githubNames(url) !== null || isLocalFolder(url))
+  return { login, usable }
+}
+
 export function repoFolder(env = process.env) {
   return env.REPO_SOURCE === 'folder' && typeof env.REPO_FOLDER === 'string' && path.isAbsolute(env.REPO_FOLDER)
     ? env.REPO_FOLDER
@@ -106,7 +160,7 @@ function ourFailure(sentence, status) {
 export const FOLDER_NOTES = {
   noRemote: 'Jobs are off: this folder is not on GitHub, so nothing the team pushes can reach it.',
   notGitHub: 'The board is not refreshing this folder: its origin is not a GitHub address, so it shows what was last fetched.',
-  hasLogin: 'The board is not refreshing this folder, so it shows what was last fetched: its GitHub address holds a password or token, which any program on this computer could read while git runs. Clone it again with a plain https://github.com/... address and let Git\'s sign-in helper hold the login.',
+  hasLogin: 'The board is not refreshing this folder, so it shows what was last fetched: its GitHub address holds a user name, password or token, which any program on this computer could read while git runs. Clone it again with a plain https://github.com/... address and let Git\'s sign-in helper hold the login.',
   unknown: 'The board could not tell whether this folder is on GitHub, so it shows nothing until git answers.',
   truncated: 'This team folder has more files than the board lists, so only the first part of it is shown.'
 }
@@ -160,7 +214,8 @@ function release() {
 
 // The real runner: git with `args` in `cwd`. Resolves { stdout } (a Buffer) or rejects with the child
 // process error (code, stderr, killed). Tests hand in their own. noLazyFetch: git must not fetch an object
-// it is missing (a partial clone would, from the origin, behind the board's back).
+// it is missing (a partial clone would, from the origin, behind the board's back). git honours it from 2.45.0
+// (and the May 2024 backports), so it is a second wall: a partial clone with a login origin is not read at all.
 export async function runGit(args, { cwd, timeoutMs = READ_TIMEOUT_MS, maxBuffer = MAX_FILE_BYTES, noLazyFetch = false } = {}) {
   await slot()
   try {
@@ -533,39 +588,43 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
   const git = (args, options) => run(args, { cwd: folder, ...options })
   let lastFetch = { at: -Infinity, promise: null }
   const trees = new Map() // commit -> Set of blob ids it lists
-  // url: the address, '' for none, null when not known. login: git would hand a login to the server with it.
-  let remote = { url: null, login: false, at: -Infinity }
+  // As the config writes it (kept a minute): url, the first origin address ('' for none, null when git would not
+  // say), every url line, and whether the folder is a partial clone.
+  let remote = { url: null, urls: [], partial: false, at: -Infinity }
+  // What git will really use (kept a minute for what the page says, never for a fetch): { login, usable }.
+  let addresses = { answer: null, at: -Infinity }
 
-  // The origin's address as written in the repo's config: a string, '' for no origin at all, or null
-  // when git would not say. (Exit status 1 is git's "no such setting"; anything else is no answer.)
-  // An answer is kept for a minute (the owner may add a remote); "would not say" is never kept, and
-  // is never taken for "no remote". Asked with `config`, not `remote`: the options git is started
-  // with can make a remote appear in the list.
-  //
-  // Whether it holds a login is asked of the address as written AND as git will really use it: a
-  // url.<base>.insteadOf rule (in this repo's config or the user's own) can turn a plain address into one
-  // with a token in it. `ls-remote --get-url` applies those rules and says the result without talking to
-  // any server. Neither question puts the address on a command line; only a fetch would.
-  async function originUrl() {
+  // An answer is kept for a minute (the owner may add a remote); "would not say" is never kept, and is never taken
+  // for "no remote". fresh: asked again whatever is kept.
+  async function originUrl({ fresh = false } = {}) {
     const t = now()
-    if (remote.url !== null && t - remote.at < REMOTE_RECHECK_MS) return remote.url
-    try {
-      const { stdout } = await git(['config', '--get', 'remote.origin.url'], { maxBuffer: 4096 })
-      const url = stdout.toString('utf8').trim()
-      const used = url ? (await git(['ls-remote', '--get-url', 'origin'], { maxBuffer: 4096 })).stdout.toString('utf8').trim() : ''
-      remote = { url, login: addressHasLogin(url) || addressHasLogin(used), at: t }
-    } catch (error) {
-      if (error?.code === 1) remote = { url: '', login: false, at: t }
-      else remote = { url: null, login: false, at: -Infinity }
-    }
+    if (!fresh && remote.url !== null && t - remote.at < REMOTE_RECHECK_MS) return remote.url
+    const read = await readOriginConfig(git)
+    remote = read === null ? { url: null, urls: [], partial: false, at: -Infinity } : { url: read.urls[0] ?? '', urls: read.urls, partial: read.partial, at: t }
     return remote.url
   }
 
-  // true when nothing this reader runs may reach the server: the origin holds a login, or git would not say
-  // what the origin is. Then the board never fetches, and its reads are told not to fetch a missing object.
-  async function quiet() {
+  // { login, usable } for the addresses git will use (checkOriginAddresses), or null when git would not say. fresh:
+  // asked again from the config up, never from what is kept - what every fetch is decided on, so an address with a
+  // token set a moment ago is never fetched with.
+  async function originAddresses({ fresh = false } = {}) {
+    if (!fresh && addresses.answer && addresses.at >= remote.at && now() - addresses.at < REMOTE_RECHECK_MS) return addresses.answer
+    const url = await originUrl({ fresh })
+    const answer = url === null ? null : await checkOriginAddresses(git, remote.urls)
+    addresses = answer === null ? { answer: null, at: -Infinity } : { answer, at: now() }
+    return answer
+  }
+
+  // How the folder may be read: 'normal'; 'quiet' when nothing may reach a server (the origin holds a login, or git
+  // would not say) - reads then run one at a time with lazy fetching off; 'blocked' for a partial clone whose origin
+  // holds a login, which is not read at all (on a git before 2.45.0 nothing stops a read fetching a missing object).
+  async function readMode() {
     const url = await originUrl()
-    return url === null || remote.login
+    if (url === '') return 'normal'
+    const answer = url === null ? null : await originAddresses()
+    if (answer === null) return 'quiet'
+    if (answer.login) return remote.partial ? 'blocked' : 'quiet'
+    return 'normal'
   }
 
   // true / false, or null when git would not say.
@@ -574,9 +633,12 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     return url === null ? null : url !== ''
   }
 
+  const fetchDue = () => !(lastFetch.promise && now() - lastFetch.at < FETCH_EVERY_MS)
+
   // At most one fetch per FETCH_EVERY_MS, shared by everyone asking meanwhile. A failed fetch
   // (offline, signed out) is not an error: the board keeps showing what it last fetched.
-  function refresh(branch) {
+  //   checked: the caller asked originAddresses({ fresh: true }) just now, so it is not asked twice.
+  function refresh(branch, { checked = false } = {}) {
     const t = now()
     if (lastFetch.promise && t - lastFetch.at < FETCH_EVERY_MS) return lastFetch.promise
     // Accepted, not coded around: a student's own .git/config could `include.path` a committed file
@@ -584,9 +646,10 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     // do that can already run programs as them.
     // Only a GitHub address is fetched from: any other origin could be a program (an ext:: or a
     // local path) rather than a server. Its last fetched state is shown as it is. Nor one that holds a
-    // login (quiet): git would put the login on the command line of the program it fetches with.
-    const promise = (async () => ((await quiet()) ? null : origin()))().then((names) =>
-      names
+    // login: git would put the login on the command line of the program it fetches with. Decided on the
+    // addresses as git will use them, asked again right before this fetch (originAddresses, usable).
+    const promise = (async () => (checked ? addresses.answer : await originAddresses({ fresh: true })))().then((answer) =>
+      answer?.usable
         ? git(
             // The stock upload-pack program, whatever remote.origin.uploadpack in the repo's own config names
             // (this option wins over the config; a -c setting would only be a second value after it).
@@ -603,7 +666,7 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     // The same answer for a moment, unless a fetch has been started since it was asked.
     if (revKept.ref === refName && now() - revKept.at < REVPARSE_KEPT_MS && lastFetch.at <= revKept.at) return revKept.id
     try {
-      const { stdout } = await git(['rev-parse', '--verify', '--quiet', `${refName}^{commit}`], { maxBuffer: 4096, noLazyFetch: await quiet() })
+      const { stdout } = await git(['rev-parse', '--verify', '--quiet', `${refName}^{commit}`], { maxBuffer: 4096, noLazyFetch: (await readMode()) !== 'normal' })
       const id = stdout.toString('utf8').trim()
       const found = COMMIT_ID.test(id) ? id : null
       if (found) revKept = { ref: refName, id: found, at: now() }
@@ -616,11 +679,15 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
   // The commit at the head of the branch, or null when it cannot be said.
   async function head(branch) {
     if (!isBranchName(branch)) return null
+    // A fetch is due: what it will be decided on is asked now, fresh, and the rest of this read uses that answer.
+    const due = fetchDue()
+    if (due) await originAddresses({ fresh: true })
     const has = await hasOrigin()
     // git would not say whether there is a remote: no answer, never the local branch (which can hold unpushed work).
     if (has === null) return null
+    if ((await readMode()) === 'blocked') return null
     if (has) {
-      await refresh(branch)
+      await refresh(branch, { checked: due })
       return revParse(`refs/remotes/origin/${branch}`)
     }
     return revParse(`refs/heads/${branch}`)
@@ -634,6 +701,8 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
 
   // { tree: [{ path, type: 'blob', size, sha, mode }] }, the shape GitHub's tree call gives.
   async function tree(ref) {
+    const mode = await readMode()
+    if (mode === 'blocked') throw ourFailure(FOLDER_NOTES.hasLogin)
     const commit = await commitOf(ref)
     if (!commit) throw ourFailure(FOLDER_UNREADABLE)
     if (treeKept.has(commit)) {
@@ -643,7 +712,7 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     }
     let stdout
     try {
-      ;({ stdout } = await git(['ls-tree', '-r', '-l', '-z', commit], { maxBuffer: MAX_TREE_BYTES, noLazyFetch: await quiet() }))
+      ;({ stdout } = await git(['ls-tree', '-r', '-l', '-z', commit], { maxBuffer: MAX_TREE_BYTES, noLazyFetch: mode !== 'normal' }))
     } catch {
       throw ourFailure(FOLDER_UNREADABLE)
     }
@@ -691,10 +760,13 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
       const laid = (await overlayFiles({ fresh: false })).get(repoPath)
       if (laid) return laid.toString('utf8')
     }
+    const mode = await readMode()
+    if (mode === 'blocked') return null
     const commit = await commitOf(ref)
     if (!commit) return null
-    // The long-lived program cannot be told not to fetch a missing object, so a quiet folder is read one call at a time.
-    const noLazyFetch = await quiet()
+    // The long-lived program is shared by every read of this folder and was started without lazy fetching turned
+    // off, so a quiet folder is read one call at a time, each with it off.
+    const noLazyFetch = mode !== 'normal'
     if (reader && !noLazyFetch) return readThrough(`${commit}:${repoPath}`, `${commit}:${repoPath}`)
     try {
       const { stdout } = await git(['cat-file', 'blob', `${commit}:${repoPath}`], { noLazyFetch })
@@ -709,7 +781,9 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
   async function blob(sha) {
     if (typeof sha !== 'string' || !COMMIT_ID.test(sha)) return null
     if (![...trees.values()].some((shas) => shas.has(sha))) return null
-    const noLazyFetch = await quiet()
+    const mode = await readMode()
+    if (mode === 'blocked') return null
+    const noLazyFetch = mode !== 'normal'
     if (reader && !noLazyFetch) return readThrough(sha, `blob:${sha}`)
     try {
       const { stdout } = await git(['cat-file', 'blob', sha], { noLazyFetch })
@@ -731,9 +805,11 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     const has = await hasOrigin()
     if (has === null) return { hasOrigin: null, github: false, note: FOLDER_NOTES.unknown }
     if (!has) return { hasOrigin: false, github: false, note: FOLDER_NOTES.noRemote }
-    if (remote.login) return { hasOrigin: true, github: false, note: FOLDER_NOTES.hasLogin }
+    const answer = await originAddresses()
+    if (answer === null) return { hasOrigin: null, github: false, note: FOLDER_NOTES.unknown }
+    if (answer.login) return { hasOrigin: true, github: false, note: FOLDER_NOTES.hasLogin }
     const names = await origin()
-    return names ? { hasOrigin: true, github: true, note: null } : { hasOrigin: true, github: false, note: FOLDER_NOTES.notGitHub }
+    return names && answer.usable ? { hasOrigin: true, github: true, note: null } : { hasOrigin: true, github: false, note: FOLDER_NOTES.notGitHub }
   }
 
   // Forget the last fetch, so the next read fetches at once instead of waiting out FETCH_EVERY_MS. Used

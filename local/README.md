@@ -150,7 +150,8 @@ Jobs on this computer (T8) - the Run, task and card buttons:
   `node runner-code\scripts\mailbox-runner.mjs --selftest --state-dir "%LOCALAPPDATA%\Agent Board\state\runner" --work-dir "%LOCALAPPDATA%\Agent Board\work" --env-file "%LOCALAPPDATA%\Agent Board\state\runner\runner.env"`.
   Until it passes, card orders work and Run orders are refused as "not ready".
 - **Jobs stay off**, with one line in the Start window, when the team folder is not on GitHub, its GitHub address holds
-  a password or token (git would put it on a command line every program can read, and the runner refuses it), `runner-code`
+  a user name, password or token, in any fetch or push address as written or as git rewrites it (git would put it on a
+  command line every program can read, and the runner refuses it), git would send it anywhere but GitHub, `runner-code`
   is missing (or is inside the team folder), or the runner's files cannot be written or read. Such an address is never
   copied into the runner's work copy, and a work copy an older board left with one is made again.
 - git for the runner is found once on PATH by its full path (never one inside the team folder, the board, the runner

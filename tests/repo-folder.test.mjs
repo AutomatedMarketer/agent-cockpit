@@ -25,6 +25,7 @@ import {
   findGit,
   isInside,
   addressHasLogin,
+  readOriginConfig,
   gitProcessesStarted
 } from '../api/_repo.js'
 import stateHandler, { headCommit, rawFile, repoTree, config, namedFromOrigin, folderNote } from '../api/state.js'
@@ -1006,32 +1007,52 @@ test('a plain origin that git rewrites into one holding a token (url.<base>.inst
   }
 })
 
-test('reading a partial clone whose origin holds a token fetches no missing object behind the board\'s back', async () => {
+// A partial clone fetches a missing object from its origin whenever git reads it. GIT_NO_LAZY_FETCH stops that only from git
+// 2.45.0 (and the May 2024 backports), so a partial clone whose origin holds a login is not read at all, on any git.
+function partialCloneWithLogin() {
   const source = makeRepo(FILES, { remote: false })
-  try {
-    git(source.work, 'config', 'uploadpack.allowFilter', 'true')
-    const partial = path.join(source.base, 'partial')
-    git(source.base, 'clone', '-q', '--filter=blob:none', '--no-checkout', pathToFileURL(source.work).href, partial)
-    git(partial, 'remote', 'set-url', 'origin', LOGIN_URL)
-    // Were git to fetch, it would reach the source folder, and the missing file would then be on disk.
-    git(partial, 'config', `url.${pathToFileURL(source.work).href}.insteadOf`, LOGIN_URL)
-    const blob = git(source.work, 'rev-parse', 'HEAD:shared/about-me.md')
-    // Asked with lazy fetching off: in a partial clone, `cat-file -e` would itself fetch what it is asked about.
-    const missing = () => {
-      try {
-        execFileSync(GIT, ['cat-file', '-e', blob], { cwd: partial, env: { ...gitEnv, GIT_NO_LAZY_FETCH: '1' }, stdio: 'ignore' })
-        return false
-      } catch {
-        return true
-      }
+  git(source.work, 'config', 'uploadpack.allowFilter', 'true')
+  const partial = path.join(source.base, 'partial')
+  git(source.base, 'clone', '-q', '--filter=blob:none', '--no-checkout', pathToFileURL(source.work).href, partial)
+  git(partial, 'remote', 'set-url', 'origin', LOGIN_URL)
+  // Were git to fetch, it would reach the source folder, and the missing file would then be on disk.
+  git(partial, 'config', `url.${pathToFileURL(source.work).href}.insteadOf`, LOGIN_URL)
+  const blob = git(source.work, 'rev-parse', 'HEAD:shared/about-me.md')
+  // Asked with lazy fetching off: in a partial clone, `cat-file -e` would itself fetch what it is asked about.
+  const missing = () => {
+    try {
+      execFileSync(GIT, ['cat-file', '-e', blob], { cwd: partial, env: { ...gitEnv, GIT_NO_LAZY_FETCH: '1' }, stdio: 'ignore' })
+      return false
+    } catch {
+      return true
     }
+  }
+  return { source, partial, missing }
+}
+
+test('a partial clone whose origin holds a login is not read at all, whatever git\'s version: the note instead, and nothing fetched', async () => {
+  const { source, partial, missing } = partialCloneWithLogin()
+  try {
     assert.equal(missing(), true, 'the clone is not partial')
-    const team = folderRepo(partial)
-    const head = await team.head('main')
-    assert.equal(head, source.sha())
-    await team.tree(head)
-    assert.equal(await team.file(head, 'shared/about-me.md'), null)
-    assert.equal(missing(), true, 'reading the folder fetched a missing file from the address with the token')
+    const calls = []
+    const run = async (args, options = {}) => {
+      calls.push(args)
+      if (args[0] === 'fetch') throw new Error('this test does not let git fetch')
+      return runGit(args, options)
+    }
+    const team = folderRepo(partial, { run })
+    assert.equal(await team.head('main'), null)
+    await assert.rejects(team.tree(source.sha()), (error) => error.ours === true && error.message === FOLDER_NOTES.hasLogin)
+    assert.equal(await team.file(source.sha(), 'shared/about-me.md'), null)
+    assert.equal(await team.blob(git(source.work, 'rev-parse', 'HEAD:shared/about-me.md')), null)
+    assert.equal((await team.describe()).note, FOLDER_NOTES.hasLogin)
+    assert.deepEqual(calls.filter((args) => ['fetch', 'rev-parse', 'ls-tree', 'cat-file'].includes(args[0])), [], 'git read or fetched objects')
+    assert.equal(missing(), true, 'a missing file was fetched from the address with the token')
+    // And on the real reader (one long-lived cat-file program), through /api/state: the page gets the note as its message.
+    const { result } = await withEnv({ REPO_SOURCE: 'folder', REPO_FOLDER: partial }, () => call(stateHandler, {}))
+    assert.equal(result.body.error, FOLDER_NOTES.hasLogin)
+    assert.ok(!JSON.stringify(result.body).includes(FAKE_TOKEN))
+    assert.equal(missing(), true, 'a missing file was fetched from the address with the token')
   } finally {
     source.done()
   }
@@ -1081,4 +1102,157 @@ test('the website never reaches the origin check: no git is started, and its ans
   } finally {
     repo.done()
   }
+})
+
+/* ---------- the address is asked again right before every fetch, fetch and push addresses both ---------- */
+
+// A reader that records every git call and runs it for real (every address in these tests leads to a local folder).
+function recordingReader(folder) {
+  const clock = { t: 1_000_000 }
+  const calls = []
+  const run = async (args, options = {}) => {
+    calls.push(args)
+    return runGit(args, options)
+  }
+  return { team: folderRepo(folder, { run, now: () => clock.t }), clock, calls }
+}
+
+// The user's own git config for the length of `work`: HOME (and USERPROFILE, which git for Windows also reads) point at a
+// folder holding `text` as .gitconfig. git gets both from gitEnvironment, so this is what the student's ~/.gitconfig does.
+async function withHomeConfig(text, work) {
+  const home = mkdtempSync(path.join(tmpdir(), 'cockpit-home-'))
+  writeFileSync(path.join(home, '.gitconfig'), text)
+  const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+  try {
+    process.env.HOME = home
+    process.env.USERPROFILE = home
+    delete process.env.XDG_CONFIG_HOME
+    return await work()
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+test('a token set while the board runs is never fetched with: the address is asked again right before every fetch, and the note shows at once', async () => {
+  const repo = makeRepo()
+  try {
+    const { team, clock, calls } = recordingReader(repo.work)
+    assert.equal(await team.head('main'), repo.sha())
+    assert.equal(fetches(calls), 1, 'the plain address was not fetched')
+    assert.equal((await team.describe()).note, null)
+    // The student sets an address with a token, well inside the minute the address is otherwise kept for.
+    git(repo.work, 'remote', 'set-url', 'origin', LOGIN_URL)
+    git(repo.work, 'config', `url.${repo.bare}.insteadOf`, LOGIN_URL)
+    clock.t += FETCH_EVERY_MS + 1
+    assert.ok(FETCH_EVERY_MS + 1 < REMOTE_RECHECK_MS)
+    await team.head('main')
+    assert.equal(fetches(calls), 1, 'the next fetch used the address with the token')
+    assert.equal((await team.describe()).note, FOLDER_NOTES.hasLogin, 'the note waited for the minute to pass')
+    for (const args of calls) assert.ok(!args.join(' ').includes(FAKE_TOKEN), args.join(' '))
+  } finally {
+    repo.done()
+  }
+})
+
+test('a global (~/.gitconfig) insteadOf that puts a token into the address stops the fetch in folder mode', async () => {
+  const repo = makeRepo()
+  try {
+    git(repo.work, 'config', '--unset', `url.${repo.bare}.insteadOf`)
+    await withHomeConfig(`[url "https://x-access-token:${FAKE_TOKEN}@github.com/"]\n\tinsteadOf = https://github.com/\n`, async () => {
+      const { team, clock, calls } = guardedReader(repo)
+      await team.head('main')
+      clock.t += FETCH_EVERY_MS + 1
+      await team.head('main')
+      assert.deepEqual(fetchCalls(calls), [])
+      assert.equal((await team.describe()).note, FOLDER_NOTES.hasLogin)
+    })
+  } finally {
+    repo.done()
+  }
+})
+
+test('two url lines, the first with a token: git fetches from the first, so the folder is not fetched', async () => {
+  const repo = makeRepo()
+  try {
+    git(repo.work, 'config', '--unset-all', 'remote.origin.url')
+    git(repo.work, 'config', '--add', 'remote.origin.url', LOGIN_URL)
+    git(repo.work, 'config', '--add', 'remote.origin.url', GITHUB_URL)
+    // Both lead to the bare folder, so the address git would show for either has no login: only the address as written does.
+    git(repo.work, 'config', `url.${repo.bare}.insteadOf`, LOGIN_URL)
+    const { team, calls } = guardedReader(repo)
+    await team.head('main')
+    assert.deepEqual(fetchCalls(calls), [])
+    assert.equal((await team.describe()).note, FOLDER_NOTES.hasLogin)
+  } finally {
+    repo.done()
+  }
+})
+
+test('a push address with a token (pushurl, or a pushInsteadOf in the repo or in ~/.gitconfig) also stops the fetch', async () => {
+  const pushLogin = `https://x-access-token:${FAKE_TOKEN}@github.com/`
+  const cases = [
+    ['pushurl', (work) => git(work, 'config', 'remote.origin.pushurl', LOGIN_URL), ''],
+    ['repo pushInsteadOf', (work) => git(work, 'config', `url.${pushLogin}.pushInsteadOf`, 'https://github.com/'), ''],
+    ['global pushInsteadOf', () => {}, `[url "${pushLogin}"]\n\tpushInsteadOf = https://github.com/\n`]
+  ]
+  for (const [name, setup, home] of cases) {
+    const repo = makeRepo()
+    try {
+      setup(repo.work)
+      await withHomeConfig(home, async () => {
+        const { team, calls } = guardedReader(repo)
+        await team.head('main')
+        assert.deepEqual(fetchCalls(calls), [], name)
+        assert.equal((await team.describe()).note, FOLDER_NOTES.hasLogin, name)
+      })
+    } finally {
+      repo.done()
+    }
+  }
+})
+
+test('an address git would send anywhere but GitHub is not fetched: a rewrite to another host, or a token with a space before the @', async () => {
+  for (const rewrite of ['https://evil.example/', `https://${FAKE_TOKEN} @github.com/`]) {
+    const repo = makeRepo()
+    try {
+      git(repo.work, 'config', '--unset', `url.${repo.bare}.insteadOf`)
+      git(repo.work, 'config', `url.${rewrite}.insteadOf`, 'https://github.com/')
+      const { team, calls } = guardedReader(repo)
+      await team.head('main')
+      assert.deepEqual(fetchCalls(calls), [], rewrite)
+      assert.notEqual((await team.describe()).note, null, rewrite)
+    } finally {
+      repo.done()
+    }
+  }
+})
+
+test('the note says user name, password or token: a user name alone is refused too', async () => {
+  assert.match(FOLDER_NOTES.hasLogin, /holds a user name, password or token/)
+  const repo = makeRepo(FILES, { origin: 'https://someone@github.com/someone/my-agent-team.git' })
+  try {
+    const { team, calls } = guardedReader(repo)
+    await team.head('main')
+    assert.deepEqual(fetchCalls(calls), [])
+    assert.equal((await team.describe()).note, FOLDER_NOTES.hasLogin)
+  } finally {
+    repo.done()
+  }
+})
+
+test('a partial clone is known by either setting git has used for it: extensions.partialClone (older git) or remote.<name>.promisor', async () => {
+  const answer = (text) => async () => ({ stdout: Buffer.from(text) })
+  const url = `remote.origin.url\n${GITHUB_URL}\0`
+  assert.deepEqual(await readOriginConfig(answer(url)), { urls: [GITHUB_URL], partial: false })
+  assert.deepEqual(await readOriginConfig(answer(`${url}extensions.partialclone\norigin\0`)), { urls: [GITHUB_URL], partial: true })
+  assert.deepEqual(await readOriginConfig(answer(`${url}remote.origin.promisor\ntrue\0`)), { urls: [GITHUB_URL], partial: true })
+  assert.deepEqual(await readOriginConfig(answer(`${url}remote.other.promisor\0`)), { urls: [GITHUB_URL], partial: true }, 'a bare key is true')
+  assert.deepEqual(await readOriginConfig(answer(`${url}remote.origin.promisor\nfalse\0`)), { urls: [GITHUB_URL], partial: false })
+  const none = Object.assign(new Error('none'), { code: 1 })
+  assert.deepEqual(await readOriginConfig(async () => { throw none }), { urls: [], partial: false })
+  assert.equal(await readOriginConfig(async () => { throw new Error('git went away') }), null)
 })
