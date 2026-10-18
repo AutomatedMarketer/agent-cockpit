@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   repoFolder,
   folderRepo,
@@ -22,7 +23,9 @@ import {
   FOLDER_UNREADABLE,
   FOLDER_NOTES,
   findGit,
-  isInside
+  isInside,
+  addressHasLogin,
+  gitProcessesStarted
 } from '../api/_repo.js'
 import stateHandler, { headCommit, rawFile, repoTree, config, namedFromOrigin, folderNote } from '../api/state.js'
 import fileHandler from '../api/file.js'
@@ -417,7 +420,9 @@ test('the git folder switch is on only for REPO_SOURCE=folder with an absolute R
   assert.equal(repoFolder({ REPO_SOURCE: 'folder', REPO_FOLDER: 'team' }), null)
   assert.equal(repoFolder({}), null)
   assert.deepEqual(githubNames('https://github.com/someone/my-agent-team.git'), { owner: 'someone', repo: 'my-agent-team' })
-  assert.deepEqual(githubNames('https://tok@github.com/someone/my-agent-team'), { owner: 'someone', repo: 'my-agent-team' })
+  // An address with a login in it is not one the board will use (addressHasLogin): git would put the login on a command line.
+  assert.equal(githubNames('https://tok@github.com/someone/my-agent-team'), null)
+  assert.deepEqual(githubNames('ssh://git@github.com/someone/my-agent-team.git'), { owner: 'someone', repo: 'my-agent-team' })
   assert.deepEqual(githubNames('git@github.com:someone/my.agent-team.git\n'), { owner: 'someone', repo: 'my.agent-team' })
   assert.equal(githubNames('https://evil.example/someone/x.git'), null)
   assert.equal(githubNames('https://github.com.evil.example/a/b'), null)
@@ -901,6 +906,178 @@ test('without REPO_SOURCE=folder, GitHub is read exactly as before - also with a
     assert.match(missing.result, /Set GITHUB_OWNER and GITHUB_REPO/, 'without the folder switch, config still refuses as it did')
     const noFile = await withEnv({ REPO_FOLDER: repo.work }, () => call(fileHandler, { method: 'GET', headers: {}, query: { path: 'a.md' } }))
     assert.equal(noFile.result.statusCode, 500)
+  } finally {
+    repo.done()
+  }
+})
+
+/* ---------- an origin that holds a login (a token or a password) ---------- */
+// git hands the WHOLE origin address to the program that talks to GitHub (git-remote-https) on its command line, on every
+// fetch, and any program on the computer can read a command line. So the board never fetches from such an address. The
+// token here is made up and opens nothing; every address that holds it is pointed at a local folder (insteadOf), and the
+// guarded reader refuses to run a fetch at all, so no test can reach the network.
+
+const FAKE_TOKEN = ['ghp', 'NotARealTokenForLoginTests0123'].join('_')
+const LOGIN_URL = `https://x-access-token:${FAKE_TOKEN}@github.com/someone/my-agent-team.git`
+const LOGIN_ADDRESSES = [
+  'https://x-access-token:abc123@github.com/ExampleOwner/example-team.git', 'https://someuser@github.com/ExampleOwner/example-team.git',
+  'https://someuser:password@github.com/ExampleOwner/example-team', 'HTTPS://ghx_abc@github.com/ExampleOwner/example-team.git',
+  'ssh://git:password@github.com/ExampleOwner/example-team.git', 'http://user:pw@github.com/a/b.git', 'git+ssh://git:pw@github.com/a/b.git'
+]
+const PLAIN_ADDRESSES = [
+  'https://github.com/ExampleOwner/example-team.git', 'git@github.com:ExampleOwner/example-team.git', 'ssh://git@github.com/ExampleOwner/example-team.git',
+  'git+ssh://git@github.com/a/b.git', 'https://github.com/a/b?x=a@b', 'https://github.com/a/b#x@y', 'file:///srv/team.git', '/srv/team.git', 'C:\\team', 'origin', ''
+]
+
+// A reader that records every git call (its arguments and options) and refuses to run a fetch.
+function guardedReader(repo) {
+  const clock = { t: 1_000_000 }
+  const calls = []
+  const run = async (args, options = {}) => {
+    calls.push({ args, options })
+    if (args[0] === 'fetch') throw new Error('this test does not let git fetch')
+    return runGit(args, options)
+  }
+  return { team: folderRepo(repo.work, { run, now: () => clock.t }), clock, calls }
+}
+const fetchCalls = (calls) => calls.filter(({ args }) => args[0] === 'fetch')
+
+// A commit pushed to the bare "GitHub" folder from somewhere else, after the team folder last fetched.
+function pushFromElsewhere(repo, name = 'later.md') {
+  const other = path.join(repo.base, `other-${name}`)
+  git(repo.base, 'clone', '-q', repo.bare, other)
+  writeFileSync(path.join(other, name), 'later\n')
+  git(other, 'add', '-A')
+  git(other, 'commit', '-q', '-m', 'later')
+  git(other, 'push', '-q', 'origin', 'main')
+}
+
+test('addressHasLogin is the runner\'s rule: any login in an https address, a password in an ssh one; the SSH addresses stay fine', () => {
+  for (const url of LOGIN_ADDRESSES) assert.equal(addressHasLogin(url), true, url)
+  for (const url of PLAIN_ADDRESSES) assert.equal(addressHasLogin(url), false, url)
+  for (const value of [undefined, null, 42, {}, ['https://a:b@github.com/c/d']]) assert.equal(addressHasLogin(value), false, String(value))
+  for (const url of LOGIN_ADDRESSES) assert.equal(githubNames(url), null, `githubNames accepted ${url}`)
+})
+
+test('a folder whose origin holds a token is never fetched from: the board reads what was last fetched, says why, and never repeats the token', async () => {
+  const repo = makeRepo(FILES, { origin: LOGIN_URL })
+  try {
+    const before = repo.sha()
+    pushFromElsewhere(repo)
+    const { team, clock, calls } = guardedReader(repo)
+    for (let round = 0; round < 3; round += 1) {
+      assert.equal(await team.head('main'), before, 'not the last fetched commit')
+      clock.t += FETCH_EVERY_MS + REMOTE_RECHECK_MS + 1
+    }
+    assert.deepEqual(fetchCalls(calls), [], 'a fetch was started for an address that holds a token')
+    // Reading what is already on disk needs no server, so it goes on.
+    const listed = await team.tree(before)
+    assert.equal(listed.tree.length, Object.keys(FILES).length)
+    assert.equal(await team.file('main', 'shared/about-me.md'), FILES['shared/about-me.md'])
+    const said = await team.describe()
+    assert.deepEqual(said, { hasOrigin: true, github: false, note: FOLDER_NOTES.hasLogin })
+    assert.equal(await team.origin(), null, 'a login address was taken for the team repo')
+    // Every read of a folder with a login origin is told not to fetch a missing object either (a partial clone would).
+    const reads = calls.filter(({ args }) => ['rev-parse', 'ls-tree', 'cat-file'].includes(args[0]))
+    assert.ok(reads.length >= 3, JSON.stringify(calls.map(({ args }) => args[0])))
+    for (const { args, options } of reads) assert.equal(options.noLazyFetch, true, args.join(' '))
+    for (const { args } of calls) assert.ok(!args.join(' ').includes(FAKE_TOKEN), `the token was on a command line: ${args.join(' ')}`)
+    assert.ok(!JSON.stringify(said).includes(FAKE_TOKEN))
+    assert.ok(!FOLDER_NOTES.hasLogin.includes('x-access-token'))
+  } finally {
+    repo.done()
+  }
+})
+
+test('a plain origin that git rewrites into one holding a token (url.<base>.insteadOf) is not fetched from either', async () => {
+  const repo = makeRepo()
+  try {
+    git(repo.work, 'config', '--unset', `url.${repo.bare}.insteadOf`)
+    git(repo.work, 'config', `url.https://x-access-token:${FAKE_TOKEN}@github.com/.insteadOf`, 'https://github.com/')
+    const { team, clock, calls } = guardedReader(repo)
+    assert.equal(await team.head('main'), repo.sha())
+    clock.t += FETCH_EVERY_MS + 1
+    await team.head('main')
+    assert.deepEqual(fetchCalls(calls), [], 'git would have fetched from the rewritten address, token and all')
+    assert.equal((await team.describe()).note, FOLDER_NOTES.hasLogin)
+    for (const { args } of calls) assert.ok(!args.join(' ').includes(FAKE_TOKEN), args.join(' '))
+  } finally {
+    repo.done()
+  }
+})
+
+test('reading a partial clone whose origin holds a token fetches no missing object behind the board\'s back', async () => {
+  const source = makeRepo(FILES, { remote: false })
+  try {
+    git(source.work, 'config', 'uploadpack.allowFilter', 'true')
+    const partial = path.join(source.base, 'partial')
+    git(source.base, 'clone', '-q', '--filter=blob:none', '--no-checkout', pathToFileURL(source.work).href, partial)
+    git(partial, 'remote', 'set-url', 'origin', LOGIN_URL)
+    // Were git to fetch, it would reach the source folder, and the missing file would then be on disk.
+    git(partial, 'config', `url.${pathToFileURL(source.work).href}.insteadOf`, LOGIN_URL)
+    const blob = git(source.work, 'rev-parse', 'HEAD:shared/about-me.md')
+    // Asked with lazy fetching off: in a partial clone, `cat-file -e` would itself fetch what it is asked about.
+    const missing = () => {
+      try {
+        execFileSync(GIT, ['cat-file', '-e', blob], { cwd: partial, env: { ...gitEnv, GIT_NO_LAZY_FETCH: '1' }, stdio: 'ignore' })
+        return false
+      } catch {
+        return true
+      }
+    }
+    assert.equal(missing(), true, 'the clone is not partial')
+    const team = folderRepo(partial)
+    const head = await team.head('main')
+    assert.equal(head, source.sha())
+    await team.tree(head)
+    assert.equal(await team.file(head, 'shared/about-me.md'), null)
+    assert.equal(missing(), true, 'reading the folder fetched a missing file from the address with the token')
+  } finally {
+    source.done()
+  }
+})
+
+test('/api/state for a folder whose origin holds a token: the note, the last fetched commit, and the token nowhere in the answer', async () => {
+  const repo = makeRepo(FILES, { origin: LOGIN_URL })
+  try {
+    const before = repo.sha()
+    pushFromElsewhere(repo)
+    const { result, github } = await withEnv(folderEnv(repo), () => call(stateHandler, {}))
+    assert.equal(result.statusCode, 200, JSON.stringify(result.body).slice(0, 300))
+    assert.equal(result.body.repo.note, FOLDER_NOTES.hasLogin)
+    assert.equal(result.body.commit, before, 'the folder was fetched from the address with the token')
+    const text = JSON.stringify(result.body)
+    assert.ok(!text.includes(FAKE_TOKEN) && !text.includes('x-access-token'), 'the token reached the page')
+    assert.equal(github.length, 0)
+  } finally {
+    repo.done()
+  }
+})
+
+test('a plain https address and the SSH addresses are still fetched from, named, and given no note', async () => {
+  for (const origin of [GITHUB_URL, 'git@github.com:someone/my-agent-team.git', 'ssh://git@github.com/someone/my-agent-team.git']) {
+    const repo = makeRepo(FILES, { origin })
+    try {
+      const { repo: team, calls } = reader(repo)
+      assert.equal(await team.head('main'), repo.sha(), origin)
+      assert.equal(fetches(calls), 1, origin)
+      assert.deepEqual(await team.describe(), { hasOrigin: true, github: true, note: null }, origin)
+      assert.deepEqual(await team.origin(), { owner: 'someone', repo: 'my-agent-team' }, origin)
+    } finally {
+      repo.done()
+    }
+  }
+})
+
+test('the website never reaches the origin check: no git is started, and its answer has no note', async () => {
+  const repo = makeRepo(FILES, { origin: LOGIN_URL })
+  try {
+    const started = gitProcessesStarted()
+    const { result } = await withEnv({ GITHUB_OWNER: 'someone', GITHUB_REPO: 'my-agent-team' }, () => call(stateHandler, {}), { githubFiles: FILES, head: repo.sha() })
+    assert.equal(result.statusCode, 200)
+    assert.ok(!('note' in result.body.repo))
+    assert.equal(result.body.repo.url, 'https://github.com/someone/my-agent-team')
+    assert.equal(gitProcessesStarted(), started, 'the website started git')
   } finally {
     repo.done()
   }

@@ -9,7 +9,8 @@
 //   file you have edited but not committed, a staged change, and an untracked file are never seen.
 // - The commit is the tip of origin/<branch> after a fetch (at most one per 30 seconds). A folder with
 //   no `origin` remote at all is read at its own <branch> and says so; one with a remote is never
-//   read past what the remote has.
+//   read past what the remote has. An origin that holds a login is never fetched from (addressHasLogin):
+//   its last fetched state is read without git reaching any server, and the page says why.
 // - A blob is read by id only if the last tree listing named it, so an id of something never
 //   committed (a staged file's, an old stash's) is refused.
 //
@@ -41,10 +42,25 @@ const KEEP_TREES = 3
 
 export const COMMIT_ID = /^[0-9a-f]{40}$/
 
-// "owner" and "repo" from a GitHub address in either form git uses, or null for anything else.
+// Whether an address carries a login: a user name, a password or a token before the host
+// (https://user:token@github.com/...), or a password in an ssh:// address. git hands the WHOLE address to the
+// program that talks to the server (git-remote-https) on its command line, on every fetch and push, and a
+// command line can be read by any program on the computer. So the board never fetches from such an address
+// and never turns jobs on for one. The SSH forms (git@github.com:..., ssh://git@github.com/...) name a user
+// and no secret, and are fine. The same rule, character for character, as the runner's own (the team repo's
+// scripts/lib/mailbox/workcopy.mjs, addressHasLogin), so the board and the runner never disagree about an address.
+export function addressHasLogin(url) {
+  if (typeof url !== 'string') return false
+  const login = /^([a-z][a-z0-9+.-]*):\/\/([^/?#\s]*)@/i.exec(url)
+  if (login === null) return false
+  return /^(?:git\+)?ssh$/i.test(login[1]) ? login[2].includes(':') : true
+}
+
+// "owner" and "repo" from a GitHub address in either form git uses, or null for anything else - an https
+// address with a login in it included (addressHasLogin): the board never uses one.
 export function githubNames(url) {
   if (typeof url !== 'string') return null
-  const found = /^(?:https:\/\/(?:[^/@\s]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/.exec(url.trim())
+  const found = /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/.exec(url.trim())
   return found ? { owner: found[1], repo: found[2] } : null
 }
 
@@ -90,6 +106,7 @@ function ourFailure(sentence, status) {
 export const FOLDER_NOTES = {
   noRemote: 'Jobs are off: this folder is not on GitHub, so nothing the team pushes can reach it.',
   notGitHub: 'The board is not refreshing this folder: its origin is not a GitHub address, so it shows what was last fetched.',
+  hasLogin: 'The board is not refreshing this folder, so it shows what was last fetched: its GitHub address holds a password or token, which any program on this computer could read while git runs. Clone it again with a plain https://github.com/... address and let Git\'s sign-in helper hold the login.',
   unknown: 'The board could not tell whether this folder is on GitHub, so it shows nothing until git answers.',
   truncated: 'This team folder has more files than the board lists, so only the first part of it is shown.'
 }
@@ -142,8 +159,9 @@ function release() {
 }
 
 // The real runner: git with `args` in `cwd`. Resolves { stdout } (a Buffer) or rejects with the child
-// process error (code, stderr, killed). Tests hand in their own.
-export async function runGit(args, { cwd, timeoutMs = READ_TIMEOUT_MS, maxBuffer = MAX_FILE_BYTES } = {}) {
+// process error (code, stderr, killed). Tests hand in their own. noLazyFetch: git must not fetch an object
+// it is missing (a partial clone would, from the origin, behind the board's back).
+export async function runGit(args, { cwd, timeoutMs = READ_TIMEOUT_MS, maxBuffer = MAX_FILE_BYTES, noLazyFetch = false } = {}) {
   await slot()
   try {
     const program = gitProgram()
@@ -157,7 +175,7 @@ export async function runGit(args, { cwd, timeoutMs = READ_TIMEOUT_MS, maxBuffer
         [...fixedGitOptions(), ...(cwd ? ['-C', cwd] : []), ...args],
         // The process starts in git's own folder, never in the team folder: on Windows a program of
         // the same name in the working folder can be found before the real one. The repo is named with -C.
-        { cwd: path.dirname(program), env: gitEnvironment(), encoding: 'buffer', timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer, windowsHide: true },
+        { cwd: path.dirname(program), env: noLazyFetch ? { ...gitEnvironment(), GIT_NO_LAZY_FETCH: '1' } : gitEnvironment(), encoding: 'buffer', timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer, windowsHide: true },
         (error, stdout, stderr) => {
           if (error) {
             error.stderr = stderr
@@ -515,24 +533,39 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
   const git = (args, options) => run(args, { cwd: folder, ...options })
   let lastFetch = { at: -Infinity, promise: null }
   const trees = new Map() // commit -> Set of blob ids it lists
-  let remote = { url: null, at: -Infinity } // url: the address, '' for none, null when not known
+  // url: the address, '' for none, null when not known. login: git would hand a login to the server with it.
+  let remote = { url: null, login: false, at: -Infinity }
 
   // The origin's address as written in the repo's config: a string, '' for no origin at all, or null
   // when git would not say. (Exit status 1 is git's "no such setting"; anything else is no answer.)
   // An answer is kept for a minute (the owner may add a remote); "would not say" is never kept, and
   // is never taken for "no remote". Asked with `config`, not `remote`: the options git is started
   // with can make a remote appear in the list.
+  //
+  // Whether it holds a login is asked of the address as written AND as git will really use it: a
+  // url.<base>.insteadOf rule (in this repo's config or the user's own) can turn a plain address into one
+  // with a token in it. `ls-remote --get-url` applies those rules and says the result without talking to
+  // any server. Neither question puts the address on a command line; only a fetch would.
   async function originUrl() {
     const t = now()
     if (remote.url !== null && t - remote.at < REMOTE_RECHECK_MS) return remote.url
     try {
       const { stdout } = await git(['config', '--get', 'remote.origin.url'], { maxBuffer: 4096 })
-      remote = { url: stdout.toString('utf8').trim(), at: t }
+      const url = stdout.toString('utf8').trim()
+      const used = url ? (await git(['ls-remote', '--get-url', 'origin'], { maxBuffer: 4096 })).stdout.toString('utf8').trim() : ''
+      remote = { url, login: addressHasLogin(url) || addressHasLogin(used), at: t }
     } catch (error) {
-      if (error?.code === 1) remote = { url: '', at: t }
-      else remote = { url: null, at: -Infinity }
+      if (error?.code === 1) remote = { url: '', login: false, at: t }
+      else remote = { url: null, login: false, at: -Infinity }
     }
     return remote.url
+  }
+
+  // true when nothing this reader runs may reach the server: the origin holds a login, or git would not say
+  // what the origin is. Then the board never fetches, and its reads are told not to fetch a missing object.
+  async function quiet() {
+    const url = await originUrl()
+    return url === null || remote.login
   }
 
   // true / false, or null when git would not say.
@@ -550,8 +583,9 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     // that sets core.sshCommand. That needs the student's own config to point there, so whoever can
     // do that can already run programs as them.
     // Only a GitHub address is fetched from: any other origin could be a program (an ext:: or a
-    // local path) rather than a server. Its last fetched state is shown as it is.
-    const promise = origin().then((names) =>
+    // local path) rather than a server. Its last fetched state is shown as it is. Nor one that holds a
+    // login (quiet): git would put the login on the command line of the program it fetches with.
+    const promise = (async () => ((await quiet()) ? null : origin()))().then((names) =>
       names
         ? git(
             // The stock upload-pack program, whatever remote.origin.uploadpack in the repo's own config names
@@ -569,7 +603,7 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     // The same answer for a moment, unless a fetch has been started since it was asked.
     if (revKept.ref === refName && now() - revKept.at < REVPARSE_KEPT_MS && lastFetch.at <= revKept.at) return revKept.id
     try {
-      const { stdout } = await git(['rev-parse', '--verify', '--quiet', `${refName}^{commit}`], { maxBuffer: 4096 })
+      const { stdout } = await git(['rev-parse', '--verify', '--quiet', `${refName}^{commit}`], { maxBuffer: 4096, noLazyFetch: await quiet() })
       const id = stdout.toString('utf8').trim()
       const found = COMMIT_ID.test(id) ? id : null
       if (found) revKept = { ref: refName, id: found, at: now() }
@@ -609,7 +643,7 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     }
     let stdout
     try {
-      ;({ stdout } = await git(['ls-tree', '-r', '-l', '-z', commit], { maxBuffer: MAX_TREE_BYTES }))
+      ;({ stdout } = await git(['ls-tree', '-r', '-l', '-z', commit], { maxBuffer: MAX_TREE_BYTES, noLazyFetch: await quiet() }))
     } catch {
       throw ourFailure(FOLDER_UNREADABLE)
     }
@@ -659,9 +693,11 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     }
     const commit = await commitOf(ref)
     if (!commit) return null
-    if (reader) return readThrough(`${commit}:${repoPath}`, `${commit}:${repoPath}`)
+    // The long-lived program cannot be told not to fetch a missing object, so a quiet folder is read one call at a time.
+    const noLazyFetch = await quiet()
+    if (reader && !noLazyFetch) return readThrough(`${commit}:${repoPath}`, `${commit}:${repoPath}`)
     try {
-      const { stdout } = await git(['cat-file', 'blob', `${commit}:${repoPath}`])
+      const { stdout } = await git(['cat-file', 'blob', `${commit}:${repoPath}`], { noLazyFetch })
       return stdout.toString('utf8')
     } catch (error) {
       if (isMissing(error) || isTooBig(error)) return null
@@ -673,9 +709,10 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
   async function blob(sha) {
     if (typeof sha !== 'string' || !COMMIT_ID.test(sha)) return null
     if (![...trees.values()].some((shas) => shas.has(sha))) return null
-    if (reader) return readThrough(sha, `blob:${sha}`)
+    const noLazyFetch = await quiet()
+    if (reader && !noLazyFetch) return readThrough(sha, `blob:${sha}`)
     try {
-      const { stdout } = await git(['cat-file', 'blob', sha])
+      const { stdout } = await git(['cat-file', 'blob', sha], { noLazyFetch })
       return stdout.toString('utf8')
     } catch (error) {
       if (isMissing(error) || isTooBig(error)) return null
@@ -694,6 +731,7 @@ export function folderRepo(folder, { run = runGit, now = Date.now, maxEntries = 
     const has = await hasOrigin()
     if (has === null) return { hasOrigin: null, github: false, note: FOLDER_NOTES.unknown }
     if (!has) return { hasOrigin: false, github: false, note: FOLDER_NOTES.noRemote }
+    if (remote.login) return { hasOrigin: true, github: false, note: FOLDER_NOTES.hasLogin }
     const names = await origin()
     return names ? { hasOrigin: true, github: true, note: null } : { hasOrigin: true, github: false, note: FOLDER_NOTES.notGitHub }
   }
