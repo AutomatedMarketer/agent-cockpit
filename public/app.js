@@ -276,7 +276,7 @@ function runButtonHtml(workflow, text, mailbox) {
   const standing = codexOnBoard(mailbox, workflow.slug)
   const label = (words) => ` <span class="small">${words}</span>`
   if (standing === 'ready') return `<button class="fire job" type="button" data-fire="${slug}" data-action="run" data-worker="codex">${PLAY}${text}${label('runs with Codex')}</button>`
-  if (standing === 'not-ready') return `<button class="fire job" type="button" disabled>${PLAY}${text}${label('Codex is not ready on your Mac')}</button>`
+  if (standing === 'not-ready') return `<button class="fire job" type="button" disabled>${PLAY}${text}${label(LOCAL_BOARD ? 'Codex is not ready on this computer' : 'Codex is not ready on your Mac')}</button>`
   return `<button class="fire job" type="button" data-fire="${slug}" data-action="run">${PLAY}${text}</button>`
 }
 
@@ -2372,6 +2372,15 @@ const MAC_KINDS = ['run', 'pause', 'task', 'move', 'approve', 'arm', 'skill', 'a
 function macSentWords(kind, payload) {
   if (!macLogFields(payload).id) return null
   const minutes = macMinutesOf(payload.pollSeconds)
+  // On this computer the runner is started at once (local/runner.mjs), so there is no wait of minutes to promise.
+  if (LOCAL_BOARD) {
+    if (kind === 'run') return 'Sent to this computer. It starts in a moment.'
+    if (kind === 'pause') return 'Sent to this computer. It switches the schedule off in the workflow file in a moment.'
+    if (kind === 'task') return 'Sent to this computer. It starts in a moment, and the card should be on the board soon.'
+    if (kind === 'move') return 'Sent to this computer. It moves the card in a moment.'
+    if (kind === 'approve') return 'Sent to this computer. Nothing has been switched on.'
+    return 'Sent to this computer. It will file a card for you to finish in a Claude session.'
+  }
   if (kind === 'run') return `Sent to your Mac. It should start within about ${macWithin(minutes)}.`
   if (kind === 'pause') return `Sent to your Mac. It switches the schedule off in the workflow file within about ${macWithin(minutes)}.`
   if (kind === 'task') return `Sent to your Mac. It checks ${macEvery(minutes)}, so the card should be on the board in about ${minutes + 1} minutes.`
@@ -2410,12 +2419,12 @@ function macOrdersHtml() {
   let zone = 'UTC'
   try { zone = voiceZone(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC' } catch (error) { zone = 'UTC' }
   const rows = orders.map((order) => {
-    const said = macOrderSaid(order, data, Date.now(), zone)
+    const said = macOrderSaid(order, data, Date.now(), zone, LOCAL_BOARD)
     if (!said) return ''
-    const words = said.state === 'sent to your Mac' ? `Sent to your Mac. It checks ${macEvery(macMinutesOf(order.pollSeconds))}.` : said.said
+    const words = said.state === 'sent to your Mac' && !LOCAL_BOARD ? `Sent to your Mac. It checks ${macEvery(macMinutesOf(order.pollSeconds))}.` : said.said
     return `<div class="gap"><b>${escapeHtml(order.label)}</b> <span class="small">${escapeHtml(words)}</span>${progressHolderHtml(order, said)}</div>`
   }).join('')
-  return rows ? sectionHead('Orders sent to your computer', '<h2>Your Mac</h2>') + `<div class="panel">${rows}</div>` : ''
+  return rows ? sectionHead('Orders sent to your computer', `<h2>${LOCAL_BOARD ? 'This computer' : 'Your Mac'}</h2>`) + `<div class="panel">${rows}</div>` : ''
 }
 
 /* ---------- live progress on that card (task T12) ----------
@@ -2459,6 +2468,17 @@ function progressDocOf(body) {
   return { phase: body.phase, steps: body.steps, lastTool, startedAt, lastEventAt, final: body.final, outcome: body.outcome === 'ok' ? 'ok' : 'other' }
 }
 
+// What a tool's code name means, in words for someone who does not code. Anything not listed is just "working".
+const PROGRESS_TOOL_WORDS = [
+  [/^(read|notebookread)$/i, 'reading files'],
+  [/^(edit|write|multiedit|notebookedit|apply_patch)$/i, 'editing a file'],
+  [/^(bash|shell|powershell)$/i, 'running a command'],
+  [/^(plan|enterplanmode|exitplanmode)$/i, 'planning'],
+  [/^(grep|glob)$/i, 'searching'],
+  [/^web/i, 'looking something up']
+]
+const progressToolWords = (tool) => PROGRESS_TOOL_WORDS.find(([pattern]) => pattern.test(String(tool)))?.[1] ?? 'working'
+
 // "2m 05s", or "1h 04m" from an hour on. Never negative: the Mac's clock and this one may differ by a little.
 function elapsedWords(ms) {
   const seconds = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000))
@@ -2485,7 +2505,7 @@ function progressLine(order, said) {
     // Not asking any more (signed out, or past the two hours): a line that kept ticking would look live.
     if (progressLocked || Date.now() - Date.parse(order.sentAt) >= PROGRESS_GIVE_UP_MS) return { html: PROGRESS_STALE, since: null }
     const parts = [`<b>${PROGRESS_PHASES[doc.phase]}</b>`, doc.steps === 0 ? 'no steps yet' : `${stepsWords(doc.steps)} so far`]
-    if (doc.steps > 0 && doc.lastTool) parts.push(doc.lastTool === 'unknown' ? 'last used a tool' : `last used ${escapeHtml(doc.lastTool)}`)
+    if (doc.steps > 0 && doc.lastTool) parts.push(progressToolWords(doc.lastTool))
     parts.push(clock(doc.startedAt))
     return { html: parts.join(' · '), since: doc.startedAt }
   }
@@ -2515,7 +2535,7 @@ function progressRedraw() {
   progressPrune()
   for (const order of macOrdersLog()) {
     const holder = el(`mac-prog-${order.id}`)
-    const said = macOrderSaid(order, data, Date.now(), 'UTC')
+    const said = macOrderSaid(order, data, Date.now(), 'UTC', LOCAL_BOARD)
     if (!holder || !said) continue
     const line = progressLine(order, said)
     holder.innerHTML = line.html
@@ -2542,7 +2562,7 @@ function progressOrders() {
   if (!LOCAL_BOARD || progressLocked) return []
   const now = Date.now()
   return macOrdersLog().filter((order) => {
-    const said = macOrderSaid(order, data, now, 'UTC')
+    const said = macOrderSaid(order, data, now, 'UTC', LOCAL_BOARD)
     return said && !PROGRESS_OVER.includes(said.state) && now - Date.parse(order.sentAt) < PROGRESS_GIVE_UP_MS && progressDocs.get(order.id)?.final !== true
   })
 }
@@ -2622,7 +2642,7 @@ function voiceResultsHtml() {
   try { zone = voiceZone(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC' } catch (error) { zone = 'UTC' }
   const log = voiceOrdersLog()
   const rows = log.filter((entry) => entry.spoken !== true && Date.now() - Date.parse(entry.sentAt) < 86_400_000).map((entry) => {
-    const ended = orderOutcome(entry, data, Date.now(), zone, log)
+    const ended = orderOutcome(entry, data, Date.now(), zone, log, LOCAL_BOARD)
     if (!ended || ended.outcome === 'filed') return ''
     return `<div class="gap"><b>${escapeHtml(ended.name)}</b> <span class="small">${escapeHtml(VOICE_RESULT_WORDS[ended.outcome])}.${ended.summary ? ` ${escapeHtml(ended.summary.slice(0, 200))}` : ''}</span></div>`
   }).join('')
@@ -4912,11 +4932,13 @@ const macPace = (value) => (Number.isInteger(value) && value >= 60 && value <= 3
 // After this many of the Mac's checks with no sign of it, the order is waiting, not just sent.
 const MAC_CHECKS_BEFORE_WAITING = 3
 const macReason = (state, why) => (typeof why === 'string' && Object.hasOwn(MAC_REASON_WORDS[state] ?? {}, why) ? MAC_REASON_WORDS[state][why] : null)
+// On a student's own computer there is no Mac to talk about: the same words, said about "this computer".
+const toThisComputer = (text) => text.replace(/\b([Yy])our Mac\b/g, (found, first) => (first === 'Y' ? 'This computer' : 'this computer'))
 
 // { state, said } for an order sent to the Mac, from its status file first; done: true when the Mac
 // says it finished, so the card or the run can say the rest. null for an order that did not go to the
 // Mac, or whose id or expiry is not the board's own shape.
-function macOrderSaid(order, data, now, zone) {
+function macOrderState(order, data, now, zone) {
   if (order?.via !== 'mac' || typeof order.id !== 'string' || !MAC_ORDER_ID.test(order.id)) return null
   const expires = typeof order.expiresAt === 'string' ? Date.parse(order.expiresAt) : NaN
   const sentAt = typeof order.sentAt === 'string' ? Date.parse(order.sentAt) : NaN
@@ -4951,7 +4973,21 @@ function macOrderSaid(order, data, now, zone) {
   return { state: 'sent to your Mac', said: `Sent to your Mac. It checks ${every}, so ${next}.` }
 }
 
-function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fresh = false } = {}) {
+// The same, said for the board on a student's own computer (local = true): "this computer" for "your Mac", and the
+// real timing - its runner is started at once when an order arrives, so there is no wait of minutes to promise.
+function macOrderSaid(order, data, now, zone, local = false) {
+  const state = macOrderState(order, data, now, zone)
+  if (!state || local !== true) return state
+  if (state.state === 'sent to your Mac') {
+    return { ...state, said: order.kind === 'task' ? 'Sent to this computer. It starts in a moment. The card shows on the board soon.' : 'Sent to this computer. It starts in a moment.' }
+  }
+  if (state.state === 'waiting for your Mac') {
+    return { ...state, said: `This computer has not started it yet. It may be busy with another job. If it has not started by ${toolTime(order.expiresAt, zone)}, it will not run at all.` }
+  }
+  return { ...state, said: toThisComputer(state.said) }
+}
+
+function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fresh = false, local = false } = {}) {
   const zone = voiceZone(timeZone) ?? 'UTC'
   const when = {
     timeZone: zone,
@@ -4969,8 +5005,8 @@ function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fre
     const sentAt = Date.parse(order.sentAt)
     const sent = { sentAt: toolTime(order.sentAt, zone) }
     // Sent to the Mac: its status file first; once it says done, the card or the run as for any order.
-    const mac = macOrderSaid(order, data, now, zone)
-    const fromMac = (base) => ({ ...when, ...base, state: mac.state, said: mac.said })
+    const mac = macOrderSaid(order, data, now, zone, local)
+    const fromMac = (base) => ({ ...when, ...base, state: local === true ? toThisComputer(mac.state) : mac.state, said: mac.said })
     if (order.kind === 'run') {
       const job = { which: 'last order', kind: 'run', job: toolText(order.name), ...sent }
       if (mac && !mac.done) return fromMac(job)
@@ -5026,7 +5062,7 @@ function taskCardSlugs(data, title) {
 
 // `siblings` are the other voice orders on this device (their log): within the watch limit of this one, they
 // are told apart from it, so each order gets a run or a card of its own and none takes another's.
-function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblings = []) {
+function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblings = [], local = false) {
   if (!order || typeof order !== 'object' || (order.kind !== 'run' && order.kind !== 'task')) return null
   const sentAt = Date.parse(order.sentAt)
   if (Number.isNaN(sentAt)) return null
@@ -5036,7 +5072,7 @@ function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblings = []
     outcome,
     summary: resultText(summary, RESULT_SUMMARY_MAX)
   })
-  const mac = macOrderSaid(order, data, now, zone)
+  const mac = macOrderSaid(order, data, now, zone, local)
   if (mac && Object.hasOwn(MAC_ENDS, mac.state)) return ended(MAC_ENDS[mac.state], mac.said)
   if (mac && !mac.done) return null
   // The other voice orders that could be competing for the same run or card: this job's or title's, sent
@@ -5045,7 +5081,7 @@ function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblings = []
     Math.abs(Date.parse(one.sentAt) - sentAt) <= ORDER_WATCH_MS &&
     (order.kind === 'run' ? one.slug === order.slug : one.title === order.title))
   const endedByMac = (one) => {
-    const said = macOrderSaid(one, data, now, zone)
+    const said = macOrderSaid(one, data, now, zone, local)
     return Boolean(said) && Object.hasOwn(MAC_ENDS, said.state)
   }
   const peers = near.filter((one) => !endedByMac(one))
@@ -5287,7 +5323,7 @@ function orderFrom(name, args, { orders, data } = {}) {
       return { error: 'That job is not set to be started from the board (fire: true in its file), so it cannot be started from here.' }
     }
     const standing = codexOnBoard(data?.mailbox, slug)
-    if (standing === 'not-ready') return { error: 'Codex is not ready on your Mac, so that job cannot be started from here.' }
+    if (standing === 'not-ready') return { error: `Codex is not ready on ${orders.local === true ? 'this computer' : 'your Mac'}, so that job cannot be started from here.` }
     const named = typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim().slice(0, 120) : slug
     return { order: { kind: 'run', slug, name: named, ...(standing === 'ready' ? { worker: 'codex' } : {}) } }
   }
@@ -5822,10 +5858,19 @@ const VOICE_ORDER = {
   taskWhat: 'A task card goes to your team. It shows on the board about a minute after you say yes.',
   runWhat: 'Starts this job now. It uses one routine run.',
   // On a mailbox board the order waits for the owner's computer, which collects it every few minutes.
-  taskWhatMac: 'A task card goes to your Mac, which files it for your team. It shows on the board a few minutes after you say yes.',
-  runWhatMac: 'Your Mac runs this job on your own Claude plan, a few minutes after you say yes.',
-  sentTaskMac: (minutes) => `The owner said yes. It was sent to their Mac, which checks ${macEvery(minutes)}: the card should be on the board in about ${minutes + 1} minutes. It is not done yet.`,
-  sentRunMac: (slug, minutes) => `The owner said yes. The job ${VOICE_NOTE_SLUG.test(slug) ? `${slug} ` : ''}was sent to their Mac, which checks ${macEvery(minutes)}: it should start within about ${macWithin(minutes)}. It has not started yet.`,
+  // The board on this computer (LOCAL_BOARD) has no Mac: the order is done on this computer, which starts it in a moment.
+  taskWhatMac: LOCAL_BOARD
+    ? 'A task card goes to this computer, which files it for your team. It shows on the board soon after you say yes.'
+    : 'A task card goes to your Mac, which files it for your team. It shows on the board a few minutes after you say yes.',
+  runWhatMac: LOCAL_BOARD
+    ? 'This computer runs this job on your own Claude plan, a moment after you say yes.'
+    : 'Your Mac runs this job on your own Claude plan, a few minutes after you say yes.',
+  sentTaskMac: (minutes) => (LOCAL_BOARD
+    ? 'The owner said yes. It was sent to this computer, which starts it in a moment: the card should be on the board soon. It is not done yet.'
+    : `The owner said yes. It was sent to their Mac, which checks ${macEvery(minutes)}: the card should be on the board in about ${minutes + 1} minutes. It is not done yet.`),
+  sentRunMac: (slug, minutes) => (LOCAL_BOARD
+    ? `The owner said yes. The job ${VOICE_NOTE_SLUG.test(slug) ? `${slug} ` : ''}was sent to this computer, which starts it in a moment. It has not started yet.`
+    : `The owner said yes. The job ${VOICE_NOTE_SLUG.test(slug) ? `${slug} ` : ''}was sent to their Mac, which checks ${macEvery(minutes)}: it should start within about ${macWithin(minutes)}. It has not started yet.`),
   orchestrator: 'Let the orchestrator choose',
   waiting: { status: 'waiting', for: 'the owner', expiresInSeconds: CONFIRM_WINDOW_MS / 1000 },
   justSent: 'That was just sent, so it is on its way. Nothing more to do.',
@@ -5859,6 +5904,17 @@ function voicePickWords(agent, model) {
   return `${line('Agent', agent, 'the orchestrator decides')}\n${line('Model', model, "the agent's own")}`
 }
 const VOICE_NOTE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+// What the sheet says after a yes that went to the owner's computer.
+function macOutcomeWords(order, minutes) {
+  if (LOCAL_BOARD) {
+    return order.kind === 'task'
+      ? `Sent to this computer: "${order.title}". It starts in a moment, and the card should be on the board soon.`
+      : `Sent to this computer: ${order.name}. It starts in a moment.`
+  }
+  return order.kind === 'task'
+    ? `Sent to your Mac: "${order.title}". It checks ${macEvery(minutes)}, so the card should be on the board in about ${minutes + 1} minutes.`
+    : `Sent to your Mac: ${order.name}. It should start within about ${macWithin(minutes)}.`
+}
 // The Mac mailbox's pace, said: minutes from the seconds the board gave (macPace keeps them the board's
 // own shape, or its default).
 const macMinutesOf = (pollSeconds) => Math.max(1, Math.round(macPace(pollSeconds) / 60))
@@ -6312,7 +6368,7 @@ function openVoice(deps, ui) {
     for (const call of calls) {
       const args = argsOf(call)
       const answer = VOICE_ORDER_TOOLS.includes(call.name) ? proposeOrder(call.name, args)
-        : call.name === 'job_status' ? jobStatusAnswer(args, { ...deps.view(), log: deps.ordersLog?.() ?? [], fresh: fresh === true })
+        : call.name === 'job_status' ? jobStatusAnswer(args, { ...deps.view(), log: deps.ordersLog?.() ?? [], fresh: fresh === true, local: LOCAL_BOARD })
           : call.name === 'search_memory' ? searchMemoryAnswer(args, { found: found?.get(call.call_id) ?? null, now: deps.now(), timeZone: deps.view().timeZone })
             : call.name === 'open_note' ? openNoteAnswer(args, deps.lastFound?.() ?? null)
               : voiceToolAnswer(call.name, args, deps.view())
@@ -6574,9 +6630,7 @@ function openVoice(deps, ui) {
       if (result.payload?.via === 'mac') {
         // Waiting for the owner's computer: never "started", and the pace is the board's own.
         const minutes = macMinutesOf(result.payload.pollSeconds)
-        showOutcome(order.kind === 'task'
-          ? `Sent to your Mac: "${order.title}". It checks ${macEvery(minutes)}, so the card should be on the board in about ${minutes + 1} minutes.`
-          : `Sent to your Mac: ${order.name}. It should start within about ${macWithin(minutes)}.`)
+        showOutcome(macOutcomeWords(order, minutes))
         tellModel(order.kind === 'task' ? VOICE_ORDER.sentTaskMac(minutes) : VOICE_ORDER.sentRunMac(order.slug, minutes))
       } else {
         showOutcome(order.kind === 'task' ? `Sent: "${order.title}". It shows on the board in about a minute.` : `Started: ${order.name}.`)
@@ -6629,7 +6683,7 @@ function openVoice(deps, ui) {
         session.watches = session.watches.filter((one) => one !== watch)
         continue
       }
-      const ended = orderOutcome(watch.order, view?.data, now, zone, deps.ordersLog?.() ?? [])
+      const ended = orderOutcome(watch.order, view?.data, now, zone, deps.ordersLog?.() ?? [], LOCAL_BOARD)
       if (!ended) continue
       // A task's card appearing is said once, and the watch goes on until the task is done.
       if (ended.outcome === 'filed') {
@@ -7557,8 +7611,10 @@ const READINESS_GROUPS = [['no-go', 'No go'], ['silent', 'Silent'], ['go', 'Go']
 // What the wall could not see, said plainly under the lights.
 function readinessNotes(readiness, counts) {
   const notes = []
-  if (readiness.jobs?.status === 'none') notes.push("The Mac has not reported its jobs yet, so only the jobs in your team repo are shown. Your Mac's collector adds the rest.")
-  else if (readiness.jobs?.status === 'unusable') notes.push(`The Mac's jobs could not be shown. ${readiness.jobs.why ?? ''}`.trim())
+  if (readiness.jobs?.status === 'none') notes.push(LOCAL_BOARD
+    ? 'This computer has not reported its jobs yet, so only the jobs in your team repo are shown. Its collector adds the rest.'
+    : "The Mac has not reported its jobs yet, so only the jobs in your team repo are shown. Your Mac's collector adds the rest.")
+  else if (readiness.jobs?.status === 'unusable') notes.push(`${LOCAL_BOARD ? "This computer's" : "The Mac's"} jobs could not be shown. ${readiness.jobs.why ?? ''}`.trim())
   if (readiness.counts?.hiddenBySafety) {
     const n = readiness.counts.hiddenBySafety
     notes.push(`${n} job${n === 1 ? ' was' : 's were'} kept off the wall by the safety check on names. Rename ${n === 1 ? 'it' : 'them'} where ${n === 1 ? 'it is' : 'they are'} made to bring ${n === 1 ? 'it' : 'them'} back.`)
@@ -7756,7 +7812,7 @@ function renderReadiness(nowMs = Date.now()) {
   const badge = el('count-readiness')
   if (badge) badge.textContent = aged.badge ? String(aged.badge) : ''
   // Said only when there is a Mac reading to say it about.
-  refs.note.textContent = `Counted from each job's last report.${macTime ? ` Mac and Hermes jobs as of the Mac's check at ${macTime}.` : ''} ${aged.counts.faded} faded: their last report is older than their own schedule.`
+  refs.note.textContent = `Counted from each job's last report.${macTime ? (LOCAL_BOARD ? ` Jobs on this computer and Hermes jobs as of this computer's check at ${macTime}.` : ` Mac and Hermes jobs as of the Mac's check at ${macTime}.`) : ''} ${aged.counts.faded} faded: their last report is older than their own schedule.`
 
   const sections = []
   for (const [light, label] of READINESS_GROUPS) {
@@ -7768,7 +7824,7 @@ function renderReadiness(nowMs = Date.now()) {
       readinessNode('ul', { cls: 'rd-grid' }, ...cards.map((card) => readinessCardNode(card, nowMs)))))
   }
   if (!aged.cards.length) {
-    sections.push(emptyStateNode('readiness', readinessNode('p', { text: 'No jobs to show yet. Workflows in your team repo, and the jobs on your Mac, appear here as soon as they are found.' })))
+    sections.push(emptyStateNode('readiness', readinessNode('p', { text: `No jobs to show yet. Workflows in your team repo, and the jobs on ${LOCAL_BOARD ? 'this computer' : 'your Mac'}, appear here as soon as they are found.` })))
   }
   if (readiness.switchedOff?.length) {
     sections.push(readinessNode('section', { cls: 'rd-group', attrs: { 'aria-labelledby': 'rd-heading-off' } },

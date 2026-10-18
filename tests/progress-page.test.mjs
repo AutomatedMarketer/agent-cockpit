@@ -99,7 +99,8 @@ test('local: a running order of this page shows its phase, step count, last tool
   assert.deepEqual(calls, [`/api/progress?order=${ID}`])
   assert.match(today(), /Working/)
   assert.match(today(), /7 steps so far/)
-  assert.match(today(), /last used Edit/)
+  assert.match(today(), /editing a file/)
+  assert.doesNotMatch(today(), /last used|Edit/)
   assert.match(today(), /2m 05s/, 'the clock reads from the start time the runner wrote')
   assert.match(today(), /Run monday-brief/, 'still the existing Your Mac card')
   assert.equal(progressRequests(page)[0].init.cache, 'no-store')
@@ -109,14 +110,14 @@ test('local: the phases and the one-step and no-step cases are said in plain wor
   const cases = [
     [doc({ phase: 'started', steps: 0, lastTool: null }), /Starting up/, /no steps yet/],
     [doc({ phase: 'working', steps: 1, lastTool: 'Read' }), /Working/, /1 step so far/],
-    [doc({ phase: 'finishing', steps: 12, lastTool: 'unknown' }), /Finishing up/, /last used a tool/]
+    [doc({ phase: 'finishing', steps: 12, lastTool: 'unknown' }), /Finishing up/, /working/]
   ]
   for (const [one, phase, steps] of cases) {
     const { today } = board({ progress: { [ID]: reply(200, one) } })
     await flush()
     assert.match(today(), phase)
     assert.match(today(), steps)
-    assert.doesNotMatch(today(), /last used null|undefined|NaN/)
+    assert.doesNotMatch(today(), /last used|null|undefined|NaN/)
   }
 })
 
@@ -139,7 +140,7 @@ test('local: the answer is checked again on the page; a tool name that is markup
   const { line } = board({ progress: { [ID]: reply(200, doc({ lastTool: '<img src=x onerror=alert(1)>', extra: '<b>x</b>' })) } })
   await flush()
   assert.doesNotMatch(line(), /onerror|<img|<b>x/)
-  assert.match(line(), /last used a tool/)
+  assert.match(line(), /7 steps so far · working · /)
   const bad = board({ progress: { [ID]: reply(200, doc({ steps: 'lots' })) } })
   await flush()
   assert.doesNotMatch(bad.today(), /lots|NaN/)

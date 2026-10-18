@@ -349,14 +349,17 @@ function orderLines(orders) {
     ]
   }
   const mac = orders.via === 'mac'
+  // The board on a student's own computer: its orders run on that computer, started at once. No Mac, no wait of minutes.
+  const where = orders.local === true ? 'this computer' : 'the owner\'s Mac'
   return [
-    ...(mac ? ['Orders on this board go to the owner\'s Mac, which checks for orders every few minutes and then does them: a sent order is not done yet.'] : []),
+    ...(orders.local === true ? ['Orders on this board run on this computer, which starts them at once: a sent order is not done yet.']
+      : mac ? ['Orders on this board go to the owner\'s Mac, which checks for orders every few minutes and then does them: a sent order is not done yet.'] : []),
     ...(orders.tasks
       ? ['To have the team do something, call add_task with a short title.']
-      : [mac ? 'Task cards cannot be sent by voice: the owner\'s Mac does not take task cards, so say that if asked.' : 'Task cards are not set up on this board: there is no task-intake routine, so say that if asked.']),
+      : [mac ? `Task cards cannot be sent by voice: ${where} does not take task cards, so say that if asked.` : 'Task cards are not set up on this board: there is no task-intake routine, so say that if asked.']),
     ...(orders.jobs?.length
-      ? [mac ? 'To start a job now, call run_job. Only the jobs in its list run on the owner\'s Mac.' : 'To start a job now, call run_job. A job that is not in its list has no trigger link, so it cannot be started from here.']
-      : [mac ? 'No job can be started by voice: the owner\'s Mac has not listed any job it will run, so say that if asked.' : 'No job can be started by voice: none has its own trigger link, so say that if asked.']),
+      ? [mac ? `To start a job now, call run_job. Only the jobs in its list run on ${where}.` : 'To start a job now, call run_job. A job that is not in its list has no trigger link, so it cannot be started from here.']
+      : [mac ? `No job can be started by voice: ${where} has not listed any job it will run, so say that if asked.` : 'No job can be started by voice: none has its own trigger link, so say that if asked.']),
     'Either one only shows the person a card. Nothing is sent until they say yes: a tap on the card\'s Yes' +
       (orders.spokenYes
         ? ', or saying yes themselves after the card appears - only for a job run, or a task with a short title and no details; anything longer needs the tap.'
@@ -1054,11 +1057,13 @@ const macPace = (value) => (Number.isInteger(value) && value >= 60 && value <= 3
 // After this many of the Mac's checks with no sign of it, the order is waiting, not just sent.
 const MAC_CHECKS_BEFORE_WAITING = 3
 const macReason = (state, why) => (typeof why === 'string' && Object.hasOwn(MAC_REASON_WORDS[state] ?? {}, why) ? MAC_REASON_WORDS[state][why] : null)
+// On a student's own computer there is no Mac to talk about: the same words, said about "this computer".
+const toThisComputer = (text) => text.replace(/\b([Yy])our Mac\b/g, (found, first) => (first === 'Y' ? 'This computer' : 'this computer'))
 
 // { state, said } for an order sent to the Mac, from its status file first; done: true when the Mac
 // says it finished, so the card or the run can say the rest. null for an order that did not go to the
 // Mac, or whose id or expiry is not the board's own shape.
-export function macOrderSaid(order, data, now, zone) {
+function macOrderState(order, data, now, zone) {
   if (order?.via !== 'mac' || typeof order.id !== 'string' || !MAC_ORDER_ID.test(order.id)) return null
   const expires = typeof order.expiresAt === 'string' ? Date.parse(order.expiresAt) : NaN
   const sentAt = typeof order.sentAt === 'string' ? Date.parse(order.sentAt) : NaN
@@ -1093,7 +1098,21 @@ export function macOrderSaid(order, data, now, zone) {
   return { state: 'sent to your Mac', said: `Sent to your Mac. It checks ${every}, so ${next}.` }
 }
 
-export function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fresh = false } = {}) {
+// The same, said for the board on a student's own computer (local = true): "this computer" for "your Mac", and the
+// real timing - its runner is started at once when an order arrives, so there is no wait of minutes to promise.
+export function macOrderSaid(order, data, now, zone, local = false) {
+  const state = macOrderState(order, data, now, zone)
+  if (!state || local !== true) return state
+  if (state.state === 'sent to your Mac') {
+    return { ...state, said: order.kind === 'task' ? 'Sent to this computer. It starts in a moment. The card shows on the board soon.' : 'Sent to this computer. It starts in a moment.' }
+  }
+  if (state.state === 'waiting for your Mac') {
+    return { ...state, said: `This computer has not started it yet. It may be busy with another job. If it has not started by ${toolTime(order.expiresAt, zone)}, it will not run at all.` }
+  }
+  return { ...state, said: toThisComputer(state.said) }
+}
+
+export function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = [], fresh = false, local = false } = {}) {
   const zone = voiceZone(timeZone) ?? 'UTC'
   const when = {
     timeZone: zone,
@@ -1111,8 +1130,8 @@ export function jobStatusAnswer(args, { data, now = Date.now(), timeZone, log = 
     const sentAt = Date.parse(order.sentAt)
     const sent = { sentAt: toolTime(order.sentAt, zone) }
     // Sent to the Mac: its status file first; once it says done, the card or the run as for any order.
-    const mac = macOrderSaid(order, data, now, zone)
-    const fromMac = (base) => ({ ...when, ...base, state: mac.state, said: mac.said })
+    const mac = macOrderSaid(order, data, now, zone, local)
+    const fromMac = (base) => ({ ...when, ...base, state: local === true ? toThisComputer(mac.state) : mac.state, said: mac.said })
     if (order.kind === 'run') {
       const job = { which: 'last order', kind: 'run', job: toolText(order.name), ...sent }
       if (mac && !mac.done) return fromMac(job)
@@ -1168,7 +1187,7 @@ function taskCardSlugs(data, title) {
 
 // `siblings` are the other voice orders on this device (their log): within the watch limit of this one, they
 // are told apart from it, so each order gets a run or a card of its own and none takes another's.
-export function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblings = []) {
+export function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblings = [], local = false) {
   if (!order || typeof order !== 'object' || (order.kind !== 'run' && order.kind !== 'task')) return null
   const sentAt = Date.parse(order.sentAt)
   if (Number.isNaN(sentAt)) return null
@@ -1178,7 +1197,7 @@ export function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblin
     outcome,
     summary: resultText(summary, RESULT_SUMMARY_MAX)
   })
-  const mac = macOrderSaid(order, data, now, zone)
+  const mac = macOrderSaid(order, data, now, zone, local)
   if (mac && Object.hasOwn(MAC_ENDS, mac.state)) return ended(MAC_ENDS[mac.state], mac.said)
   if (mac && !mac.done) return null
   // The other voice orders that could be competing for the same run or card: this job's or title's, sent
@@ -1187,7 +1206,7 @@ export function orderOutcome(order, data, now = Date.now(), zone = 'UTC', siblin
     Math.abs(Date.parse(one.sentAt) - sentAt) <= ORDER_WATCH_MS &&
     (order.kind === 'run' ? one.slug === order.slug : one.title === order.title))
   const endedByMac = (one) => {
-    const said = macOrderSaid(one, data, now, zone)
+    const said = macOrderSaid(one, data, now, zone, local)
     return Boolean(said) && Object.hasOwn(MAC_ENDS, said.state)
   }
   const peers = near.filter((one) => !endedByMac(one))
@@ -1429,7 +1448,7 @@ export function orderFrom(name, args, { orders, data } = {}) {
       return { error: 'That job is not set to be started from the board (fire: true in its file), so it cannot be started from here.' }
     }
     const standing = codexOnBoard(data?.mailbox, slug)
-    if (standing === 'not-ready') return { error: 'Codex is not ready on your Mac, so that job cannot be started from here.' }
+    if (standing === 'not-ready') return { error: `Codex is not ready on ${orders.local === true ? 'this computer' : 'your Mac'}, so that job cannot be started from here.` }
     const named = typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim().slice(0, 120) : slug
     return { order: { kind: 'run', slug, name: named, ...(standing === 'ready' ? { worker: 'codex' } : {}) } }
   }

@@ -222,3 +222,8 @@ Live progress on the Today card (T12):
 - The page asks every 1.5 s, only for orders this page sent, only while Today is showing and the tab is in front, and stops
   when the run is final, the Mac's status says the order is over, or two hours after it was sent. An order with no file yet is
   asked every 5 s. The website has no such address and asks nothing new.
+
+Words on the Today card (local board only): the page says "this computer", never "Mac" ("Sent to this computer. It starts in a
+moment." - the runner is started the moment an order arrives, `kickAfterOrders`). The tool's code name becomes plain words on
+both boards: reading files, editing a file, running a command, planning, searching, looking something up; anything else is
+"working". The website's words for its Mac are unchanged. `tests/local-computer-words.test.mjs` holds both.

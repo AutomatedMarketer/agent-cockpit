@@ -11,7 +11,7 @@
 // tests/local-wording.test.mjs reads every sentence in api/ and fails if one comes out still telling a student to
 // use Vercel or redeploy, so a new website sentence needs its rule here.
 
-const TRIGGER = /Vercel|redeploy|hosting environment|env var\b/i
+const TRIGGER = /Vercel|redeploy|hosting environment|env var\b|\bMac\b/i
 export const SENTENCE_KEYS = Object.freeze(['error', 'why', 'note', 'say'])
 
 const NOT_YET = 'This is not set up on this computer yet.'
@@ -50,6 +50,10 @@ const RULES = [
   [/Set EDIT_KEY in Vercel and redeploy to turn it on\./g, 'Set an edit key to turn it on.'],
   [/, or remove it, then redeploy\./g, ', or remove it.'],
   [/ then FIRE_KEY and FIRE_TRIGGERS in Vercel, then redeploy\./g, ' then FIRE_KEY and FIRE_TRIGGERS.'],
+  // The Mac: on a student's computer the orders are done on this computer, at once
+  [/Orders by voice are off, because this board sends its orders to your Mac and the Mac mailbox is not set up yet\. The README's "Orders on your own computer" steps switch it on\./g, 'Orders by voice are off, because starting jobs from the board is not set up on this computer yet.'],
+  [/(\d+) orders are already waiting for your Mac, so nothing was sent: check that your Mac is on and awake, then try again\./g, '$1 orders are already waiting, so nothing was sent: wait for this computer to finish some, then try again.'],
+  [/Codex is not ready on your Mac/g, 'Codex is not ready on this computer'],
   // Sign-in and sign-out of the website
   [/set a longer one in Vercel and redeploy\./g, 'use a longer one.'],
   [/change VIEW_KEY \(or BOARD_PASSWORD\) in Vercel and redeploy\./g, 'close the board and open it again from Start Board.'],

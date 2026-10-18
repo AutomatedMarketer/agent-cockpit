@@ -39,6 +39,7 @@ const extras = (env, tasks) => ({
 // jobs are offered is the computer's to say, in the status file it pushes (`mac`, shaped by
 // state.js); until it has pushed one, task cards are on and no job is offered. fire.js still checks
 // fire: true, and the computer its own list, on every order.
+const LOCAL_RUNNER_NAME = 'this-computer'
 function mailboxOrders(env, mac, publicFire) {
   const settings = mailboxConfig(env)
   const keyed = publicFire || mailboxFireKeyOk(env.FIRE_KEY)
@@ -49,7 +50,10 @@ function mailboxOrders(env, mac, publicFire) {
     ? [...new Set((mac.allows.jobs ?? []).filter((slug) => isValidSlug(slug)))].sort().slice(0, MAX_ORDER_JOBS)
     : []
   if (!tasks && !jobs.length) return off(MAILBOX_ORDERS_OFF)
-  return { on: true, tasks, jobs, key: publicFire ? 'public' : 'fire-key', via: 'mac', ...extras(env, tasks) }
+  // The board that runs on a student's own computer names its runner this (local/runner.mjs LOCAL_RUNNER): its
+  // orders are done on that computer at once, and its words say so.
+  const here = settings.runner === LOCAL_RUNNER_NAME
+  return { on: true, tasks, jobs, key: publicFire ? 'public' : 'fire-key', via: 'mac', ...(here ? { local: true } : {}), ...extras(env, tasks) }
 }
 
 export function ordersConfig(env = {}, mac = null) {
@@ -81,7 +85,7 @@ export function ordersConfig(env = {}, mac = null) {
 export function ordersView(config) {
   if (!config?.on) return { on: false }
   const { on, tasks, jobs, key, spokenYes, jev } = config
-  return { on, tasks, jobs: [...jobs], key, spokenYes, jev, ...(config.via === 'mac' ? { via: 'mac' } : {}) }
+  return { on, tasks, jobs: [...jobs], key, spokenYes, jev, ...(config.via === 'mac' ? { via: 'mac' } : {}), ...(config.local === true ? { local: true } : {}) }
 }
 
 // The computer's own status file, read once when a call starts (api/_mac-status.js; also what /api/fire asks
