@@ -41,15 +41,30 @@ export function stateDirFor({ platform, env, home }) {
   return join(env.XDG_STATE_HOME || join(home, '.local', 'state'), 'agent-board')
 }
 
+// What a Windows system program (icacls) needs to start, and nothing else: never the board's whole environment, which
+// holds keys. Each name is found whatever its case (Git Bash hands on SYSTEMROOT and Path) and given in its usual spelling.
+// The runner's taskkill gets the same short kind of environment on the student-runner branch (local/runner.mjs,
+// runnerEnvironment); when the branches meet, the two should become one helper.
+const SYSTEM_PROGRAM_NEEDS = ['SystemRoot', 'windir', 'PATH', 'ComSpec']
+export function systemProgramEnvironment(source = {}) {
+  const env = {}
+  for (const spelling of SYSTEM_PROGRAM_NEEDS) {
+    const name = Object.keys(source).find((one) => one.toUpperCase() === spelling.toUpperCase() && typeof source[one] === 'string' && source[one] !== '')
+    if (name !== undefined) env[spelling] = source[name]
+  }
+  return env
+}
+
 // Windows has no file modes. A folder under the user's profile usually inherits access for other
 // accounts (a sandbox user, a service), so the state folder is cut off from what it inherits and
-// given to the current user only. icacls by its full path, from System32, no shell.
+// given to the current user only. icacls by its full path, from System32, no shell, with a short environment.
 export function lockToCurrentUser(path, { platform = process.platform, env = process.env, user = userInfo().username, domain = env.USERDOMAIN, run = execFileSync } = {}) {
   if (platform !== 'win32') return
-  if (!env.SystemRoot) throw new Error('SystemRoot is not set, so the board cannot make its folder private.')
-  const system = win32.join(env.SystemRoot, 'System32')
+  const systemEnv = systemProgramEnvironment(env)
+  if (!systemEnv.SystemRoot) throw new Error('SystemRoot is not set, so the board cannot make its folder private.')
+  const system = win32.join(systemEnv.SystemRoot, 'System32')
   try {
-    run(win32.join(system, 'icacls.exe'), [path, '/inheritance:r', '/grant:r', `${domain ? `${domain}${String.fromCharCode(92)}${user}` : user}:(OI)(CI)F`], { cwd: system, env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' }, stdio: 'ignore', windowsHide: true })
+    run(win32.join(system, 'icacls.exe'), [path, '/inheritance:r', '/grant:r', `${domain ? `${domain}${String.fromCharCode(92)}${user}` : user}:(OI)(CI)F`], { cwd: system, env: { ...systemEnv, NoDefaultCurrentDirectoryInExePath: '1' }, stdio: 'ignore', windowsHide: true })
   } catch {
     throw new Error(`The board could not make its folder private to you (${path}). Run it from your own Windows account and try again.`)
   }

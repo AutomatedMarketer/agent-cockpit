@@ -512,6 +512,27 @@ test('private folder: icacls is run by its full path from System32, without a sh
   assert.equal(options.env.NoDefaultCurrentDirectoryInExePath, '1')
 })
 
+test('private folder: icacls is given a short environment with no key in it - not the board\'s whole one', () => {
+  const calls = []
+  // The board's own environment holds keys (its .env, and whatever the computer has set). Git Bash hands names on in other
+  // spellings (SYSTEMROOT, Path), so each is found whatever its case.
+  const env = {
+    SYSTEMROOT: String.raw`C:\Windows`, windir: String.raw`C:\Windows`, Path: String.raw`C:\Windows\System32;C:\bin`, ComSpec: String.raw`C:\Windows\System32\cmd.exe`,
+    OPENAI_API_KEY: 'sk-test', GITHUB_TOKEN: 'ghp_test', ANTHROPIC_API_KEY: 'sk-ant-test', MAILBOX_SECRET: 's'.repeat(40), MAILBOX_KEY: 'k'.repeat(40),
+    FIRE_KEY: 'f', VIEW_KEY: 'v', BOARD_PASSWORD: 'p', AWS_SECRET_ACCESS_KEY: 'a', BLOB_READ_WRITE_TOKEN: 'b', USERPROFILE: String.raw`C:\Users\a`, USERDOMAIN: 'MYPC'
+  }
+  lockToCurrentUser(String.raw`C:\s`, { platform: 'win32', env, user: 'a', run: (...args) => calls.push(args) })
+  assert.equal(calls.length, 1)
+  const [program, , options] = calls[0]
+  assert.equal(program, String.raw`C:\Windows\System32\icacls.exe`, 'SystemRoot found whatever its spelling')
+  assert.deepEqual(options.env, {
+    SystemRoot: String.raw`C:\Windows`, windir: String.raw`C:\Windows`, PATH: String.raw`C:\Windows\System32;C:\bin`, ComSpec: String.raw`C:\Windows\System32\cmd.exe`,
+    NoDefaultCurrentDirectoryInExePath: '1'
+  })
+  for (const name of Object.keys(options.env)) assert.doesNotMatch(name, /KEY|SECRET|TOKEN|PASSWORD/i, `icacls saw ${name}`)
+  assert.equal(calls[0][1][3], String.raw`MYPC\a:(OI)(CI)F`, 'the domain still comes from the board\'s environment')
+})
+
 test('private folder: nothing is run off Windows, a missing SystemRoot is refused, and a failure says so plainly', () => {
   let ran = false
   lockToCurrentUser('/x', { platform: 'linux', env: {}, user: 'a', run: () => { ran = true } })
