@@ -227,3 +227,6 @@ Words on the Today card (local board only): the page says "this computer", never
 moment." - the runner is started the moment an order arrives, `kickAfterOrders`). The tool's code name becomes plain words on
 both boards: reading files, editing a file, running a command, planning, searching, looking something up; anything else is
 "working". The website's words for its Mac are unchanged. `tests/local-computer-words.test.mjs` holds both.
+
+The Readiness wall's own lines are turned the same way, on their way out of the local server (`localizeReadiness` in
+`local/localize.mjs`): only the board's exact wording, so a job called "Back up the Mac" keeps its name. `tests/local-readiness-words.test.mjs`.

@@ -54,6 +54,8 @@ const RULES = [
   [/Orders by voice are off, because this board sends its orders to your Mac and the Mac mailbox is not set up yet\. The README's "Orders on your own computer" steps switch it on\./g, 'Orders by voice are off, because starting jobs from the board is not set up on this computer yet.'],
   [/(\d+) orders are already waiting for your Mac, so nothing was sent: check that your Mac is on and awake, then try again\./g, '$1 orders are already waiting, so nothing was sent: wait for this computer to finish some, then try again.'],
   [/Codex is not ready on your Mac/g, 'Codex is not ready on this computer'],
+  [/^Your Mac has not reported on an order yet\./g, 'This computer has not reported on an order yet.'],
+  [/\bA Mac mailbox file\b/g, 'The orders status file'],
   // Sign-in and sign-out of the website
   [/set a longer one in Vercel and redeploy\./g, 'use a longer one.'],
   [/change VIEW_KEY \(or BOARD_PASSWORD\) in Vercel and redeploy\./g, 'close the board and open it again from Start Board.'],
@@ -78,13 +80,58 @@ export function localizeSentence(text) {
   return out.replace(/\s+([.,;:])/g, '$1').replace(/\s{2,}/g, ' ').trim()
 }
 
+// The Readiness wall's lines (api/_readiness.js), built on the server for a Mac. Same rule as above: only the board's own
+// exact wording is rewritten, so a job called "Back up the Mac", or a label such as local.Mac-backup, is never touched.
+// The words are for a beginner: "this computer", and no "plist" or "control center".
+const READINESS_RULES = [
+  [/ Whether its last report was written is checked on the Mac control center, not here\./g, ' Whether its last report was written is not checked here.'],
+  [/\(its plist says Disabled\), so the Mac's scheduler is told/g, 'so its scheduler is told'],
+  [/turned off on the Mac so its scheduler/g, 'turned off on this computer, so its scheduler'],
+  [/The Mac does not say why; its log on the Mac has the reason\./g, 'This computer does not say why; its log has the reason.'],
+  [/The Mac's list of /g, "This computer's list of "],
+  [/and the Mac did not say why/g, 'and this computer did not say why'],
+  [/in the Mac's scheduler/g, "in this computer's scheduler"],
+  [/The Mac's last reading is/g, "This computer's last reading is"],
+  [/when the Mac checked at/g, 'when this computer checked at'],
+  [/right after the Mac restarted at/g, 'right after this computer restarted at'],
+  [/^Mac restarted at /g, 'This computer restarted at '],
+  [/so nothing on the Mac is being checked/g, 'so nothing on this computer is being checked'],
+  [/Nothing it changed left the Mac;/g, 'Nothing it changed left this computer;'],
+  [/^Your Mac (last reported|lost track|has not reported)/g, 'This computer $1'],
+  [/failed on your Mac at/g, 'failed on this computer at'],
+  [/cannot vouch for its mailbox\./g, 'cannot vouch for its orders.'],
+  [/ \(Mac time\)/g, " (this computer's time)"],
+  [/^Mac mailbox$/g, 'Orders from the board'],
+  [/ · Mac mailbox$/g, ' · Orders from the board'],
+  [/^Mac LaunchAgents$/g, 'Scheduled jobs']
+]
+
+// A readiness string; `key` is the field it sits in ("where" is a computer's name, "Mac" when it gave none).
+function localizeReadinessText(text, key) {
+  if (key === 'where' && text === 'Mac') return 'This computer'
+  let out = text
+  for (const [pattern, replacement] of READINESS_RULES) out = out.replace(pattern, replacement)
+  return out.replace(/^Mac · /, 'This computer · ')
+}
+
+export function localizeReadiness(value, key = '', depth = 0) {
+  if (typeof value === 'string') return localizeReadinessText(value, key)
+  if (depth > 12 || value === null || typeof value !== 'object') return value
+  if (Array.isArray(value)) return value.map((item) => localizeReadiness(item, key, depth + 1))
+  const out = {}
+  for (const [name, inner] of Object.entries(value)) out[name] = localizeReadiness(inner, name, depth + 1)
+  return out
+}
+
 // A JSON answer with its sentences localized; every other value is returned as it was.
 export function localizeResponse(value, depth = 0) {
   if (depth > 6 || value === null || typeof value !== 'object') return value
   if (Array.isArray(value)) return value.map((item) => localizeResponse(item, depth + 1))
   const out = {}
   for (const [key, inner] of Object.entries(value)) {
-    out[key] = SENTENCE_KEYS.includes(key) && typeof inner === 'string' ? localizeSentence(inner) : localizeResponse(inner, depth + 1)
+    out[key] = key === 'readiness' && depth === 0 ? localizeReadiness(inner)
+      : SENTENCE_KEYS.includes(key) && typeof inner === 'string' ? localizeSentence(inner)
+        : localizeResponse(inner, depth + 1)
   }
   return out
 }
