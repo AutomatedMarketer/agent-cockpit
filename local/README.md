@@ -149,8 +149,10 @@ Jobs on this computer (T8) - the Run, task and card buttons:
   the runner's self-test with the same places, for example on Windows:
   `node runner-code\scripts\mailbox-runner.mjs --selftest --state-dir "%LOCALAPPDATA%\Agent Board\state\runner" --work-dir "%LOCALAPPDATA%\Agent Board\work" --env-file "%LOCALAPPDATA%\Agent Board\state\runner\runner.env"`.
   Until it passes, card orders work and Run orders are refused as "not ready".
-- **Jobs stay off**, with one line in the Start window, when the team folder is not on GitHub, `runner-code` is missing
-  (or is inside the team folder), or the runner's files cannot be written or read.
+- **Jobs stay off**, with one line in the Start window, when the team folder is not on GitHub, its GitHub address holds
+  a password or token (git would put it on a command line every program can read, and the runner refuses it), `runner-code`
+  is missing (or is inside the team folder), or the runner's files cannot be written or read. Such an address is never
+  copied into the runner's work copy, and a work copy an older board left with one is made again.
 - git for the runner is found once on PATH by its full path (never one inside the team folder, the board, the runner
   code or its work copy), started from git's own folder with `-C`; the runner and every program it starts get only
   where-things-are variables (PATH, HOME, the Windows profile folders...), never a key, the per-run key or a board setting.

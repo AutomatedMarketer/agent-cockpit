@@ -136,10 +136,11 @@ test('the collector\'s taskkill sees no key either', async () => {
 
 // ---- 3. the address is never on a command line ----------------------------------------------------------------
 
-test('the work copy is made without the team folder\'s address on any command line (an address can carry a token)', { skip: NO_RUNNER }, async () => {
+test('the work copy is made without the team folder\'s address on any command line', { skip: NO_RUNNER }, async () => {
   const work = join(temp('work-copy'), 'work')
   const state = temp('work-state')
-  const url = 'https://x-access-token:ghp_NotARealTokenButLooksLikeOne123@github.com/ExampleOwner/example-team.git'
+  // An address that holds a login is never written at all (local-runner-walls: the work copy is never given one).
+  const url = 'https://github.com/ExampleOwner/example-team.git'
   const calls = []
   const realGit = runnerGit({ env: runnerEnvironment(process.env) })
   const git = async (args, cwd) => {

@@ -8,10 +8,10 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { findGit } from '../api/_repo.js'
+import { addressHasLogin, findGit } from '../api/_repo.js'
 import {
   LOCAL_BOARD_ORIGIN, LOCAL_RUNNER, MAILBOX_NAMES, SAY, allowlistText, applyJobsOff, applyJobsOn, createLocalRunner, createMailboxFetch,
-  ensureRunnerFiles, kickAfterOrders, placesProblem, prepareJobs, runnerEnvironment, runnerGit, runnerPlacesFor, workDirFor
+  ensureRunnerFiles, kickAfterOrders, makeWorkCopy, placesProblem, prepareJobs, runnerEnvironment, runnerGit, runnerPlacesFor, workDirFor
 } from '../local/runner.mjs'
 import { makeHandler } from '../api/mailbox.js'
 import { mailboxConfig, queueOrder } from '../api/_mailbox.js'
@@ -372,4 +372,128 @@ test('ticks: one at a time; a kick while one runs is not lost (exactly one more 
   local.kick()
   await local.idle()
   assert.equal(ticks, 3, 'nothing ticks after stop()')
+})
+
+// ---- a team folder address that holds a login ------------------------------------------------------------
+// git hands the whole address to git-remote-https on its command line on every fetch and push, where any program on the
+// computer can read it, and the runner refuses such an address on every tick (origin-has-login). So jobs never turn on for
+// one, and the address is never written into the work copy. The token is made up; every address holding it is pointed at
+// the bare "GitHub" folder (insteadOf), so nothing can reach the network.
+
+const FAKE_TOKEN = ['ghp', 'NotARealTokenForJobsTests0123'].join('_')
+const LOGIN_GH = `https://x-access-token:${FAKE_TOKEN}@github.com/ExampleOwner/example-team.git`
+const PLAIN_GH = 'https://github.com/ExampleOwner/example-team.git'
+
+function jobsOffForLogin(world) {
+  const env = { FIRE_MODE: 'mailbox', FIRE_TRIGGERS: 'x', MAILBOX_KEY: 'old' }
+  const lines = []
+  return {
+    env,
+    lines,
+    run: () => prepareJobs({ boardDir: world.board, stateDir: world.state, teamFolder: world.team, env, log: (line) => lines.push(line), places: { workDir: world.work, codeDir: RUNNER_CODE } })
+  }
+}
+
+test('jobs stay off, with one plain line and no token in it, when the team folder\'s address holds a token - and nothing is written', async () => {
+  const world = makeWorld()
+  try {
+    git(world.team, 'remote', 'set-url', 'origin', LOGIN_GH)
+    git(world.team, 'config', `url.${world.bare}.insteadOf`, LOGIN_GH)
+    const off = jobsOffForLogin(world)
+    assert.equal(await off.run(), null)
+    assert.deepEqual(off.lines, [SAY.hasLogin])
+    assert.match(SAY.hasLogin, /^Jobs are off: /)
+    assert.match(SAY.hasLogin, /plain https:\/\/github\.com\//)
+    assert.ok(!off.lines.join('\n').includes(FAKE_TOKEN) && !off.lines.join('\n').includes('x-access-token'), 'the token was repeated')
+    for (const name of ['FIRE_MODE', 'FIRE_TRIGGERS', 'MAILBOX_KEY']) assert.equal(off.env[name], undefined, `${name} was left set`)
+    assert.equal(existsSync(world.state), false, 'the runner\'s files were written')
+    assert.equal(existsSync(world.work), false, 'a work copy was made')
+  } finally {
+    world.done()
+  }
+})
+
+test('jobs stay off too when git would rewrite a plain address into one holding a token (url.<base>.insteadOf)', async () => {
+  const world = makeWorld()
+  try {
+    git(world.team, 'config', '--unset', `url.${world.bare}.insteadOf`)
+    git(world.team, 'config', `url.https://x-access-token:${FAKE_TOKEN}@github.com/.insteadOf`, 'https://github.com/')
+    const off = jobsOffForLogin(world)
+    assert.equal(await off.run(), null)
+    assert.deepEqual(off.lines, [SAY.hasLogin])
+    assert.equal(existsSync(world.work), false)
+  } finally {
+    world.done()
+  }
+})
+
+test('the work copy is never given an address that holds a login: nothing is made and no git runs', async () => {
+  const work = join(temp('work-login'), 'work')
+  const state = temp('work-login-state')
+  const calls = []
+  const refuse = async (args) => {
+    calls.push(args)
+    throw new Error('no git in this test')
+  }
+  try {
+    for (const url of [LOGIN_GH, 'https://someone@github.com/ExampleOwner/example-team.git', 'ssh://git:pw@github.com/ExampleOwner/example-team.git']) {
+      assert.equal(await makeWorkCopy({ git: refuse, url, workDir: work, stateDir: state, codeDir: RUNNER_CODE }), false, url)
+      assert.equal(existsSync(work), false, url)
+    }
+    assert.deepEqual(calls, [])
+  } finally {
+    rmSync(dirname(work), { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
+  }
+})
+
+test('a work copy left with a token in its address (by an older board) is made again with the plain address', { skip: NO_RUNNER }, async () => {
+  const realGit = runnerGit({ env: runnerEnvironment(process.env) })
+  const { readOrigin } = await import(pathToFileURL(join(RUNNER_CODE, 'scripts', 'lib', 'mailbox', 'workcopy.mjs')).href)
+  for (const [name, origin] of [['url', `\turl = ${LOGIN_GH}\n`], ['pushurl', `\turl = ${PLAIN_GH}\n\tpushurl = ${LOGIN_GH}\n`]]) {
+    const work = join(temp(`work-old-${name}`), 'work')
+    const state = temp(`work-old-${name}-state`)
+    try {
+      mkdirSync(join(work, '.git'), { recursive: true })
+      writeFileSync(join(work, '.git', 'config'), `[core]\n\tbare = false\n[remote "origin"]\n${origin}\tfetch = +refs/heads/*:refs/remotes/origin/*\n`)
+      assert.equal(await makeWorkCopy({ git: realGit, url: PLAIN_GH, workDir: work, stateDir: state, codeDir: RUNNER_CODE }), true, name)
+      assert.ok(!readFileSync(join(work, '.git', 'config'), 'utf8').includes(FAKE_TOKEN), `the token was kept (${name})`)
+      assert.deepEqual(await readOrigin(work), { fetch: PLAIN_GH, push: PLAIN_GH }, name)
+    } finally {
+      rmSync(dirname(work), { recursive: true, force: true })
+      rmSync(state, { recursive: true, force: true })
+    }
+  }
+})
+
+test('a work copy with a plain address is kept as it is', async () => {
+  const work = join(temp('work-kept'), 'work')
+  const state = temp('work-kept-state')
+  try {
+    mkdirSync(join(work, '.git'), { recursive: true })
+    const config = `[core]\n\tbare = false\n[remote "origin"]\n\turl = ${PLAIN_GH}\n`
+    writeFileSync(join(work, '.git', 'config'), config)
+    const refuse = async () => { throw new Error('no git in this test') }
+    assert.equal(await makeWorkCopy({ git: refuse, url: PLAIN_GH, workDir: work, stateDir: state, codeDir: RUNNER_CODE }), true)
+    assert.equal(readFileSync(join(work, '.git', 'config'), 'utf8'), config)
+  } finally {
+    rmSync(dirname(work), { recursive: true, force: true })
+    rmSync(state, { recursive: true, force: true })
+  }
+})
+
+test('addressHasLogin is the runner\'s own rule, case for case (when the runner code has it)', async (t) => {
+  const workcopy = await import(pathToFileURL(join(RUNNER_CODE, 'scripts', 'lib', 'mailbox', 'workcopy.mjs')).href).catch(() => null)
+  if (typeof workcopy?.addressHasLogin !== 'function') {
+    t.skip(`NOT CHECKED - the runner code at ${RUNNER_CODE} has no addressHasLogin yet (template branch gitguard-noargv)`)
+    return
+  }
+  const cases = [
+    LOGIN_GH, PLAIN_GH, 'https://someone@github.com/a/b', 'HTTPS://a:b@github.com/c/d', 'http://a@github.com/b/c', 'ssh://git@github.com/a/b.git',
+    'ssh://git:pw@github.com/a/b.git', 'SSH://git:pw@github.com/a/b.git', 'git+ssh://git:pw@github.com/a/b.git', 'git+ssh://git@github.com/a/b.git',
+    'git@github.com:a/b.git', 'a:b@github.com:c/d.git', 'https://github.com/a/b?x=a@b', 'https://github.com/a/b#x@y', 'https:// a@github.com/b',
+    'file:///srv/x.git', 'file://user@host/x', '/srv/x.git', 'C:\\x', 'ext::sh -c x', '', 'origin', ' https://a:b@github.com/c/d', 'https://a:b@github.com/c/d\n',
+    undefined, null, 7, {}
+  ]
+  for (const value of cases) assert.equal(addressHasLogin(value), workcopy.addressHasLogin(value), String(value))
 })

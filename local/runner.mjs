@@ -22,12 +22,12 @@
 
 import { execFile, spawn as realSpawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { chmod, lstat, mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
-import { findGit, gitEnvironment, githubNames, isInside, refreshNow, runGit } from '../api/_repo.js'
+import { addressHasLogin, findGit, gitEnvironment, githubNames, isInside, refreshNow, runGit } from '../api/_repo.js'
 import { mailboxConfig } from '../api/_mailbox.js'
 import mailboxHandler from '../api/mailbox.js'
 import { shimResponse } from './vercel-shim.mjs'
@@ -52,6 +52,7 @@ export const MAILBOX_NAMES = Object.freeze(['FIRE_MODE', 'FIRE_TRIGGERS', 'FIRE_
 
 export const SAY = Object.freeze({
   notGitHub: 'Jobs are off: the team folder is not on GitHub, so the board cannot send it orders.',
+  hasLogin: 'Jobs are off: the team folder\'s GitHub address holds a password or token, which any program on this computer could read while git runs. Clone it again with a plain https://github.com/... address and let Git\'s sign-in helper hold the login.',
   noCode: 'Jobs are off: the runner code is not installed next to the board (the runner-code folder). Ask Claude to set up jobs on this computer.',
   badPlaces: 'Jobs are off: the board\'s folders overlap the team folder. Ask Claude to set up jobs on this computer again.',
   badFiles: 'Jobs are off: the runner\'s settings could not be written or read. Ask Claude to set up jobs on this computer again.',
@@ -397,20 +398,50 @@ export function kickAfterOrders(handler, kick) {
 
 // ---- turning jobs on at start --------------------------------------------------------------------------------
 
+// The team folder's origin: { url } as its config writes it, and `login` - whether git would hand a login to GitHub with it,
+// asked of the address as written and as git will really use it (`ls-remote --get-url` applies url.<base>.insteadOf rules,
+// which can put a token into a plain address, and talks to no server). null when git would not say.
 async function originAddress(teamFolder) {
+  const ask = async (args) => (await runGit(args, { cwd: teamFolder, maxBuffer: 4096 })).stdout.toString('utf8').trim()
   try {
-    const { stdout } = await runGit(['config', '--get', 'remote.origin.url'], { cwd: teamFolder, maxBuffer: 4096 })
-    return stdout.toString('utf8').trim()
+    const url = await ask(['config', '--get', 'remote.origin.url'])
+    const used = url ? await ask(['ls-remote', '--get-url', 'origin']) : ''
+    return { url, login: addressHasLogin(url) || addressHasLogin(used) }
   } catch {
     return null
   }
 }
 
+// Whether a work copy's config names an address that holds a login (an older board copied the team folder's address in
+// as it was). The runner refuses such a work copy on every tick, and keeps its address when it rewrites the config.
+async function workCopyHasLogin(workDir) {
+  let text
+  try {
+    text = await readFile(path.join(workDir, '.git', 'config'), 'utf8')
+  } catch {
+    return false
+  }
+  return text.split(/\r?\n/).some((line) => {
+    const found = /^\s*(?:url|pushurl)\s*=\s*(\S.*?)\s*$/i.exec(line)
+    return found !== null && addressHasLogin(found[1].replace(/^"(.*)"$/, '$1'))
+  })
+}
+
 // The runner's own copy of the team repo: an empty repo whose config names the team repo, written the way the runner
-// writes it (workcopy.mjs, configText). Its first tick fetches. The address is never on a command line - an address can
-// carry a token, and a command line is visible to every program on the computer.
+// writes it (workcopy.mjs, configText). Its first tick fetches. The address is never on a command line - and one that
+// holds a login is never written at all (the runner would refuse it on every tick, and git would put it on the command
+// line of every fetch). A work copy left with such an address is made again: it holds nothing the runner needs, which
+// resets it from the team repo on every tick.
 export async function makeWorkCopy({ git, url, workDir, stateDir, codeDir }) {
-  if (await exists(workDir)) return true
+  if (addressHasLogin(url)) return false
+  if (await exists(workDir)) {
+    if (!(await workCopyHasLogin(workDir))) return true
+    try {
+      await rm(workDir, { recursive: true, force: true })
+    } catch {
+      return false
+    }
+  }
   const hooks = path.join(stateDir, 'empty-hooks')
   try {
     const { configText } = await import(pathToFileURL(path.join(codeDir, 'scripts', 'lib', 'mailbox', 'workcopy.mjs')).href)
@@ -449,7 +480,9 @@ export async function prepareJobs({
     log(sentence)
     return null
   }
-  const url = await originAddress(teamFolder)
+  const origin = await originAddress(teamFolder)
+  if (origin?.login) return off(SAY.hasLogin)
+  const url = origin?.url
   const names = url ? githubNames(url) : null
   if (!names) return off(SAY.notGitHub)
   const repo = `${names.owner}/${names.repo}`
