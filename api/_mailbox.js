@@ -48,6 +48,9 @@ export const MAILBOX_CONTRACT = Object.freeze({
   pollSeconds: Object.freeze({ min: 60, max: 3600, default: 600 }),
   maxOrders: 20,
   actions: ['run', 'pause', 'task', 'arm', 'approve', 'move', 'skill', 'agent'],
+  // Which worker does a run (T14, Codex as a second worker): the order's optional `worker` field. Only `run` has it;
+  // left out, it means claude. The board writes it only for "codex", so an order for Claude is the bytes it always was.
+  workers: Object.freeze({ values: Object.freeze(['claude', 'codex']), default: 'claude', actions: Object.freeze(['run']) }),
   source: 'agent-cockpit',
   status: Object.freeze({
     schema: 'agent-mailbox/v1',
@@ -97,7 +100,17 @@ export const MAILBOX_CONTRACT = Object.freeze({
     optionalKeys: {
       order: ['steps']
     },
-    maxSteps: 100000
+    maxSteps: 100000,
+    // The Codex worker's keys and words, kept apart from the older lists above (which stay the contract's word for
+    // word): allows may also have `workers` (ready now) and `codexJobs`, both or neither.
+    workers: Object.freeze({
+      values: Object.freeze(['claude', 'codex']),
+      allowsOptional: Object.freeze(['workers', 'codexJobs']),
+      reasons: Object.freeze({
+        refused: Object.freeze({ 'worker-not-allowed': 'that job is set to another worker on that computer' }),
+        failed: Object.freeze({ 'codex-failed': 'Codex stopped with an error' })
+      })
+    })
   })
 })
 

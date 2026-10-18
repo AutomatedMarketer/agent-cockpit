@@ -270,20 +270,29 @@ function ladderHtml(setup) {
 // may swap for an emoji, and then every run button carries a different-looking picture.
 const PLAY = '<span class="play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.5l11 6.5-11 6.5z"/></svg></span>'
 
-function fireButtonsHtml(workflows) {
+// A run button. A job the Mac gives to Codex (codexOnBoard) sends worker "codex" and says so; one whose Codex is not ready is off.
+function runButtonHtml(workflow, text, mailbox) {
+  const slug = escapeHtml(workflow.slug)
+  const standing = codexOnBoard(mailbox, workflow.slug)
+  const label = (words) => ` <span class="small">${words}</span>`
+  if (standing === 'ready') return `<button class="fire job" type="button" data-fire="${slug}" data-action="run" data-worker="codex">${PLAY}${text}${label('runs with Codex')}</button>`
+  if (standing === 'not-ready') return `<button class="fire job" type="button" disabled>${PLAY}${text}${label('Codex is not ready on your Mac')}</button>`
+  return `<button class="fire job" type="button" data-fire="${slug}" data-action="run">${PLAY}${text}</button>`
+}
+
+function fireButtonsHtml(workflows, mailbox) {
   const firing = workflows.filter((workflow) => workflow.fire)
   if (!firing.length) return ''
   // Each button POSTs /api/fire { workflow: slug } same-origin. The fire key never lives
   // in this page's source — the endpoint asks for it (401) and the prompt keeps it in
   // sessionStorage for this tab only. See fireWorkflow() below.
-  const buttons = firing.map((workflow) =>
-    `<button class="fire job" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="run">${PLAY}${escapeHtml(workflow.name)}</button>`
-  ).join('')
+  const buttons = firing.map((workflow) => runButtonHtml(workflow, escapeHtml(workflow.name), mailbox)).join('')
+  const withCodex = firing.some((workflow) => codexOnBoard(mailbox, workflow.slug) !== 'not-codex')
   // id="run-jobs" is where the top bar's Run a job lands, from any screen.
   return sectionHead('One tap', '<h2 id="run-jobs">Run a job</h2>') + `<div class="fires">${buttons}</div>
     <p class="small muted">Starts that job now rather than waiting for its schedule. It spends one run
     from your Claude account and leaves its work in your repo as a draft &mdash; nothing is sent
-    anywhere and nothing is deleted.</p>`
+    anywhere and nothing is deleted.${withCodex ? ' A job marked Codex uses your ChatGPT plan instead.' : ''}</p>`
 }
 
 // The Board lives here on Today, in the slot Overnight used to hold, rather than as a
@@ -1172,7 +1181,7 @@ function renderToday() {
     planLimitsHtml(data.usage) +
     snapshotBannerHtml(data.routines) +
     ladderHtml(data.setup) +
-    fireButtonsHtml(data.workflows) +
+    fireButtonsHtml(data.workflows, data.mailbox) +
     macOrdersHtml() +
     voiceResultsHtml() +
     sectionHead('What everyone is on', '<h2>Board</h2>') + boardHtml(board) +
@@ -1782,9 +1791,7 @@ function renderWorkflows() {
     // dispatch too: the agent session edits the workflow file, the dashboard itself never
     // writes to the repo (spec B.2). Both need trigger.fire: true, because dispatch goes
     // through the workflow's registered trigger URL.
-    const runButton = workflow.fire
-      ? `<button class="fire job" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="run">${PLAY}Run</button>`
-      : ''
+    const runButton = workflow.fire ? runButtonHtml(workflow, 'Run', data.mailbox) : ''
     const pauseButton = workflow.schedule
       ? (workflow.fire
         ? `<button class="fire" type="button" data-fire="${escapeHtml(workflow.slug)}" data-action="pause">&#10074;&#10074; Pause</button>`
@@ -2745,7 +2752,7 @@ async function fireWorkflow(button) {
   note.className = 'fire-note'
   note.textContent = ''
   try {
-    const result = await postFire({ workflow: slug, action })
+    const result = await postFire({ workflow: slug, action, ...(action === 'run' && button.dataset.worker === 'codex' ? { worker: 'codex' } : {}) })
     if (result.ok) {
       note.className = 'fire-note ok'
       if (macNote(note, action, `${action === 'pause' ? 'Pause' : 'Run'} ${slug}`, result.payload)) {
@@ -4885,12 +4892,14 @@ const MAC_REASON_WORDS = {
     'no-such-row': 'no row in proposals.yml matches it',
     'several-rows': 'more than one row in proposals.yml matches it',
     'no-workflow': 'that job has no workflow file',
-    'not-ready': 'its daily check found a problem with its login or settings'
+    'not-ready': 'its daily check found a problem with its login or settings',
+    'worker-not-allowed': 'that job is set to another worker on that computer'
   },
   failed: {
     'change-refused': 'the change touched files it may not touch',
-    'tool-refused': 'Claude tried a tool it may not use',
+    'tool-refused': 'it tried a tool it may not use',
     'claude-failed': 'Claude stopped with an error',
+    'codex-failed': 'Codex stopped with an error',
     'timed-out': 'it ran past its time limit',
     'run-log-refused': 'its run log did not pass the check',
     'push-failed': 'the change could not be pushed'
@@ -5232,6 +5241,18 @@ const VOICE_DETAILS_MAX = 500
 const ORDER_TITLE = { least: 3, most: 200 }
 const ORDER_CONTROL = /[\u0000-\u001f\u007f]/
 
+// The Codex worker for one job, from the Mac's status file (data.mailbox): 'ready', 'not-ready' or 'not-codex'.
+function codexOnBoard(mailbox, slug) {
+  const computers = mailbox && mailbox.status === 'ok' && Array.isArray(mailbox.computers) ? mailbox.computers : []
+  for (const computer of computers) {
+    const allows = computer && computer.allows
+    if (allows && Array.isArray(allows.codexJobs) && Array.isArray(allows.workers) && allows.codexJobs.includes(slug)) {
+      return allows.workers.includes('codex') ? 'ready' : 'not-ready'
+    }
+  }
+  return 'not-codex'
+}
+
 function orderFrom(name, args, { orders, data } = {}) {
   if (orders?.on !== true) return { error: 'Orders are off on this board, so nothing can be sent.' }
   if (name === 'add_task') {
@@ -5264,8 +5285,10 @@ function orderFrom(name, args, { orders, data } = {}) {
     if (workflow.fire !== true) {
       return { error: 'That job is not set to be started from the board (fire: true in its file), so it cannot be started from here.' }
     }
+    const standing = codexOnBoard(data?.mailbox, slug)
+    if (standing === 'not-ready') return { error: 'Codex is not ready on your Mac, so that job cannot be started from here.' }
     const named = typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim().slice(0, 120) : slug
-    return { order: { kind: 'run', slug, name: named } }
+    return { order: { kind: 'run', slug, name: named, ...(standing === 'ready' ? { worker: 'codex' } : {}) } }
   }
   return { error: 'There is no order with that name.' }
 }
@@ -6400,7 +6423,7 @@ function openVoice(deps, ui) {
     const named = order.agent || order.model
     const asking = order.kind === 'task' && session.orders.jev === true && !(order.agent && order.model)
     return {
-      heading: order.kind === 'task' ? VOICE_ORDER.taskHeading : `Run ${order.name}?`,
+      heading: order.kind === 'task' ? VOICE_ORDER.taskHeading : `Run ${order.name}${order.worker === 'codex' ? ' with Codex' : ''}?`,
       what: session.orders.via === 'mac'
         ? (order.kind === 'task' ? VOICE_ORDER.taskWhatMac : VOICE_ORDER.runWhatMac)
         : (order.kind === 'task' ? VOICE_ORDER.taskWhat : VOICE_ORDER.runWhat),
@@ -6524,7 +6547,7 @@ function openVoice(deps, ui) {
     const requestId = `${session.claims.sid}-${card.id}`
     const body = order.kind === 'task'
       ? { requestId, action: 'task', title: order.title, ...(order.details ? { details: order.details } : {}), ...(forAgent ? { for: forAgent } : {}), ...(tier ? { model: tier } : {}) }
-      : { requestId, workflow: order.slug, action: 'run' }
+      : { requestId, workflow: order.slug, action: 'run', ...(order.worker === 'codex' ? { worker: 'codex' } : {}) }
     const sent = { key: orderKey(order), at: deps.now() }
     session.sent.push(sent)
     let result

@@ -790,6 +790,11 @@ does it, and pushes the result to your team repo. If you are not sure you need t
   Your words are written exactly, and nothing in a card can talk the Mac into anything
 - **Run uses Claude Code on your own plan**, with no shell and no connectors, only on the jobs your Mac's
   own list allows. The Mac checks every changed file, then commits and pushes; Claude never pushes
+- **A job can run with Codex instead of Claude, if your Mac says so.** The Mac's own list gives a job to
+  Codex (`worker: codex`), and the Mac says in its status file which jobs those are and whether Codex is
+  ready. For such a job Run sends `worker: "codex"` by itself and the button says "runs with Codex" - you
+  do not choose. If Codex is not ready the button is off and says why. Codex uses your ChatGPT plan, not
+  your Claude runs. Voice orders do the same. Every other job is exactly as before
 - **Arm, Add skill and Add agent: your Mac files a card for you to finish in a Claude session.** A new
   schedule, a new skill or a new agent needs you there, so it is never done unattended
 - **What happened comes back in a file.** With each order your Mac pushes
@@ -1029,7 +1034,7 @@ Locally:
 npm test
 ```
 
-2653 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
+2677 tests, nothing to install to run them. They cover the data logic, the fire endpoint's auth, and —
 since a regex over the page source proves nothing about what a person sees — a harness that renders
 every screen and asserts on the actual output. The board has **one dependency, `@vercel/blob`**,
 used only when you connect a picture store. Besides that it serves two libraries in `public/vendor/` -

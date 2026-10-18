@@ -1034,12 +1034,14 @@ export const MAC_REASON_WORDS = {
     'no-such-row': 'no row in proposals.yml matches it',
     'several-rows': 'more than one row in proposals.yml matches it',
     'no-workflow': 'that job has no workflow file',
-    'not-ready': 'its daily check found a problem with its login or settings'
+    'not-ready': 'its daily check found a problem with its login or settings',
+    'worker-not-allowed': 'that job is set to another worker on that computer'
   },
   failed: {
     'change-refused': 'the change touched files it may not touch',
-    'tool-refused': 'Claude tried a tool it may not use',
+    'tool-refused': 'it tried a tool it may not use',
     'claude-failed': 'Claude stopped with an error',
+    'codex-failed': 'Codex stopped with an error',
     'timed-out': 'it ran past its time limit',
     'run-log-refused': 'its run log did not pass the check',
     'push-failed': 'the change could not be pushed'
@@ -1381,6 +1383,18 @@ export const VOICE_DETAILS_MAX = 500
 const ORDER_TITLE = { least: 3, most: 200 }
 const ORDER_CONTROL = /[\u0000-\u001f\u007f]/
 
+// The Codex worker for one job, from the Mac's status file (data.mailbox): 'ready', 'not-ready' or 'not-codex'.
+export function codexOnBoard(mailbox, slug) {
+  const computers = mailbox && mailbox.status === 'ok' && Array.isArray(mailbox.computers) ? mailbox.computers : []
+  for (const computer of computers) {
+    const allows = computer && computer.allows
+    if (allows && Array.isArray(allows.codexJobs) && Array.isArray(allows.workers) && allows.codexJobs.includes(slug)) {
+      return allows.workers.includes('codex') ? 'ready' : 'not-ready'
+    }
+  }
+  return 'not-codex'
+}
+
 export function orderFrom(name, args, { orders, data } = {}) {
   if (orders?.on !== true) return { error: 'Orders are off on this board, so nothing can be sent.' }
   if (name === 'add_task') {
@@ -1413,8 +1427,10 @@ export function orderFrom(name, args, { orders, data } = {}) {
     if (workflow.fire !== true) {
       return { error: 'That job is not set to be started from the board (fire: true in its file), so it cannot be started from here.' }
     }
+    const standing = codexOnBoard(data?.mailbox, slug)
+    if (standing === 'not-ready') return { error: 'Codex is not ready on your Mac, so that job cannot be started from here.' }
     const named = typeof workflow.name === 'string' && workflow.name.trim() ? workflow.name.trim().slice(0, 120) : slug
-    return { order: { kind: 'run', slug, name: named } }
+    return { order: { kind: 'run', slug, name: named, ...(standing === 'ready' ? { worker: 'codex' } : {}) } }
   }
   return { error: 'There is no order with that name.' }
 }

@@ -6,6 +6,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import {
   MAILBOX_CONTRACT,
   signBody,
@@ -29,7 +30,10 @@ test('mailbox parity: the contract file is ASCII with LF line ends, so its bytes
 })
 
 test('mailbox parity: the shared contract file is the same bytes the Mac runner holds', (t) => {
-  const sibling = fileURLToPath(new URL('../../agent-team-template/tests/fixtures/mailbox-parity.json', import.meta.url))
+  // The runner's checkout: AGENT_TEAM_TEMPLATE if set (a branch under review), else the one beside this repo.
+  const sibling = process.env.AGENT_TEAM_TEMPLATE
+    ? join(process.env.AGENT_TEAM_TEMPLATE, 'tests', 'fixtures', 'mailbox-parity.json')
+    : fileURLToPath(new URL('../../agent-team-template/tests/fixtures/mailbox-parity.json', import.meta.url))
   if (!existsSync(sibling)) {
     // Skipped, not passed: the reason is in the output so a quiet skip never reads as agreement.
     t.skip(`NOT CHECKED - the mailbox contract was not compared with the runner's copy, because ${sibling} does not exist (agent-team-template has not copied it yet, or is not checked out beside agent-cockpit)`)

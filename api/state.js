@@ -1357,7 +1357,9 @@ function mailboxEntry(raw, takenMs) {
   if (!at || startedAt === undefined || finishedAt === undefined) return null
   if (commit !== null && !(typeof commit === 'string' && MAILBOX_STATUS.commitShape.test(commit))) return null
   const reasons = MAILBOX_STATUS.reasons[state]
-  if (why !== null && !(reasons && typeof why === 'string' && Object.hasOwn(reasons, why))) return null
+  const workerReasons = MAILBOX_STATUS.workers.reasons[state]
+  const knownWhy = typeof why === 'string' && (Object.hasOwn(reasons ?? {}, why) || Object.hasOwn(workerReasons ?? {}, why))
+  if (why !== null && !knownWhy) return null
   if (![true, false, null].includes(landed)) return null
   const rules = {
     claimed: startedAt === null && finishedAt === null && commit === null && why === null && landed === null,
@@ -1379,6 +1381,25 @@ function mailboxEntry(raw, takenMs) {
   return entry
 }
 
+// The Codex worker's two optional keys in allows (the contract's status.workers). Read as a stranger's: both or
+// neither, the workers each a known name once, the Codex jobs each a slug once, each one of the jobs, and no more
+// than the contract's sizes. Anything else gives neither key - the file is read as one from before them.
+function mailboxWorkers(allows, jobs) {
+  const hasWorkers = Object.hasOwn(allows, 'workers')
+  const hasCodexJobs = Object.hasOwn(allows, 'codexJobs')
+  if (!hasWorkers || !hasCodexJobs) return null
+  // A key the contract does not have means the runner's own check would have refused this allows.
+  const ownKeys = Object.keys(allows)
+  if (ownKeys.some((key) => ![...MAILBOX_STATUS.allowedKeys.allows, ...MAILBOX_STATUS.workers.allowsOptional].includes(key))) return null
+  const { workers, codexJobs } = allows
+  const known = MAILBOX_STATUS.workers.values
+  if (!Array.isArray(workers) || !Array.isArray(codexJobs)) return null
+  if (workers.length > known.length || codexJobs.length > MAILBOX_STATUS.maxJobs) return null
+  if (!workers.every((name) => typeof name === 'string' && known.includes(name)) || new Set(workers).size !== workers.length) return null
+  if (!codexJobs.every((slug) => isValidSlug(slug) && jobs.includes(slug)) || new Set(codexJobs).size !== codexJobs.length) return null
+  return { workers: known.filter((name) => workers.includes(name)), codexJobs: [...codexJobs].sort() }
+}
+
 function readMailboxFile(body, now) {
   const noun = 'Mac mailbox'
   const envelope = readStatusEnvelope(body, now, { schema: MAILBOX_STATUS.schema, maxBytes: MAILBOX_STATUS.maxFileBytes, noun })
@@ -1397,6 +1418,7 @@ function readMailboxFile(body, now) {
   const jobs = Array.isArray(parsed.allows.jobs)
     ? [...new Set(parsed.allows.jobs.filter((slug) => isValidSlug(slug)))].sort().slice(0, MAILBOX_STATUS.maxJobs)
     : []
+  const workers = mailboxWorkers(parsed.allows, jobs)
   const given = parsed.orders.slice(0, MAILBOX_STATUS.maxOrders)
   const orders = []
   for (const raw of given) {
@@ -1410,7 +1432,7 @@ function readMailboxFile(body, now) {
       computer: cleanUsageName(parsed.computer),
       runner: parsed.runner,
       takenAt: parsed.takenAt,
-      allows: { actions, jobs },
+      allows: { actions, jobs, ...(workers ?? {}) },
       orders,
       hidden: given.length - orders.length
     }

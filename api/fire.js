@@ -42,7 +42,8 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
 import { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest } from './_lib.js'
 import { viewGate } from './_gate.js'
 import { readRequestId, once, fingerprintOf, REQUEST_ID_WORDS } from './_once.js'
-import { mailboxConfig, queueOrder, mailboxFireKeyOk, MAILBOX_FIRE_KEY_MIN } from './_mailbox.js'
+import { mailboxConfig, queueOrder, mailboxFireKeyOk, MAILBOX_FIRE_KEY_MIN, MAILBOX_CONTRACT } from './_mailbox.js'
+import { readMacStatus, codexStanding } from './_mac-status.js'
 import { pictureStore, failureAnswer } from './_picture-store.js'
 import { repoFolder, repoReader } from './_repo.js'
 export { keysMatch, TASK_STATUSES, isValidSlug, isSameOriginRequest }
@@ -129,7 +130,9 @@ const OLD_FORM =
 
 // The payload each action sends to the trigger URL. Pause is a dispatch too: the AGENT
 // edits the workflow file and commits — the dashboard itself never writes to the repo.
-export function dispatchPayload(slug, action) {
+// `worker` is the Codex worker (T14): written into a run only when it is "codex", so an order for Claude is the
+// bytes it always was. The runner checks it against its own allowlist again.
+export function dispatchPayload(slug, action, worker = 'claude') {
   if (action === 'pause') {
     return {
       source: 'agent-cockpit',
@@ -142,7 +145,29 @@ export function dispatchPayload(slug, action) {
         'agent session, make the edit.'
     }
   }
-  return { source: 'agent-cockpit', action: 'run', workflow: slug }
+  return worker === 'codex'
+    ? { source: 'agent-cockpit', action: 'run', workflow: slug, worker: 'codex' }
+    : { source: 'agent-cockpit', action: 'run', workflow: slug }
+}
+
+// The order's optional worker (the contract's payload.worker): exactly "claude" or "codex", exactly as written - no
+// case folding, no trimming - and only with a run. -> { worker } with the word, or { worker: null } when left out,
+// or { error }.
+const WORKER_WORDS = 'worker must be exactly "claude" or "codex", and it only goes with a run.'
+export function validateWorker(body, action) {
+  if (!Object.hasOwn(body, 'worker')) return { worker: null }
+  const { worker } = body
+  if (action !== 'run' || typeof worker !== 'string' || !MAILBOX_CONTRACT.workers.values.includes(worker)) return { error: WORKER_WORDS }
+  return { worker }
+}
+
+const CODEX_NEEDS_MAC =
+  'Codex jobs run on your own computer, so this board needs the Mac mailbox (FIRE_MODE=mailbox) to send one. ' +
+  'Nothing was sent.'
+const CODEX_WORDS = {
+  'no-status': 'Your computer has not said which jobs Codex does yet, so nothing was sent. Try again after its next check.',
+  'not-codex': (slug) => `"${slug}" is not set to Codex on your computer, so nothing was sent. Its allowlist decides which worker does a job.`,
+  'not-ready': 'Codex is not ready on your computer, so nothing was sent. Run its --preflight check there: the Codex lines say what is wrong.'
 }
 
 // --- arming a job -------------------------------------------------------------------------
@@ -618,6 +643,18 @@ async function handle(request, response, { loadSdk }) {
     return
   }
 
+  // The optional worker, held to the contract's rule before anything else is read. A Codex order only goes to a
+  // computer's mailbox.
+  const asked = validateWorker(body, action)
+  if (asked.error) {
+    response.status(400).json({ error: asked.error })
+    return
+  }
+  if (asked.worker === 'codex' && !mailbox) {
+    response.status(400).json({ error: CODEX_NEEDS_MAC })
+    return
+  }
+
   // "task" has its own shape: no workflow slug, a validated title/details/for, and one
   // fixed dispatch target — the task-intake routine.
   if (action === 'task') {
@@ -902,7 +939,18 @@ async function handle(request, response, { loadSdk }) {
     return
   }
 
-  if (mailbox) return queueAndAnswer(response, mailbox, dispatchPayload(slug, action), { workflow: slug, action })
+  if (mailbox) {
+    if (asked.worker === 'codex') {
+      // The computer's own status file decides: the job is Codex's there, and Codex is ready now.
+      const standing = codexStanding(await readMacStatus(process.env, mailbox.config.runner), slug)
+      if (standing !== 'ready') {
+        response.status(409).json({ error: typeof CODEX_WORDS[standing] === 'function' ? CODEX_WORDS[standing](slug) : CODEX_WORDS[standing] })
+        return
+      }
+      return queueAndAnswer(response, mailbox, dispatchPayload(slug, action, 'codex'), { workflow: slug, action, worker: 'codex' })
+    }
+    return queueAndAnswer(response, mailbox, dispatchPayload(slug, action), { workflow: slug, action })
+  }
   const result = await dispatchToTrigger(trigger, dispatchPayload(slug, action), label, response)
   if (result === null) return
 

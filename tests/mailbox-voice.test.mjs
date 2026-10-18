@@ -27,8 +27,13 @@ const board = (entries = [], extra = {}) => ({
 const ask = (order, data, minutes) => jobStatusAnswer({ which: 'last order' }, { data, now: SENT + minutes * 60_000, timeZone: ZONE, log: [order], fresh: true })
 
 test('the reasons the Mac gives are said in the contract\'s own words, both kinds', () => {
-  assert.deepEqual(MAC_REASON_WORDS, MAILBOX_CONTRACT.status.reasons)
-  assert.deepEqual(MAC_REASON_WORDS, fixture.status.reasons)
+  // The contract's words, plus the Codex worker's two (status.workers.reasons). One sentence is the board's own: the
+  // contract's tool-refused names Claude, and a tool may be refused to Codex too, so the board names neither.
+  const expected = {}
+  for (const state of ['refused', 'failed']) expected[state] = { ...fixture.status.reasons[state], ...fixture.status.workers.reasons[state] }
+  expected.failed['tool-refused'] = 'it tried a tool it may not use'
+  assert.deepEqual(MAC_REASON_WORDS, expected)
+  assert.deepEqual(MAILBOX_CONTRACT.status.reasons, fixture.status.reasons)
 })
 
 test('sent, then waiting after three of its checks, then expired - while the Mac\'s file has nothing for it', () => {
