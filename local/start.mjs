@@ -25,6 +25,7 @@ import { OPEN_PATH, STARTER_PATH } from './gate.mjs'
 import { answerCode, askCode, codesMatch } from './starter-auth.mjs'
 import { prepareJobs } from './runner.mjs'
 import { REFRESH_PATH, prepareCollector, refreshHandler } from './collector.mjs'
+import { PROGRESS_PATH, progressHandler } from './progress.mjs'
 
 // Short and plain. The operating system opens the LAST-USED browser profile, which may not be the window the student is looking at.
 export const OPENED_SAY = "The board opened in your browser. If you don't see it, look in your other browser windows."
@@ -309,7 +310,9 @@ export async function runStart({
     if (collectorOptions !== false) collector = await prepareCollector({ boardDir, stateDir, teamFolder, platform, env: process.env, log, ...(jobs ? { codeDir: jobs.places.codeDir } : {}), ...collectorOptions })
   }
   const wrapHandler = (name, handler) => [jobs, collector].reduce((wrapped, part) => (part ? part.wrapHandler(name, wrapped) : wrapped), handler)
-  const localRoutes = { [REFRESH_PATH]: refreshHandler(collector) }
+  // The runner keeps a small progress file per order in its state folder; this serves the fields the Today card shows.
+  const runnerState = jobs?.places?.stateDir ?? join(stateDir, 'runner')
+  const localRoutes = { [REFRESH_PATH]: refreshHandler(collector), [PROGRESS_PATH]: progressHandler({ stateDir: () => runnerState }) }
   const board = await pickPort(basePort, tries, (port) => startBoard({ port, settingsFile: join(stateDir, 'settings.json'), wrapHandler, localRoutes }))
   const stateFile = join(stateDir, STATE_FILE)
   writePrivateFile(stateFile, JSON.stringify({ port: board.port, secret: board.starterSecret, startedAt: new Date().toISOString() }))

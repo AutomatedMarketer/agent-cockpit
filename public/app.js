@@ -1188,6 +1188,8 @@ function renderToday() {
     subscriptionsHtml(data.subscriptions) +
     // And what talking to the board has cost, while voice is on.
     voiceSpendHtml()
+  // After the Mac card is drawn: the clocks on it tick, and (on this computer's board) a run that is going is asked about.
+  progressSync()
 }
 
 /* ---------- Team ---------- */
@@ -2404,10 +2406,188 @@ function macOrdersHtml() {
     const said = macOrderSaid(order, data, Date.now(), zone)
     if (!said) return ''
     const words = said.state === 'sent to your Mac' ? `Sent to your Mac. It checks ${macEvery(macMinutesOf(order.pollSeconds))}.` : said.said
-    return `<div class="gap"><b>${escapeHtml(order.label)}</b> <span class="small">${escapeHtml(words)}</span></div>`
+    return `<div class="gap"><b>${escapeHtml(order.label)}</b> <span class="small">${escapeHtml(words)}</span>${progressHolderHtml(order, said)}</div>`
   }).join('')
   return rows ? sectionHead('Orders sent to your computer', '<h2>Your Mac</h2>') + `<div class="panel">${rows}</div>` : ''
 }
+
+/* ---------- live progress on that card (task T12) ----------
+   Local board: the board on this computer keeps the runner's progress file for each order that is going and answers
+   /api/progress?order=<id>. The page asks for ITS OWN orders only (the ones its Mac card remembers), every 1.5 s while one is
+   going, and stops when it ends, the tab is hidden, Today is not showing, or two hours have gone. Until the run has a file
+   it asks every 5 s. Website: that address does not exist, so nothing new is asked: the card says what the Mac's status
+   file says (when it picked the order up, and how many steps a finished run took). Everything shown is a number, a fixed
+   word, a time, or a tool's plain name checked against a short pattern; it is escaped as well. */
+const PROGRESS_FAST_MS = 1500
+const PROGRESS_SLOW_MS = 5000
+const PROGRESS_GIVE_UP_MS = 2 * 60 * 60_000
+const PROGRESS_STEPS_MAX = 100000
+const PROGRESS_TOOL = /^[A-Za-z0-9_*-]{1,64}$/
+const PROGRESS_PHASES = { started: 'Starting up', working: 'Working', finishing: 'Finishing up' }
+// The states of the Mac's own words (macOrderSaid) that mean the order is over.
+const PROGRESS_OVER = ['done on your Mac', 'failed on your Mac', 'refused by your Mac', 'outcome unknown', 'expired']
+const progressDocs = new Map() // order id -> the last good answer for it
+const progressClocks = new Map() // order id -> the time its clock counts from
+let progressTimer = null
+let progressBusy = false
+let progressLocked = false
+let clockTimer = null
+// A page that is closed needs nothing from these; in a test runner (Node) an unref'd timer never keeps the process alive. A browser's id is a number: nothing to unref.
+const progressAfter = (fn, ms) => {
+  const id = setTimeout(fn, ms)
+  id?.unref?.()
+  return id
+}
+
+// The answer, rebuilt from the fields it may have, or null when it is not that shape.
+function progressDocOf(body) {
+  if (!isRecord(body) || !Object.hasOwn(PROGRESS_PHASES, body.phase) || typeof body.final !== 'boolean') return null
+  if (!Number.isSafeInteger(body.steps) || body.steps < 0 || body.steps > PROGRESS_STEPS_MAX) return null
+  const time = (value) => (typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null)
+  const startedAt = time(body.startedAt)
+  const lastEventAt = time(body.lastEventAt)
+  if (!startedAt || !lastEventAt) return null
+  const lastTool = typeof body.lastTool === 'string' ? (PROGRESS_TOOL.test(body.lastTool) ? body.lastTool : 'unknown') : null
+  return { phase: body.phase, steps: body.steps, lastTool, startedAt, lastEventAt, final: body.final, outcome: body.outcome === 'ok' ? 'ok' : 'other' }
+}
+
+// "2m 05s", or "1h 04m" from an hour on. Never negative: the Mac's clock and this one may differ by a little.
+function elapsedWords(ms) {
+  const seconds = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000))
+  if (seconds >= 3600) return `${Math.floor(seconds / 3600)}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}m`
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
+}
+const stepsWords = (count) => `${count} step${count === 1 ? '' : 's'}`
+
+// { html, since }: the line under an order, and the time its ticking clock counts from (null: no clock).
+function progressLine(order, said) {
+  const entry = toolList(data?.mailbox?.computers).flatMap((computer) => toolList(computer.orders)).find((one) => one.id === order.id)
+  const clock = (since) => `<span id="mac-clock-${escapeHtml(order.id)}">${escapeHtml(elapsedWords(Date.now() - Date.parse(since)))}</span>`
+  // A run the Mac finished, with the steps its status file counted.
+  if (entry && (entry.state === 'ok' || entry.state === 'failed') && Number.isSafeInteger(entry.steps) && entry.steps >= 0 && entry.steps <= PROGRESS_STEPS_MAX &&
+    Number.isFinite(Date.parse(entry.startedAt)) && Number.isFinite(Date.parse(entry.finishedAt))) {
+    return { html: `Took ${escapeHtml(elapsedWords(Date.parse(entry.finishedAt) - Date.parse(entry.startedAt)))}, ${stepsWords(entry.steps)}.`, since: null }
+  }
+  const doc = LOCAL_BOARD ? progressDocs.get(order.id) : undefined
+  if (doc && !PROGRESS_OVER.includes(said.state)) {
+    if (doc.final) {
+      const took = escapeHtml(elapsedWords(Date.parse(doc.lastEventAt) - Date.parse(doc.startedAt)))
+      return { html: `${doc.outcome === 'ok' ? 'Finished:' : 'Stopped after'} ${stepsWords(doc.steps)} in ${took}.`, since: null }
+    }
+    const parts = [`<b>${PROGRESS_PHASES[doc.phase]}</b>`, doc.steps === 0 ? 'no steps yet' : `${stepsWords(doc.steps)} so far`]
+    if (doc.steps > 0 && doc.lastTool) parts.push(doc.lastTool === 'unknown' ? 'last used a tool' : `last used ${escapeHtml(doc.lastTool)}`)
+    parts.push(clock(doc.startedAt))
+    return { html: parts.join(' · '), since: doc.startedAt }
+  }
+  if (said.state === 'running on your Mac' && entry && Number.isFinite(Date.parse(entry.startedAt))) {
+    return { html: `Picked up ${clock(entry.startedAt)} ago, running.`, since: entry.startedAt }
+  }
+  return { html: '', since: null }
+}
+
+// The line's holder: drawn for an order that could be going on this computer, so a later answer has a place to go.
+function progressHolderHtml(order, said) {
+  const line = progressLine(order, said)
+  if (line.since) progressClocks.set(order.id, line.since)
+  else progressClocks.delete(order.id)
+  if (!line.html && !(LOCAL_BOARD && !PROGRESS_OVER.includes(said.state))) return ''
+  return `<div class="small muted" id="mac-prog-${escapeHtml(order.id)}">${line.html}</div>`
+}
+
+// An answer came in: put the new line in its place, without drawing the screen again (a note being typed would be lost).
+function progressRedraw() {
+  for (const order of macOrdersLog()) {
+    const holder = el(`mac-prog-${order.id}`)
+    const said = macOrderSaid(order, data, Date.now(), 'UTC')
+    if (!holder || !said) continue
+    const line = progressLine(order, said)
+    holder.innerHTML = line.html
+    if (line.since) progressClocks.set(order.id, line.since)
+    else progressClocks.delete(order.id)
+  }
+  clockSchedule()
+}
+
+// Today is what the page shows for an empty address and for any address that is not a screen.
+function progressOnToday() {
+  const name = location.hash.slice(1)
+  return name === 'today' || !(SCREENS.includes(name) || (name === 'hermes' && hermesShown()))
+}
+const progressWatching = () => Boolean(data) && progressOnToday() && document.visibilityState !== 'hidden'
+
+// This page's own orders that could be going on this computer: remembered here, not over, not past the two hours.
+function progressOrders() {
+  if (!LOCAL_BOARD || progressLocked) return []
+  const now = Date.now()
+  return macOrdersLog().filter((order) => {
+    const said = macOrderSaid(order, data, now, 'UTC')
+    return said && !PROGRESS_OVER.includes(said.state) && now - Date.parse(order.sentAt) < PROGRESS_GIVE_UP_MS && progressDocs.get(order.id)?.final !== true
+  })
+}
+
+async function progressLook() {
+  if (progressBusy) return
+  progressBusy = true
+  try {
+    for (const order of progressOrders()) {
+      try {
+        const response = await fetch(`/api/progress?order=${encodeURIComponent(order.id)}`, { cache: 'no-store', headers: { Accept: 'application/json' } })
+        if (response.status === 401 || response.status === 403) {
+          // Signed out: nobody can answer, and asking again would not change that.
+          progressLocked = true
+          break
+        }
+        const doc = response.ok ? progressDocOf(await response.json()) : null
+        if (doc) progressDocs.set(order.id, doc)
+      } catch (error) { /* the next look tries again */ }
+    }
+    progressRedraw()
+  } finally {
+    progressBusy = false
+  }
+  progressLater()
+}
+
+// The next look: 1.5 s while a run has a file, 5 s while orders are waiting to start. None left: none made.
+function progressLater() {
+  if (progressTimer !== null || !progressWatching()) return
+  const orders = progressOrders()
+  if (!orders.length) return
+  const delay = orders.some((order) => progressDocs.has(order.id)) ? PROGRESS_FAST_MS : PROGRESS_SLOW_MS
+  progressTimer = progressAfter(() => {
+    progressTimer = null
+    if (progressWatching()) progressLook()
+  }, delay)
+}
+
+function clockTick() {
+  clockTimer = null
+  if (!progressWatching()) return
+  for (const [id, since] of progressClocks) {
+    const node = el(`mac-clock-${id}`)
+    if (node) node.textContent = elapsedWords(Date.now() - Date.parse(since))
+  }
+  clockSchedule()
+}
+function clockSchedule() {
+  if (clockTimer !== null || !progressClocks.size || !progressWatching()) return
+  clockTimer = progressAfter(clockTick, 1000)
+}
+
+// Called when something that decides whether to look has changed: the screen was drawn, the tab or the screen changed.
+function progressSync() {
+  if (!progressWatching()) {
+    if (progressTimer !== null) clearTimeout(progressTimer)
+    if (clockTimer !== null) clearTimeout(clockTimer)
+    progressTimer = null
+    clockTimer = null
+    return
+  }
+  clockSchedule()
+  if (progressTimer === null && !progressBusy && progressOrders().length) progressLook()
+}
+window.addEventListener('hashchange', progressSync)
+document.addEventListener('visibilitychange', progressSync)
 
 // Today's line for a job or task the owner sent by voice that ended without Jarvis saying so (the call was
 // over, or it took longer than he waits): one plain line each, from the same reading the voice uses.

@@ -211,3 +211,14 @@ Files:
 Run its tests with `node --test tests/local-server.test.mjs`; jobs and numbers with
 `node --test tests/local-runner.test.mjs tests/local-runner-walls.test.mjs tests/local-collector.test.mjs` (the runner
 tests use the template checkout next to this repo, or `AGENT_TEAM_TEMPLATE`, read only; they skip without it).
+
+Live progress on the Today card (T12):
+
+- The runner keeps `progress/<order id>.json` in its state folder while Claude works (counts, the last tool's name, times; never
+  anything Claude wrote). `GET /api/progress?order=<id>` (`local/progress.mjs`, local board only, behind the same wall) returns
+  only `phase`, `steps`, `lastTool`, `startedAt`, `lastEventAt`, `final` and `outcome`. The id must be 32 lowercase hex before
+  any path is built; no link on the way; a plain file of 4 KB at most; every field is checked again; `Cache-Control:
+  private, no-store`. Missing or not the runner's shape: 404.
+- The page asks every 1.5 s, only for orders this page sent, only while Today is showing and the tab is in front, and stops
+  when the run is final, the Mac's status says the order is over, or two hours after it was sent. An order with no file yet is
+  asked every 5 s. The website has no such address and asks nothing new.
