@@ -1727,6 +1727,8 @@
   }
   a.d7-row:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 
+  /* The card of orders on this computer sits in a holder so it can be drawn after Today; the holder takes no space of its own. */
+  #mac-orders { display: contents; }
   /* Motion - every moving rule on the board, and nowhere else (plan 2026-10-10, section 3).
      One block, for someone whose device has not asked for less motion: written this way round, a
      device that asks for less never meets a moving rule, rather than meeting one and a second rule

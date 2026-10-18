@@ -1,4 +1,4 @@
-// The board's first page costs a phone at most 272 KB - the budget every lazy file on this board exists
+// The board's first page costs a phone at most 274 KB - the budget every lazy file on this board exists
 // to keep (memory-graph.js, memory-find.js and the graph libraries load only when asked for).
 //
 // Counted the way the browser measurement (Today at 390 px, every response but /api/*) counts it: what
@@ -10,6 +10,7 @@
 // On 2026-10-18 to 271 for the Codex worker (T14): the run buttons, the voice order and the status words cost the page
 // 0.5 KB, and the board had 0.04 KB to spare.
 // On 2026-10-18 to 272 for the local board's own words ("this computer", the plain tool names): about 1 KB.
+// On 2026-10-18 to 274 for the live card on the local board (it appears at once after Run; one length for a finished run): about 1.5 KB.
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -17,7 +18,7 @@ import { readFileSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
 
 const PUBLIC = new URL('../public/', import.meta.url)
-const BUDGET_KB = 272
+const BUDGET_KB = 274
 const TEXT = /\.(html|js|css|svg|json)$/
 
 const html = readFileSync(new URL('index.html', PUBLIC), 'utf8')

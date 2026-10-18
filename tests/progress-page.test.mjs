@@ -146,12 +146,13 @@ test('local: the answer is checked again on the page; a tool name that is markup
   assert.doesNotMatch(bad.today(), /lots|NaN/)
 })
 
-test('local: a finished answer says so, with the steps and how long it took, and the polling stops', async () => {
+test('local: a finished answer says so, with the steps (its length comes from the Mac file: tests/local-run-refresh), and the polling stops', async () => {
   const { page, timers, today, calls } = board({ progress: { [ID]: reply(200, doc({ final: true, outcome: 'ok', steps: 12, startedAt: iso(NOW - 200_000), lastEventAt: iso(NOW - 5000) })) } })
   await flush()
-  assert.match(today(), /Finished: 12 steps in 3m 15s/)
+  assert.match(today(), /Finished: 12 steps\./)
+  assert.doesNotMatch(today(), /3m 15s/, 'no length from the progress file while the Mac file is on its way')
   assert.equal(calls.length, 1)
-  assert.deepEqual(timers.delays(), [], 'no poll and no clock is left running')
+  assert.deepEqual(timers.delays(), [3000], 'no poll and no clock: only the short wait before the Mac file is asked for again')
   assert.equal(progressRequests(page).length, 1)
   const stopped = board({ progress: { [ID]: reply(200, doc({ final: true, outcome: 'failed', steps: 3 })) } })
   await flush()

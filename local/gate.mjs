@@ -169,7 +169,7 @@ export function createLocalGate({ now = Date.now } = {}) {
       }
       const token = new URLSearchParams(search).get('t') ?? ''
       if (!token || !takeToken(token)) {
-        return refuse(response, 403, 'This link was already used or has run out. Close this window and start the board again.')
+        return refuse(response, 403, 'This link was already used or has run out. Close this window, then double-click Start Board again.')
       }
       const nonce = randomBytes(24).toString('base64url')
       response.setHeader('Set-Cookie', `${cookieName(request.socket.localPort)}=${nonce}.${mac(nonce)}; Path=/; HttpOnly; SameSite=Strict`)

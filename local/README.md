@@ -228,5 +228,13 @@ moment." - the runner is started the moment an order arrives, `kickAfterOrders`)
 both boards: reading files, editing a file, running a command, planning, searching, looking something up; anything else is
 "working". The website's words for its Mac are unchanged. `tests/local-computer-words.test.mjs` holds both.
 
+The card appears the moment Run (or Add task) is pressed, with no reload, and the page starts asking how far the run has got.
+`/api/progress` answers `200 {"state":"waiting"}` for an order this board queued (it keeps the last 200 ids, `queuedOrders` in
+`local/progress.mjs`) before the runner has a file for it, and still `404` for an id it never queued, so the browser console
+shows no red errors during the first seconds. A finished run's length is the Mac status file's start and finish, the same
+number a reload shows: until the page has it (it asks the board again, up to 5 times 3 s apart) the card says "Finished: N
+steps." with no length, and falls back to the progress file's own length if the status file never has the run.
+`tests/local-run-refresh.test.mjs` holds these.
+
 The Readiness wall's own lines are turned the same way, on their way out of the local server (`localizeReadiness` in
 `local/localize.mjs`): only the board's exact wording, so a job called "Back up the Mac" keeps its name. `tests/local-readiness-words.test.mjs`.

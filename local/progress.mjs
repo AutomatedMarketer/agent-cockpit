@@ -26,6 +26,36 @@ export const SAY = Object.freeze({
   getOnly: 'GET only.'
 })
 
+// The orders this board has queued (and so knows), newest 200. The page asks about an order from the moment it is sent, a little
+// before the runner writes a file for it: a known order with no file yet is "waiting", not an error. An id the board never queued
+// stays "no progress is kept" (404). Only the ids of orders the board itself accepted get in, and only in the 32-hex shape.
+const QUEUED_KEPT = 200
+export function queuedOrders() {
+  const ids = new Set()
+  return {
+    note(id) {
+      if (typeof id !== 'string' || !ID_SHAPE.test(id)) return
+      ids.delete(id)
+      ids.add(id)
+      while (ids.size > QUEUED_KEPT) ids.delete(ids.values().next().value)
+    },
+    has: (id) => ids.has(id),
+    size: () => ids.size
+  }
+}
+
+// /api/fire, with one thing added: an order it answers as queued is noted. Nothing about the answer changes.
+export function rememberQueuedOrders(handler, queued) {
+  return async function fireThenNote(request, response) {
+    const send = response.json
+    response.json = function json(value) {
+      if (response.statusCode === 200 && value?.ok === true && value?.via === 'mac') queued.note(value.orderId)
+      return send.call(response, value)
+    }
+    return handler(request, response)
+  }
+}
+
 const isTime = (value) => typeof value === 'string' && TIME.test(value) && Number.isFinite(Date.parse(value))
 
 // The file's text, or null: a plain file (not a link, not a folder) of at most 4 KB, in a folder that is itself a plain folder.
@@ -75,7 +105,7 @@ export function cleanProgress(id, value) {
 }
 
 // `stateDir` is a function: the runner's state folder (null when jobs are off), read at each request.
-export function progressHandler({ stateDir }) {
+export function progressHandler({ stateDir, queued = queuedOrders() }) {
   return async function progress(request, response) {
     response.setHeader('Cache-Control', 'private, no-store')
     if (request.method !== 'GET') {
@@ -90,7 +120,10 @@ export function progressHandler({ stateDir }) {
     let parsed = null
     try { parsed = text === null ? null : JSON.parse(text) } catch { parsed = null }
     const answer = parsed === null ? null : cleanProgress(order, parsed)
-    if (answer === null) return response.status(404).json({ error: SAY.none })
+    if (answer === null) {
+      if (parsed === null && queued.has(order)) return response.status(200).json({ state: 'waiting' })
+      return response.status(404).json({ error: SAY.none })
+    }
     return response.status(200).json(answer)
   }
 }

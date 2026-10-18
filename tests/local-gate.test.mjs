@@ -94,6 +94,17 @@ test('a link works only once: the second use is refused and sets no cookie', asy
   })
 })
 
+test('a used link says what to do in the words the docs use: double-click Start Board again', async () => {
+  await withBoard(async ({ board, open }) => {
+    const link = board.openLink()
+    await open(link)
+    const second = await open(link)
+    const words = await second.answer.text()
+    assert.match(words, /double-click Start Board again/i)
+    assert.doesNotMatch(words, /start the board again/i)
+  })
+})
+
 test('a link is refused after 2 minutes, and still good just before', async () => {
   await withBoard(async ({ board, url, clock, open }) => {
     const late = board.openLink()

@@ -955,11 +955,11 @@ function planCardHtml(service, reading) {
 }
 
 function planLimitsHtml(usage) {
-  const head = sectionHead('From your always-on computer', '<h2>Plan limits</h2>')
+  const head = sectionHead(LOCAL_BOARD ? 'From this computer' : 'From your always-on computer', '<h2>Plan limits</h2>')
   if (!usage || usage.status === 'none' || (usage.status === 'ok' && !usage.claude && !usage.codex)) {
     return `<section class="plan-limits">${head}<div class="panel empty"><b>No usage reading yet.</b>
-      <span class="small">Run <code>/snapshot</code> in your team repo, or set up the collector on the
-      computer that is always on.</span>${whyHtml('These meters come from a file a collector on your own computer commits to your repo. Until one exists there is nothing to read, and nothing is shown rather than a zero.')}</div></section>`
+      <span class="small">Run <code>/snapshot</code> in your team repo, or set up the collector on ${LOCAL_BOARD ? 'this computer' : `the
+      computer that is always on`}.</span>${whyHtml('These meters come from a file a collector on your own computer commits to your repo. Until one exists there is nothing to read, and nothing is shown rather than a zero.')}</div></section>`
   }
   if (usage.status !== 'ok') {
     return `<section class="plan-limits">${head}<div class="panel empty"><b>Your usage reading could not be used.</b>
@@ -1182,7 +1182,7 @@ function renderToday() {
     snapshotBannerHtml(data.routines) +
     ladderHtml(data.setup) +
     fireButtonsHtml(data.workflows, data.mailbox) +
-    macOrdersHtml() +
+    macCardHtml() +
     voiceResultsHtml() +
     sectionHead('What everyone is on', '<h2>Board</h2>') + boardHtml(board) +
     sectionHead('Next 24 hours', '<h2>Due next</h2>') + dueHtml +
@@ -2409,6 +2409,7 @@ function macNote(note, kind, label, payload) {
   note.textContent = words
   const entry = { kind, label: String(label).slice(0, 200), sentAt: new Date().toISOString(), ...macLogFields(payload) }
   writeStore(MAC_ORDERS_STORE, JSON.stringify([entry, ...macOrdersLog().filter((one) => one.id !== entry.id)].slice(0, MAC_ORDERS_KEPT)))
+  macCardRefresh()
   return true
 }
 
@@ -2419,12 +2420,28 @@ function macOrdersHtml() {
   let zone = 'UTC'
   try { zone = voiceZone(Intl.DateTimeFormat().resolvedOptions().timeZone) ?? 'UTC' } catch (error) { zone = 'UTC' }
   const rows = orders.map((order) => {
-    const said = macOrderSaid(order, data, Date.now(), zone, LOCAL_BOARD)
+    const said = orderSaidHere(order, Date.now(), zone)
     if (!said) return ''
     const words = said.state === 'sent to your Mac' && !LOCAL_BOARD ? `Sent to your Mac. It checks ${macEvery(macMinutesOf(order.pollSeconds))}.` : said.said
-    return `<div class="gap"><b>${escapeHtml(order.label)}</b> <span class="small">${escapeHtml(words)}</span>${progressHolderHtml(order, said)}</div>`
+    // On this computer the words get an id, so a later answer can change them in place (progressRedraw).
+    return `<div class="gap"><b>${escapeHtml(order.label)}</b> <span class="small"${LOCAL_BOARD ? ` id="mac-said-${escapeHtml(order.id)}"` : ''}>${escapeHtml(words)}</span>${progressHolderHtml(order, said)}</div>`
   }).join('')
   return rows ? sectionHead('Orders sent to your computer', `<h2>${LOCAL_BOARD ? 'This computer' : 'Your Mac'}</h2>`) + `<div class="panel">${rows}</div>` : ''
+}
+
+// The card inside a holder that stays on the page, so an order sent after Today was drawn can be put in it without a reload.
+// Only the board on this computer has the holder: the website's Today is exactly what it was.
+function macCardHtml() {
+  const card = macOrdersHtml()
+  return LOCAL_BOARD ? `<div id="mac-orders">${card}</div>` : card
+}
+
+// An order was just sent: draw the card again (this computer's board only), then let the progress look start.
+function macCardRefresh() {
+  if (!LOCAL_BOARD) return
+  const holder = el('mac-orders')
+  if (holder) holder.innerHTML = macOrdersHtml()
+  progressSync()
 }
 
 /* ---------- live progress on that card (task T12) ----------
@@ -2449,6 +2466,12 @@ let progressTimer = null
 let progressBusy = false
 let progressLocked = false
 let clockTimer = null
+// A run that has ended: the board is asked for the Mac's status file again, a few times, 3 s apart, until it has the run.
+const PROGRESS_STATUS_TRIES = 5
+const PROGRESS_STATUS_MS = 3000
+const progressStatusTries = new Map() // order id -> times the board was asked for it since the run ended
+let progressStatusTimer = null
+let progressStatusBusy = false
 // A page that is closed needs nothing from these; in a test runner (Node) an unref'd timer never keeps the process alive. A browser's id is a number: nothing to unref.
 const progressAfter = (fn, ms) => {
   const id = setTimeout(fn, ms)
@@ -2487,6 +2510,18 @@ function elapsedWords(ms) {
 }
 const stepsWords = (count) => `${count} step${count === 1 ? '' : 's'}`
 
+// What the card says of an order on this computer: the status file's words, except where the progress file already knows better.
+// The status file only reaches the page when the board is loaded, so for a while it can still say "sent" about a run that is
+// going, or "running" about one that is over. Those are said from the progress file, so the words and the line agree.
+function orderSaidHere(order, now, zone) {
+  const said = macOrderSaid(order, data, now, zone, LOCAL_BOARD)
+  const found = LOCAL_BOARD && said ? progressDocs.get(order.id) : undefined
+  if (!found || PROGRESS_OVER.includes(said.state)) return said
+  if (found.final) return { ...said, said: found.outcome === 'ok' ? 'This computer has finished it.' : 'This computer stopped before it finished.' }
+  if (said.state === 'sent to your Mac' || said.state === 'waiting for your Mac') return { ...said, state: 'running on your Mac', said: 'This computer is running it.' }
+  return said
+}
+
 // { html, since }: the line under an order, and the time its ticking clock counts from (null: no clock).
 function progressLine(order, said) {
   const entry = toolList(data?.mailbox?.computers).flatMap((computer) => toolList(computer.orders)).find((one) => one.id === order.id)
@@ -2499,8 +2534,12 @@ function progressLine(order, said) {
   const doc = LOCAL_BOARD ? progressDocs.get(order.id) : undefined
   if (doc && !PROGRESS_OVER.includes(said.state)) {
     if (doc.final) {
-      const took = escapeHtml(elapsedWords(Date.parse(doc.lastEventAt) - Date.parse(doc.startedAt)))
-      return { html: `${doc.outcome === 'ok' ? 'Finished:' : 'Stopped after'} ${stepsWords(doc.steps)} in ${took}.`, since: null }
+      // How long it took is the status file's number: that file starts and ends a little later than the progress file does, so
+      // the two differ by seconds. Until it has the run, no length is given, rather than one the reloaded card would change.
+      // If it never has it after a few tries, the progress file's own length is better than none.
+      const lead = `${doc.outcome === 'ok' ? 'Finished:' : 'Stopped after'} ${stepsWords(doc.steps)}`
+      if ((progressStatusTries.get(order.id) ?? 0) < PROGRESS_STATUS_TRIES) return { html: `${lead}.`, since: null }
+      return { html: `${lead} in ${escapeHtml(elapsedWords(Date.parse(doc.lastEventAt) - Date.parse(doc.startedAt)))}.`, since: null }
     }
     // Not asking any more (signed out, or past the two hours): a line that kept ticking would look live.
     if (progressLocked || Date.now() - Date.parse(order.sentAt) >= PROGRESS_GIVE_UP_MS) return { html: PROGRESS_STALE, since: null }
@@ -2535,8 +2574,10 @@ function progressRedraw() {
   progressPrune()
   for (const order of macOrdersLog()) {
     const holder = el(`mac-prog-${order.id}`)
-    const said = macOrderSaid(order, data, Date.now(), 'UTC', LOCAL_BOARD)
+    const said = orderSaidHere(order, Date.now(), 'UTC')
     if (!holder || !said) continue
+    const words = el(`mac-said-${order.id}`)
+    if (words) words.textContent = said.said
     const line = progressLine(order, said)
     holder.innerHTML = line.html
     if (line.since) progressClocks.set(order.id, line.since)
@@ -2587,7 +2628,49 @@ async function progressLook() {
   } finally {
     progressBusy = false
   }
+  progressStatusLook()
   progressLater()
+}
+
+// Orders whose progress file says they are over but whose status file (data.mailbox) does not have them yet, and are still being tried.
+function progressStatusPending() {
+  if (!LOCAL_BOARD || progressLocked) return []
+  return macOrdersLog().filter((order) => {
+    if (progressDocs.get(order.id)?.final !== true || (progressStatusTries.get(order.id) ?? 0) >= PROGRESS_STATUS_TRIES) return false
+    const said = macOrderSaid(order, data, Date.now(), 'UTC', LOCAL_BOARD)
+    return Boolean(said) && !PROGRESS_OVER.includes(said.state)
+  })
+}
+
+// Asks the board for its state again and takes only the Mac's status file from it: the rest of the page stays as drawn (a note
+// being typed is not lost). Then the card is drawn again, so the run's length and words are the status file's, as after a reload.
+async function progressStatusLook() {
+  if (progressStatusBusy || progressStatusTimer !== null) return
+  const waiting = progressStatusPending()
+  if (!waiting.length) return
+  progressStatusBusy = true
+  for (const order of waiting) progressStatusTries.set(order.id, (progressStatusTries.get(order.id) ?? 0) + 1)
+  try {
+    const result = await apiGet('/api/state')
+    if (result.status === 401 || result.status === 403) progressLocked = true
+    else if (result.ok && isRecord(result.payload?.mailbox)) data = { ...data, mailbox: result.payload.mailbox }
+  } catch (error) { /* the next try asks again */ } finally {
+    progressStatusBusy = false
+  }
+  progressCardDraw()
+  if (progressStatusPending().length) {
+    progressStatusTimer = progressAfter(() => {
+      progressStatusTimer = null
+      progressStatusLook()
+    }, PROGRESS_STATUS_MS)
+  }
+}
+
+// The whole card again (it has no field in it), then the lines on it in place.
+function progressCardDraw() {
+  const holder = el('mac-orders')
+  if (holder) holder.innerHTML = macOrdersHtml()
+  progressRedraw()
 }
 
 // The next look: 1.5 s while a run has a file, 5 s while orders are waiting to start. None left: none made.
