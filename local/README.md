@@ -18,6 +18,17 @@ empty folder (a program with the same name left in the board's folder is never r
 - on a **second double-click** while the board runs, asks the running board (`POST /starter/open-link` with the
   per-run secret, refused for anything a browser sends) for a fresh link, opens it, and exits. No second server.
 
+Starting it from a terminal (for example when the window flashes and closes, so the message stays on screen). The file
+name has a space in it, so **the whole path goes in quotes**. Typing `Start Board.bat` or `cmd /c "Start Board.bat"`
+without the folder makes Windows read it as the command `start` plus a file called `Board.bat`: a box "Windows cannot
+find 'Board.bat'" appears and the window hangs. Use the real folder in place of `C:\path\to\board`:
+
+- Windows, PowerShell: `& "C:\path\to\board\Start Board.bat"` (run on Windows 11, 2026-10-18)
+- Windows, cmd: `"C:\path\to\board\Start Board.bat"` (or `cd /d "C:\path\to\board"` and then `"Start Board.bat"`)
+- Mac, Terminal: `"/path/to/board/Start Board.command"` (not yet run on a Mac)
+
+If the browser says the link "was already used or has run out", double-click Start Board again for a fresh one.
+
 What exists (T1 and T4):
 
 - `node local/server.mjs` starts the board at `http://127.0.0.1:4317/` (`--port <n>` to change; not port 80).
@@ -138,17 +149,53 @@ Jobs on this computer (T8) - the Run, task and card buttons:
 
 | | Windows | Mac |
 |---|---|---|
-| runner code (pinned) | `%USERPROFILE%\Agent Board\runner-code` (next to Start Board) | `~/Agent Board/runner-code` |
+| runner code (pinned) | `<board folder>\runner-code` (next to Start Board, wherever the board folder is) | `<board folder>/runner-code` |
 | runner state + secrets | `%LOCALAPPDATA%\Agent Board\state\runner` | `~/Library/Application Support/Agent Board/state/runner` |
 | work copy | `%LOCALAPPDATA%\Agent Board\work` (cloned from the team folder's origin on the first start) | `~/Library/Application Support/Agent Board/work` |
 
   The runner's state is a folder of its own inside the board's state folder (not the state folder itself): the
   runner's Windows lock reads every file of its folder on every tick, and the board writes pictures all the time.
-- **Install (for `/onboard`, T17):** clone the student's own team repo, at its current commit, to `runner-code` next to
-  Start Board (`runner-code/` is in `.gitignore`). Start the board once (it writes the files above), close it, then run
-  the runner's self-test with the same places, for example on Windows:
-  `node runner-code\scripts\mailbox-runner.mjs --selftest --state-dir "%LOCALAPPDATA%\Agent Board\state\runner" --work-dir "%LOCALAPPDATA%\Agent Board\work" --env-file "%LOCALAPPDATA%\Agent Board\state\runner\runner.env"`.
-  Until it passes, card orders work and Run orders are refused as "not ready".
+- **Install (for `/onboard`, T17).** Four steps, in this order. `<board folder>` is the folder that holds `Start Board`.
+  1. **Put the runner code next to the board.** Clone the student's own team repo into `<board folder>/runner-code`
+     (it was made from the template, so it already holds the runner; `runner-code/` is in `.gitignore`). A clone is a
+     copy that never updates by itself, and that is what "pinned" means here: it stays at the commit it was cloned at
+     until someone moves it on purpose. It must be at or after the template's `stop-lock` commit (`keepLockOnSignal`);
+     any team repo made from the current template is. The line is the same on Windows (PowerShell) and Mac (Terminal),
+     with the student's own address:
+
+     ```
+     git clone https://github.com/YOUR-GITHUB-NAME/YOUR-TEAM-REPO.git "<board folder>/runner-code"
+     git -C "<board folder>/runner-code" rev-parse HEAD
+     ```
+
+     The second line prints the commit; note it in `.agent-team/onboarding-state.md`. To move it on later:
+     `git -C "<board folder>/runner-code" pull`, then run the self-test again (step 3). The folder must not be inside
+     the team folder.
+  2. **Start the board once, then close it.** Without `runner-code` the first start writes nothing and says "Jobs are
+     off: the runner code is not installed next to the board". With it, the first start writes the runner's files
+     (above) and makes its work copy. Close the Start window.
+  3. **Run the self-test.** It runs the real Claude against planted traps, uses a little of the student's Claude plan,
+     and no job runs until it passes. Run it from any folder. Windows, PowerShell:
+
+     ```
+     node "<board folder>\runner-code\scripts\mailbox-runner.mjs" --selftest --state-dir "$env:LOCALAPPDATA\Agent Board\state\runner" --work-dir "$env:LOCALAPPDATA\Agent Board\work" --env-file "$env:LOCALAPPDATA\Agent Board\state\runner\runner.env"
+     ```
+
+     Windows, cmd: the same, with `%LOCALAPPDATA%` in place of `$env:LOCALAPPDATA`. Mac, Terminal:
+
+     ```
+     node "<board folder>/runner-code/scripts/mailbox-runner.mjs" --selftest --state-dir "$HOME/Library/Application Support/Agent Board/state/runner" --work-dir "$HOME/Library/Application Support/Agent Board/work" --env-file "$HOME/Library/Application Support/Agent Board/state/runner/runner.env"
+     ```
+
+     **A pass** prints `Self-test passed: the traps did not fire, nothing outside the work copy could be read or written, and jobs may run.`
+     **A fail** prints `Self-test FAILED:`, the reasons, and `No job runs until a self-test passes.`
+  4. **Check it.** Run the same command with `--preflight` in place of `--selftest` (it changes nothing). A good
+     result ends `Everything is ready.` and has a line `self-test: passed ... for this Claude and these settings`
+     (this `--preflight` form was run on a real Windows 11 PC on 2026-10-18). Then double-click `Start Board` again;
+     the Start window says "Jobs are on".
+
+  Until the self-test passes, card orders work and Run orders are refused as "not ready". Run the self-test again after
+  any Claude Code update and after moving `runner-code` to a newer commit.
 - **Jobs stay off**, with one line in the Start window, when the team folder is not on GitHub, its GitHub address holds
   a user name, password or token, in any fetch or push address as written or as git rewrites it (git would put it on a
   command line every program can read, and the runner refuses it), git would send it anywhere but GitHub, `runner-code`
@@ -183,6 +230,11 @@ Known limits of jobs on this computer:
 - An order lives about 17 minutes (three 5-minute polls and two minutes), but a run may take up to 30. An order made
   while a long run is going waits for the next tick, and can expire before it ("it expired before your Mac picked it
   up"); send it again once the run has finished.
+
+Antivirus: the Windows test PC (2026-10-18) runs Norton 360, and the board, git, the runner and a real order all worked
+with it on. Earlier test runs with Norton had git fail now and then with "Permission denied". If a student's git fails
+in a way that goes away on a second try, or an antivirus box appears, read the message before doing anything. Never
+tell a student to switch the antivirus off.
 
 Only a double-click proves (not checkable from node, to be tried on a real Mac and a real Windows PC):
 
