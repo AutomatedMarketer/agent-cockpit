@@ -63,14 +63,14 @@ const withOrders = (orders) => ({
 })
 
 // `progress`: what /api/progress answers, per order id: a function (call number) -> reply, or a fixed reply.
-function board({ local = true, orders = [entry()], log = [remembered()], progress = {}, hash = '', visibility = 'visible' } = {}) {
+function board({ extras = {}, local = true, orders = [entry()], log = [remembered()], progress = {}, hash = '', visibility = 'visible' } = {}) {
   const timers = fakeTimers()
   const { clock, PinnedDate } = clockAt()
   const calls = []
   const page = loadPage({
     hash, timers, date: PinnedDate,
     storage: { [STORE]: JSON.stringify(log) },
-    windowExtras: local ? { __BOARD_LOCAL__: true } : {},
+    windowExtras: { ...(local ? { __BOARD_LOCAL__: true } : {}), ...extras },
     fetch: async (url, init = {}) => {
       if (url.startsWith('/api/progress')) {
         calls.push(url)
@@ -303,4 +303,90 @@ test('website: a run that is only sent or picked up shows no progress line, and 
   const sent = board({ local: false, orders: [] })
   await flush()
   assert.doesNotMatch(sent.today(), /Picked up .* ago, running|steps/)
+})
+
+/* ---------- polish after review: stopping honestly, tidy clocks, the jump to Today ---------- */
+
+const NO_NEWS = /No news for a while\. Refresh the page to check again\./
+
+test('local: past the two hours the line stops saying it is live: no clock, and it says to refresh', async () => {
+  const { page, timers, clock, line } = board({ log: [remembered({ sentAt: iso(NOW - 3600_000), expiresAt: iso(NOW + 3 * 3600_000) })], progress: { [ID]: reply(200, doc()) } })
+  await flush()
+  assert.match(line(), /Working/)
+  clock.now += 61 * 60_000
+  await timers.fire(1500)
+  assert.match(line(), NO_NEWS)
+  assert.doesNotMatch(line(), /Working|steps so far|mac-clock/)
+  assert.equal(timers.delays().includes(1000), false, 'the clock is frozen and stopped')
+  assert.equal(timers.delays().includes(1500), false)
+})
+
+test('local: a 403 (or 401) after a good answer stops polling and says so; one order wrong does not leave the other looking live', async () => {
+  for (const status of [401, 403]) {
+    let answers = 0
+    const { timers, calls, line } = board({ progress: { [ID]: () => { answers += 1; return answers === 1 ? reply(200, doc()) : reply(status, {}) } } })
+    await flush()
+    assert.match(line(), /Working/)
+    await timers.fire(1500)
+    assert.equal(calls.length, 2)
+    assert.match(line(), NO_NEWS, String(status))
+    assert.equal(timers.delays().filter((ms) => ms === 1000 || ms === 1500 || ms === 5000).length, 0, `${status}: nothing is left running`)
+  }
+  // Two orders: the first answers, the second is refused in the same round. Neither is asked again.
+  const log = [remembered(), remembered({ id: OTHER, label: 'Run other' })]
+  const both = board({ log, orders: [entry(), entry({ id: OTHER })], progress: { [ID]: reply(200, doc()), [OTHER]: reply(403, {}) } })
+  await flush()
+  assert.equal(both.timers.delays().filter((ms) => ms === 1500 || ms === 5000).length, 0)
+  assert.match(both.line(), NO_NEWS)
+})
+
+test('local: leaving Today stops the clock; coming back starts it', async () => {
+  const { page, timers } = board({ progress: { [ID]: reply(200, doc()) } })
+  await flush()
+  assert.ok(timers.delays().includes(1000))
+  page.location.hash = '#team'
+  for (const { type, handler } of page.windowListeners) if (type === 'hashchange') await handler()
+  await flush()
+  assert.equal(timers.delays().includes(1000), false)
+})
+
+test('the clock timer does not run for an order that is no longer on the card', async () => {
+  const { page, timers } = board({ progress: { [ID]: reply(200, doc()) } })
+  await flush()
+  assert.ok(timers.delays().includes(1000))
+  page.storage.setItem(STORE, JSON.stringify([remembered({ id: OTHER, label: 'A newer one' })]))
+  await timers.fire(1000)
+  assert.equal(timers.delays().includes(1000), false, 'no one-second timer left for nothing')
+  const web = board({ local: false, orders: [entry({ state: 'running', startedAt: iso(NOW - 60_000) })] })
+  await flush()
+  web.page.storage.setItem(STORE, '[]')
+  await web.timers.fire(1000)
+  assert.equal(web.timers.delays().includes(1000), false)
+})
+
+test('local: polling never draws the whole Today card again; it only changes its own line', async () => {
+  let answers = 0
+  const { page, timers } = board({ progress: { [ID]: () => { answers += 1; return reply(200, doc({ steps: answers, final: answers >= 3, ...(answers >= 3 ? { outcome: 'ok' } : {}) })) } } })
+  await flush()
+  page.node('today').innerHTML = 'SENTINEL: not drawn again'
+  await timers.fire(1500)
+  await timers.fire(1500)
+  await timers.fire(1000).catch(() => {})
+  assert.equal(page.node('today').innerHTML, 'SENTINEL: not drawn again')
+  assert.match(page.node(`mac-prog-${ID}`).innerHTML, /Finished: 3 steps/)
+})
+
+test('local: the "Run a job" jump back to Today starts the look straight away', async () => {
+  let ref = null
+  const { page, calls } = board({
+    hash: '#team',
+    extras: { history: { pushState: (state, title, url) => { ref.location.hash = url } } },
+    progress: { [ID]: reply(200, doc()) }
+  })
+  ref = page
+  await flush()
+  assert.equal(calls.length, 0, 'on another screen: nothing is asked')
+  for (const handler of page.node('jump-run').listeners.click ?? []) handler({ preventDefault() {} })
+  await flush()
+  assert.equal(calls.length, 1)
 })

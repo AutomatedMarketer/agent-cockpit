@@ -2426,6 +2426,7 @@ const PROGRESS_TOOL = /^[A-Za-z0-9_*-]{1,64}$/
 const PROGRESS_PHASES = { started: 'Starting up', working: 'Working', finishing: 'Finishing up' }
 // The states of the Mac's own words (macOrderSaid) that mean the order is over.
 const PROGRESS_OVER = ['done on your Mac', 'failed on your Mac', 'refused by your Mac', 'outcome unknown', 'expired']
+const PROGRESS_STALE = 'No news for a while. Refresh the page to check again.'
 const progressDocs = new Map() // order id -> the last good answer for it
 const progressClocks = new Map() // order id -> the time its clock counts from
 let progressTimer = null
@@ -2474,6 +2475,8 @@ function progressLine(order, said) {
       const took = escapeHtml(elapsedWords(Date.parse(doc.lastEventAt) - Date.parse(doc.startedAt)))
       return { html: `${doc.outcome === 'ok' ? 'Finished:' : 'Stopped after'} ${stepsWords(doc.steps)} in ${took}.`, since: null }
     }
+    // Not asking any more (signed out, or past the two hours): a line that kept ticking would look live.
+    if (progressLocked || Date.now() - Date.parse(order.sentAt) >= PROGRESS_GIVE_UP_MS) return { html: PROGRESS_STALE, since: null }
     const parts = [`<b>${PROGRESS_PHASES[doc.phase]}</b>`, doc.steps === 0 ? 'no steps yet' : `${stepsWords(doc.steps)} so far`]
     if (doc.steps > 0 && doc.lastTool) parts.push(doc.lastTool === 'unknown' ? 'last used a tool' : `last used ${escapeHtml(doc.lastTool)}`)
     parts.push(clock(doc.startedAt))
@@ -2494,8 +2497,15 @@ function progressHolderHtml(order, said) {
   return `<div class="small muted" id="mac-prog-${escapeHtml(order.id)}">${line.html}</div>`
 }
 
+// A clock only for an order the card still shows (the list keeps ten).
+function progressPrune() {
+  const shown = new Set(macOrdersLog().map((order) => order.id))
+  for (const id of [...progressClocks.keys()]) if (!shown.has(id)) progressClocks.delete(id)
+}
+
 // An answer came in: put the new line in its place, without drawing the screen again (a note being typed would be lost).
 function progressRedraw() {
+  progressPrune()
   for (const order of macOrdersLog()) {
     const holder = el(`mac-prog-${order.id}`)
     const said = macOrderSaid(order, data, Date.now(), 'UTC')
@@ -2504,6 +2514,11 @@ function progressRedraw() {
     holder.innerHTML = line.html
     if (line.since) progressClocks.set(order.id, line.since)
     else progressClocks.delete(order.id)
+  }
+  // Nothing left to count: the one-second timer goes too.
+  if (!progressClocks.size && clockTimer !== null) {
+    clearTimeout(clockTimer)
+    clockTimer = null
   }
   clockSchedule()
 }
@@ -2563,6 +2578,7 @@ function progressLater() {
 function clockTick() {
   clockTimer = null
   if (!progressWatching()) return
+  progressPrune()
   for (const [id, since] of progressClocks) {
     const node = el(`mac-clock-${id}`)
     if (node) node.textContent = elapsedWords(Date.now() - Date.parse(since))
@@ -2583,6 +2599,7 @@ function progressSync() {
     clockTimer = null
     return
   }
+  progressPrune()
   clockSchedule()
   if (progressTimer === null && !progressBusy && progressOrders().length) progressLook()
 }
@@ -7792,6 +7809,7 @@ function jumpToRun(event) {
   if (SCREENS.includes(current) && current !== 'today') {
     window.history?.pushState?.(null, '', '#today')
     showScreen('today')
+    progressSync()
   }
   document.getElementById('run-jobs')?.scrollIntoView?.({ block: 'start' })
 }
