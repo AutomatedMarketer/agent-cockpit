@@ -43,8 +43,8 @@ export function stateDirFor({ platform, env, home }) {
 
 // What a Windows system program (icacls) needs to start, and nothing else: never the board's whole environment, which
 // holds keys. Each name is found whatever its case (Git Bash hands on SYSTEMROOT and Path) and given in its usual spelling.
-// The runner's taskkill gets the same short kind of environment on the student-runner branch (local/runner.mjs,
-// runnerEnvironment); when the branches meet, the two should become one helper.
+// Narrower on purpose than runnerEnvironment (local/runner.mjs), which the runner and everything it starts get: icacls
+// needs no home, temp or user folders, so it is not handed them.
 const SYSTEM_PROGRAM_NEEDS = ['SystemRoot', 'windir', 'PATH', 'ComSpec']
 export function systemProgramEnvironment(source = {}) {
   const env = {}
