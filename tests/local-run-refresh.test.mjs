@@ -244,3 +244,98 @@ test('progress: the fire wrapper notes the order id of a queued order, and nothi
   await rememberQueuedOrders(answerWith(200, { ok: true, via: 'cloud', orderId: ID }), other)({}, response())
   assert.equal(other.size(), 0)
 })
+
+/* ---------- the status re-fetch only runs while someone is looking (review of run-refresh) ---------- */
+
+const runningState = () => reply(200, { ...basePayload(), mailbox: mailbox([entry({ state: 'running', startedAt: iso(NOW - 102_000) })]) })
+const LOG = [{ kind: 'run', label: 'Run monday-brief', sentAt: iso(NOW - 150_000), via: 'mac', id: ID, expiresAt: iso(NOW + 15 * 60_000), pollSeconds: 300 }]
+const hideTab = async (page, state) => {
+  page.document.visibilityState = state
+  for (const { type, handler } of page.documentListeners) if (type === 'visibilitychange') await handler()
+  await flush()
+}
+const goTo = async (page, hash) => {
+  page.location.hash = hash
+  for (const { type, handler } of page.windowListeners) if (type === 'hashchange') await handler()
+  await flush()
+}
+// Fires the 3 s waits that are due (stops when there are none), and says how many it fired.
+async function drainStatusWaits(b) {
+  let fired = 0
+  while (b.timers.delays().includes(3000) && fired < 10) { await b.timers.fire(3000); fired += 1 }
+  return fired
+}
+
+test('local: a hidden tab stops asking the board for the status file; coming back asks again and finishes the job', async () => {
+  const b = freshBoard({ log: LOG, state: runningState, progress: () => reply(200, final()) })
+  await flush()
+  const before = b.calls.state
+  assert.ok(before >= 2, 'the first re-fetch was made')
+  await hideTab(b.page, 'hidden')
+  assert.equal(b.timers.delays().includes(3000), false, 'the wait is cancelled')
+  assert.equal(await drainStatusWaits(b), 0)
+  assert.equal(b.calls.state, before, 'no request while hidden')
+  await hideTab(b.page, 'visible')
+  assert.ok(b.calls.state > before, 'coming back asks again')
+  await drainStatusWaits(b)
+  assert.match(b.line(), /Finished: 12 steps in 1m 05s\./, 'and it ends with a length, not stuck without one')
+})
+
+test('local: leaving Today stops the status re-fetch; going back to Today asks again', async () => {
+  const b = freshBoard({ log: LOG, state: runningState, progress: () => reply(200, final()) })
+  await flush()
+  const before = b.calls.state
+  await goTo(b.page, '#team')
+  assert.equal(b.timers.delays().includes(3000), false)
+  assert.equal(b.calls.state, before)
+  await goTo(b.page, '#today')
+  assert.ok(b.calls.state > before)
+})
+
+test('local: a wait that was already running when the tab went hidden asks nothing when it fires', async () => {
+  const b = freshBoard({ log: LOG, state: runningState, progress: () => reply(200, final()) })
+  await flush()
+  const waitingNow = [...b.timers.pending.values()].find((timer) => timer.ms === 3000)
+  assert.ok(waitingNow)
+  b.page.document.visibilityState = 'hidden' // no event: the callback itself must look
+  const before = b.calls.state
+  await waitingNow.fn()
+  await flush()
+  assert.equal(b.calls.state, before)
+})
+
+test('local: signed out during the status re-fetch: the card says so honestly instead of a line that never gets a length', async () => {
+  const b = freshBoard({ log: LOG, state: (call) => (call === 1 ? runningState() : reply(401, { needs: 'sign-in' })), progress: () => reply(200, final()) })
+  await flush()
+  assert.match(b.line(), /No news for a while\. Refresh the page to check again\./)
+  assert.equal(b.timers.delays().includes(3000), false, 'no more asking')
+})
+
+/* ---------- what the stand-in DOM cannot check for itself ---------- */
+
+test('local: Today really contains the holder and the ids the in-place updates look for; the website\'s Today has neither', async () => {
+  const local = freshBoard({ log: LOG, state: runningState, progress: () => reply(404, {}) })
+  await flush()
+  const html = local.page.node('today').innerHTML
+  assert.equal((html.match(/<div id="mac-orders">/g) ?? []).length, 1, 'one holder')
+  assert.ok(html.includes(`id="mac-said-${ID}"`), 'the words have the id progressRedraw looks for')
+  assert.ok(html.includes(`id="mac-prog-${ID}"`), 'the line has its holder')
+  assert.ok(html.indexOf('id="mac-orders"') < html.indexOf(`mac-said-${ID}`), 'the order is inside the holder')
+  const empty = freshBoard()
+  await flush()
+  assert.match(empty.page.node('today').innerHTML, /<div id="mac-orders"><\/div>/, 'an empty holder is there for the first order')
+  const web = freshBoard({ local: false, log: LOG, state: runningState })
+  await flush()
+  assert.doesNotMatch(web.page.node('today').innerHTML, /mac-orders|mac-said-/)
+})
+
+test('local: the live card and the reloaded card are both real cards (not two empty strings that happen to match)', async () => {
+  const orders = [entry({ state: 'ok', startedAt: iso(NOW - 102_000), finishedAt: iso(NOW - 17_000), steps: 12 })]
+  const reloaded = freshBoard({ log: LOG, state: () => reply(200, { ...basePayload(), mailbox: mailbox(orders) }) })
+  await flush()
+  const today = reloaded.page.node('today').innerHTML
+  const card = today.slice(today.indexOf('<div id="mac-orders">'))
+  assert.ok(card.length > 200)
+  assert.match(card, /Run monday-brief/)
+  assert.match(card, /Took 1m 25s, 12 steps\./)
+})

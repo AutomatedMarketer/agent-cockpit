@@ -2538,6 +2538,8 @@ function progressLine(order, said) {
       // the two differ by seconds. Until it has the run, no length is given, rather than one the reloaded card would change.
       // If it never has it after a few tries, the progress file's own length is better than none.
       const lead = `${doc.outcome === 'ok' ? 'Finished:' : 'Stopped after'} ${stepsWords(doc.steps)}`
+      // Signed out while waiting for the Mac file: nobody can answer any more, so say that rather than leave the line as it is.
+      if (progressLocked && !PROGRESS_OVER.includes(said.state)) return { html: PROGRESS_STALE, since: null }
       if ((progressStatusTries.get(order.id) ?? 0) < PROGRESS_STATUS_TRIES) return { html: `${lead}.`, since: null }
       return { html: `${lead} in ${escapeHtml(elapsedWords(Date.parse(doc.lastEventAt) - Date.parse(doc.startedAt)))}.`, since: null }
     }
@@ -2645,7 +2647,8 @@ function progressStatusPending() {
 // Asks the board for its state again and takes only the Mac's status file from it: the rest of the page stays as drawn (a note
 // being typed is not lost). Then the card is drawn again, so the run's length and words are the status file's, as after a reload.
 async function progressStatusLook() {
-  if (progressStatusBusy || progressStatusTimer !== null) return
+  // Only while someone is looking: a hidden tab or another screen asks nothing; progressSync starts it again on return.
+  if (progressStatusBusy || progressStatusTimer !== null || !progressWatching()) return
   const waiting = progressStatusPending()
   if (!waiting.length) return
   progressStatusBusy = true
@@ -2658,7 +2661,7 @@ async function progressStatusLook() {
     progressStatusBusy = false
   }
   progressCardDraw()
-  if (progressStatusPending().length) {
+  if (progressStatusPending().length && progressWatching()) {
     progressStatusTimer = progressAfter(() => {
       progressStatusTimer = null
       progressStatusLook()
@@ -2705,12 +2708,15 @@ function progressSync() {
   if (!progressWatching()) {
     if (progressTimer !== null) clearTimeout(progressTimer)
     if (clockTimer !== null) clearTimeout(clockTimer)
+    if (progressStatusTimer !== null) clearTimeout(progressStatusTimer)
     progressTimer = null
     clockTimer = null
+    progressStatusTimer = null
     return
   }
   progressPrune()
   clockSchedule()
+  progressStatusLook()
   if (progressTimer === null && !progressBusy && progressOrders().length) progressLook()
 }
 window.addEventListener('hashchange', progressSync)
